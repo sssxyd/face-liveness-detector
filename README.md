@@ -1,5 +1,118 @@
-# Vue 3 + Vite
+# js-face-detector
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+一个基于 Vue 3 + Vite 的人脸检测与活体识别演示项目，使用 [@vladmandic/human](https://github.com/vladmandic/human) 库实现。
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## 功能特性
+
+### 1. 人脸检测
+- ✅ 检测视频中的人脸，要求有且仅有一张正脸
+- ✅ 验证脸部完整性和位置
+- ✅ 确保脸部占据画面适当比例（不太近也不太远）
+- ✅ 检查脸部是否居中
+- ✅ 验证是否为正脸（检查偏航、俯仰、翻滚角度）
+- ✅ 提供实时错误提示：
+  - 请靠近摄像头（距离太远）
+  - 请远离摄像头（距离太近）
+  - 请将脸部移至画面中央（位置偏移）
+  - 请保持完整的脸部在画面内（脸部被截断）
+  - 请正对摄像头（脸部角度不正）
+  - 检测到多张人脸或未检测到人脸
+
+### 2. 活体检测（可选功能）
+- ✅ 人脸检测成功后自动启动活体检测
+- ✅ 随机提示用户执行以下动作之一：
+  - 张嘴（检测嘴部张开）
+  - 眨眼（检测眼睛闭合）
+  - 摇头（检测头部左右转动）
+- ✅ 实时检测用户是否完成指定动作
+- ✅ 失败处理：
+  - 检测到第二张人脸时失败
+  - 人脸消失时失败
+  - 超时（10秒）未完成动作时失败
+- ✅ 倒计时显示
+
+## 技术栈
+
+- **Vue 3** - 渐进式 JavaScript 框架
+- **Vite** - 下一代前端构建工具
+- **@vladmandic/human** - AI 驱动的人脸检测库
+
+## 安装和运行
+
+### 安装依赖
+```bash
+npm install
+```
+
+### 开发模式
+```bash
+npm run dev
+```
+
+### 生产构建
+```bash
+npm run build
+```
+
+### 预览生产构建
+```bash
+npm run preview
+```
+
+## 使用说明
+
+1. 允许浏览器访问摄像头权限
+2. 将脸部对准摄像头
+3. 确保脸部完整且位于画面中央
+4. 保持适当的距离（不要太近或太远）
+5. 正对摄像头，不要侧脸
+6. 人脸检测成功后，按照屏幕提示完成活体检测动作
+
+## 项目结构
+
+```
+js-face-detector/
+├── src/
+│   ├── components/
+│   │   └── FaceDetector.vue    # 人脸检测组件
+│   ├── App.vue                  # 主应用组件
+│   ├── main.js                  # 应用入口
+│   └── style.css                # 全局样式
+├── public/                      # 静态资源
+├── index.html                   # HTML 模板
+├── package.json                 # 项目配置
+└── vite.config.js              # Vite 配置
+```
+
+## 核心功能实现
+
+### 人脸验证算法
+- 计算人脸区域占视频画面的比例
+- 检查人脸是否居中（允许 25% 的偏移）
+- 验证人脸边界（确保不被截断）
+- 检查面部角度（偏航、俯仰、翻滚不超过 20 度）
+- 验证检测置信度
+
+### 活体检测算法
+- **张嘴检测**：通过面部网格点计算上下唇之间的距离
+- **眨眼检测**：通过虹膜注释检测眼睛开闭状态
+- **摇头检测**：监测头部偏航角的变化幅度
+
+## 浏览器兼容性
+
+- Chrome/Edge 90+
+- Firefox 88+
+- Safari 14+
+
+需要支持：
+- WebRTC (getUserMedia API)
+- WebGL 或 WebGPU
+- ES6+ JavaScript
+
+## 许可证
+
+MIT License
+
+## 致谢
+
+本项目使用 [@vladmandic/human](https://github.com/vladmandic/human) 库实现人脸检测功能。

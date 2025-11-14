@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
-import Human from '@vladmandic/human'
+import * as Human from '@vladmandic/human'
 
 // Component state
 const videoRef = ref(null)
@@ -17,13 +17,14 @@ let animationFrameId = null
 
 // Detection settings
 const config = {
-  modelBasePath: 'https://cdn.jsdelivr.net/npm/@vladmandic/human/models',
+  modelBasePath: '/node_modules/@vladmandic/human/models',
   backend: 'webgl',
   face: {
     enabled: true,
     detector: {
       rotation: false,
       maxDetected: 10,
+      return: true,
     },
     mesh: {
       enabled: true,
