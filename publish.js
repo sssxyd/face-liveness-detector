@@ -20,12 +20,24 @@ import Client from 'ssh2-sftp-client';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const REMOTE_HOST = '146.190.162.140';
+// 从 .env 文件加载环境变量（如果存在）
+const envPath = path.join(__dirname, '.env');
+if (fs.existsSync(envPath)) {
+  const envContent = fs.readFileSync(envPath, 'utf8');
+  envContent.split('\n').forEach(line => {
+    const [key, value] = line.split('=');
+    if (key && value && !process.env[key]) {
+      process.env[key] = value.trim();
+    }
+  });
+}
+
+const REMOTE_HOST = process.env.REMOTE_HOST || '146.190.162.140';
 const REMOTE_PORT = parseInt(process.env.REMOTE_PORT || '22', 10);
 const REMOTE_USER = process.env.REMOTE_USER || 'root';
 const REMOTE_PASSWORD = process.env.REMOTE_PASSWORD || null;
-const REMOTE_PRIVATE_KEY = process.env.REMOTE_PRIVATE_KEY || 'C:\\Users\\sssxyd\\.ssh\\id_rsa';
-const REMOTE_PATH = '/home/js-face-detector';
+const REMOTE_PRIVATE_KEY = process.env.REMOTE_PRIVATE_KEY || path.join(os.homedir(), '.ssh', 'id_rsa');
+const REMOTE_PATH = process.env.REMOTE_PATH || '/home/js-face-detector';
 const LOCAL_DIST = path.join(__dirname, 'dist');
 
 // 需要强制覆盖的文件列表（相对于 dist 目录的路径）
