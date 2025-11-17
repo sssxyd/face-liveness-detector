@@ -1,14 +1,43 @@
 <template>
   <div id="app">
-    <h1>人脸检测 Demo</h1>
-    <FaceDetector />
+    <!-- 页面导航栏 -->
+    <div class="navbar">
+      <h1>人脸检测 Demo</h1>
+      <div class="nav-buttons">
+        <button 
+          class="nav-btn" 
+          :class="{ active: currentPage === 'collector' }"
+          @click="currentPage = 'collector'"
+        >
+          人脸采集
+        </button>
+        <button 
+          class="nav-btn" 
+          :class="{ active: currentPage === 'liveness' }"
+          @click="currentPage = 'liveness'"
+        >
+          活体验证
+        </button>
+      </div>
+    </div>
+
+    <!-- 页面内容 -->
+    <div class="page-content">
+      <!-- 人脸采集页面 -->
+      <FaceCollector v-if="currentPage === 'collector'" />
+      <!-- 活体验证页面 -->
+      <FaceAliveChecker v-if="currentPage === 'liveness'" />
+    </div>
   </div>
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
-import FaceDetector from './components/FaceDetector.vue'
+import { ref, onMounted } from 'vue'
+import FaceCollector from './pages/FaceCollector.vue'
+import FaceAliveChecker from './pages/FaceAliveChecker.vue'
 
+// 当前活动页面
+const currentPage = ref('collector')
 // Prevent pinch zoom on mobile
 onMounted(() => {
   // Prevent zoom on double tap
@@ -41,39 +70,114 @@ html, body {
   font-family: Avenir, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  text-align: center;
   color: #2c3e50;
-  margin-top: 15px;
-  padding: 0 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* 导航栏样式 */
+.navbar {
+  background-color: #ffffff;
+  border-bottom: 2px solid #42b983;
+  padding: 15px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.navbar h1 {
+  color: #42b983;
+  margin: 0;
+  font-size: 28px;
+  flex: 1;
+}
+
+.nav-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.nav-btn {
+  padding: 8px 16px;
+  background-color: #f0f0f0;
+  color: #333;
+  border: 2px solid #ddd;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.nav-btn:hover {
+  border-color: #42b983;
+  color: #42b983;
+}
+
+.nav-btn.active {
+  background-color: #42b983;
+  color: white;
+  border-color: #42b983;
+}
+
+/* 页面内容区域 */
+.page-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
   box-sizing: border-box;
 }
 
-h1 {
-  color: #42b983;
-  margin: 10px 0;
-  font-size: 28px;
-}
-
 @media (max-width: 768px) {
-  #app {
-    margin-top: 10px;
-    padding: 0 5px;
+  .navbar {
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 15px;
   }
   
-  h1 {
+  .navbar h1 {
     font-size: 22px;
-    margin: 8px 0;
+    width: 100%;
+    text-align: center;
+  }
+  
+  .nav-buttons {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .nav-btn {
+    flex: 1;
+    max-width: 150px;
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+  
+  .page-content {
+    padding: 15px;
   }
 }
 
 @media (max-width: 480px) {
-  #app {
-    margin-top: 5px;
+  .navbar {
+    padding: 10px 10px;
+    gap: 8px;
   }
   
-  h1 {
+  .navbar h1 {
     font-size: 18px;
-    margin: 5px 0;
+  }
+  
+  .nav-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  
+  .page-content {
+    padding: 10px;
   }
 }
 

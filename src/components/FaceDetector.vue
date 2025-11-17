@@ -1,932 +1,433 @@
+﻿<!-- 人脸检测组件模板 -->
 <template>
+  <!-- 主容器，根据移动设备状态动态添加样式类 -->
   <div class="face-detector" :class="{ 'is-mobile': isMobileDevice }">
+    <!-- 设备信息展示：显示设备类型和屏幕方向 -->
     <div class="device-info">
       设备: {{ deviceInfo }} | 方向: {{ orientationLabel }}
     </div>
-
+    <!-- 视频容器：包含视频元素和绘制检测结果的画布 -->
     <div class="video-container">
-      <video
-        ref="videoRef"
-        autoplay
-        playsinline
-        muted
-        :width="videoWidth"
-        :height="videoHeight"
-      ></video>
-      <canvas
-        ref="canvasRef"
-        :width="videoWidth"
-        :height="videoHeight"
-      ></canvas>
-    </div>
-
-    <div class="controls">
-      <button @click="startDetection" :disabled="isDetecting || isLivenessMode">
-        {{ isMobileDevice ? '开始检测' : '开始人脸检测' }}
-      </button>
-      <button @click="stopDetection" :disabled="!isDetecting">
-        停止检测
-      </button>
-      <button @click="startLivenessCheck" :disabled="!detectionSuccess || isLivenessMode">
-        {{ isMobileDevice ? '活体检测' : '开始活体检测' }}
-      </button>
-      <button @click="cancelLiveness" :disabled="!isLivenessMode">
-        取消
-      </button>
-    </div>
-
-    <div class="status" :class="statusClass">
-      <h3>{{ statusTitle }}</h3>
-      <p>{{ statusMessage }}</p>
-      <p v-if="isLivenessMode && currentAction" class="action-prompt">
-        请{{ actionText }}
-      </p>
-    </div>
-
-    <div class="info" v-if="faceInfo">
-      <h4>检测信息：</h4>
-      <p>人脸数量: {{ faceInfo.count }}</p>
-      <p v-if="faceInfo.count > 0">人脸大小: {{ faceInfo.size }}%</p>
-      <p v-if="faceInfo.count > 0">正面置信度: {{ faceInfo.frontal }}%</p>
+      <!-- 视频元素：用于捕获摄像头实时视频流 -->
+      <video ref="videoRef" autoplay playsinline muted :width="videoWidth" :height="videoHeight"></video>
+      <!-- 画布元素：用于绘制人脸检测框和相关标记 -->
+      <canvas ref="canvasRef" :width="videoWidth" :height="videoHeight"></canvas>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+// 导入 Vue 3 Composition API 相关方法
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+// 导入人脸检测库
 import Human from '@vladmandic/human'
 
-// Refs
+// 定义组件 props
+const props = defineProps({
+  // 工作模式：'collection'(采集模式) 或 'liveness'(活体检测模式)
+  mode: { type: String, default: 'collection' },
+  // 活体检测项目数组：可包含 'blink'(眨眼) 和 'shake'(摇头)
+  livenessChecks: { type: Array, default: () => ['blink', 'shake'] }
+})
+
+// 定义组件事件
+const emit = defineEmits([
+  'face-detected',      // 检测到人脸时触发
+  'face-collected',     // 采集到人脸时触发
+  'liveness-action',    // 活体检测动作完成时触发
+  'liveness-completed', // 所有活体检测完成时触发
+  'error'               // 发生错误时触发
+])
+
+// 视频元素引用
 const videoRef = ref(null)
+// 画布元素引用，用于绘制检测结果
 const canvasRef = ref(null)
-const isDetecting = ref(false)
-const detectionSuccess = ref(false)
-const isLivenessMode = ref(false)
-const statusMessage = ref('请点击"开始人脸检测"按钮')
-const statusTitle = ref('准备就绪')
-const faceInfo = ref(null)
-const currentAction = ref(null)
-const actionCompleted = ref(false)
-const livenessActions = ref([])
-const currentActionIndex = ref(0)
+// 是否为移动设备
 const isMobileDevice = ref(false)
+// 是否为竖屏方向
 const isPortrait = ref(true)
+// 是否正在进行检测
+const isDetecting = ref(false)
 
-// Video dimensions - will be updated based on device
+// 视频宽度
 let videoWidth = ref(640)
+// 视频高度
 let videoHeight = ref(480)
-
-// Human.js instance
+// Human 检测库实例
 let human = null
+// 摄像头流对象
 let stream = null
+// 动画帧 ID，用于 requestAnimationFrame
 let animationFrameId = null
 
-// Liveness detection actions
-const actions = [
-  { key: 'blink', text: '眨眼', check: checkBlink },
-  { key: 'shake', text: '左右摇头', check: checkHeadShake }
-]
+// ===== 活体检测相关变量 =====
+// 上一帧的头部 yaw 角度(左右摇晃)
+let lastYaw = null
+// 摇头时的最大偏差
+let maxYawDeviation = 0
+// 摇头时的中心 yaw 角度
+let centerYaw = null
+// 是否检测到眨眼
+let blinkDetected = false
+// 眨眼检测的计时器
+let blinkTimer = null
+// 当前活体检测项的索引
+let currentLivenessIndex = 0
+// 已完成的活体检测项集合
+let livenessCompleted = new Set()
 
-// Status class
-const statusClass = computed(() => {
-  if (detectionSuccess.value) return 'success'
-  if (isDetecting.value) return 'detecting'
-  return 'idle'
-})
-
-const actionText = computed(() => {
-  return currentAction.value ? currentAction.value.text : ''
-})
-
-// Device info display
-const deviceInfo = computed(() => {
-  return isMobileDevice.value ? '移动设备' : '桌面设备'
-})
-
-const orientationLabel = computed(() => {
-  return isPortrait.value ? '竖屏' : '横屏'
-})
-
-// Initialize Human.js
+// ===== 生命周期钩子 =====
+// 组件挂载时初始化
 onMounted(async () => {
-  // Detect device type
   detectDevice()
-  
-  // Handle orientation changes
+  // 监听设备方向改变事件
   window.addEventListener('orientationchange', handleOrientationChange)
-  window.addEventListener('resize', handleOrientationChange)
   
-  // Set initial orientation
-  handleOrientationChange()
-  
+  // 配置 Human 检测库
   const config = {
+    // 模型文件 CDN 路径
     modelBasePath: 'https://cdn.jsdelivr.net/npm/@vladmandic/human/models',
+    // 人脸检测配置
     face: {
       enabled: true,
       detector: { rotation: false },
-      mesh: { enabled: true },
-      iris: { enabled: true },
-      description: { enabled: false },
-      emotion: { enabled: false }
+      mesh: { enabled: true },      // 面部网格点
+      iris: { enabled: true }       // 虹膜检测
     },
-    body: { enabled: false },
-    hand: { enabled: false },
-    object: { enabled: false },
-    gesture: { enabled: true }
+    body: { enabled: false },      // 禁用身体检测
+    hand: { enabled: false },      // 禁用手部检测
+    object: { enabled: false },    // 禁用物体检测
+    gesture: { enabled: true }     // 启用手势检测(包含眨眼)
   }
-  
   human = new Human(config)
   await human.load()
-  console.log('Human.js loaded successfully')
 })
 
+// 组件卸载时清理资源
 onUnmounted(() => {
   stopDetection()
   window.removeEventListener('orientationchange', handleOrientationChange)
-  window.removeEventListener('resize', handleOrientationChange)
 })
 
-// Start camera and detection
+// ===== 设备检测与方向处理 =====
+/**
+ * 检测设备类型和屏幕方向，并调整视频尺寸
+ */
+function detectDevice() {
+  // 判断是否为移动设备
+  isMobileDevice.value = navigator.userAgent.toLowerCase().match(/android|iphone/) !== null || window.innerWidth < 768
+  // 判断是否为竖屏
+  isPortrait.value = window.innerHeight >= window.innerWidth
+  
+  if (isMobileDevice.value) {
+    // 移动设备：尽量适配屏幕尺寸
+    videoWidth.value = Math.min(window.innerWidth - 40, 480)
+    videoHeight.value = Math.min(window.innerHeight - 200, 640)
+  } else {
+    // 桌面设备：使用固定尺寸
+    videoWidth.value = 640
+    videoHeight.value = 480
+  }
+}
+
+/**
+ * 处理设备方向改变事件
+ */
+function handleOrientationChange() {
+  isPortrait.value = window.innerHeight >= window.innerWidth
+  
+  // 如果正在检测，则重启检测以适配新的方向
+  if (isDetecting.value) {
+    if (stream) stream.getTracks().forEach(t => t.stop())
+    detectDevice()
+    // 延迟重启，确保 DOM 更新完成
+    setTimeout(() => startDetection(), 500)
+  }
+}
+
+// ===== 计算属性 =====
+// 设备信息文本
+const deviceInfo = computed(() => isMobileDevice.value ? '移动设备' : '桌面设备')
+// 屏幕方向文本
+const orientationLabel = computed(() => isPortrait.value ? '竖屏' : '横屏')
+
+// ===== 检测控制方法 =====
+/**
+ * 启动人脸检测
+ */
 async function startDetection() {
   try {
-    const constraints = {
-      video: {
-        width: { ideal: videoWidth.value },
-        height: { ideal: videoHeight.value },
-        facingMode: 'user' // Use front camera on mobile
-      },
+    // 获取用户摄像头权限和视频流
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user' },
       audio: false
-    }
-    
-    stream = await navigator.mediaDevices.getUserMedia(constraints)
-    
-    if (videoRef.value) {
-      videoRef.value.srcObject = stream
-      
-      // Wait for video to be loadable
-      await new Promise((resolve) => {
-        const onLoadedMetadata = () => {
-          videoRef.value.removeEventListener('loadedmetadata', onLoadedMetadata)
-          resolve()
-        }
-        videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata)
-      })
-      
-      await videoRef.value.play()
-      
-      // Update actual video dimensions after loading
-      const settings = stream.getVideoTracks()[0].getSettings()
-      videoWidth.value = settings.width || videoWidth.value
-      videoHeight.value = settings.height || videoHeight.value
-    }
+    })
+    videoRef.value.srcObject = stream
+    await videoRef.value.play()
     
     isDetecting.value = true
-    detectionSuccess.value = false
-    statusTitle.value = '检测中...'
-    statusMessage.value = '正在检测人脸'
+    currentLivenessIndex = 0
+    livenessCompleted.clear()
     
+    // 开始检测循环
     detect()
-  } catch (error) {
-    console.error('Error accessing camera:', error)
-    if (error.name === 'NotAllowedError') {
-      statusTitle.value = '权限被拒绝'
-      statusMessage.value = '请允许访问摄像头'
-    } else if (error.name === 'NotFoundError') {
-      statusTitle.value = '未找到摄像头'
-      statusMessage.value = '设备上未找到摄像头'
-    } else {
-      statusTitle.value = '错误'
-      statusMessage.value = '无法访问摄像头，请检查权限设置'
-    }
+  } catch (e) {
+    // 若获取摄像头失败，触发错误事件
+    emit('error', { message: e.message })
   }
 }
 
-// Stop detection
+/**
+ * 停止人脸检测
+ */
 function stopDetection() {
   isDetecting.value = false
-  detectionSuccess.value = false
-  isLivenessMode.value = false
   
-  if (animationFrameId) {
-    cancelAnimationFrame(animationFrameId)
-    animationFrameId = null
-  }
-  
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop())
-    stream = null
-  }
-  
-  if (videoRef.value) {
-    videoRef.value.srcObject = null
-  }
-  
-  // Clear canvas
-  if (canvasRef.value) {
-    const ctx = canvasRef.value.getContext('2d')
-    ctx.clearRect(0, 0, videoWidth.value, videoHeight.value)
-  }
-  
-  statusTitle.value = '已停止'
-  statusMessage.value = '检测已停止'
-  faceInfo.value = null
+  if (animationFrameId) cancelAnimationFrame(animationFrameId)
+  if (stream) stream.getTracks().forEach(t => t.stop())
+  if (videoRef.value) videoRef.value.srcObject = null
 }
 
-// Main detection loop
+// ===== 人脸检测与活体验证核心逻辑 =====
+/**
+ * 检测循环：不断获取视频帧进行人脸检测
+ */
 async function detect() {
-  if (!isDetecting.value || !videoRef.value) return
+  if (!isDetecting.value) return
   
+  // 对当前视频帧进行人脸检测
   const result = await human.detect(videoRef.value)
   
-  // Draw on canvas
-  const canvas = canvasRef.value
-  const ctx = canvas.getContext('2d')
+  // 获取画布上下文并清空
+  const ctx = canvasRef.value.getContext('2d')
   ctx.clearRect(0, 0, videoWidth.value, videoHeight.value)
   
-  if (isLivenessMode.value) {
-    // Liveness detection mode
-    await handleLivenessDetection(result, ctx)
+  // 获取检测到的所有人脸
+  const faces = result.face || []
+  
+  if (faces.length === 1) {
+    const face = faces[0]
+    const faceBox = face.box || face.boxRaw
+    
+    // 计算人脸占视频画面的比例 (%)
+    const faceRatio = (faceBox[2] * faceBox[3]) / (videoWidth.value * videoHeight.value) * 100
+    
+    // 检查人脸是否正对摄像头 (0-100 分数)
+    const frontal = checkFaceFrontal(face)
+    
+    // 人脸信息
+    const faceInfo = { size: faceRatio.toFixed(1), frontal: frontal.toFixed(1) }
+    
+    // 判断人脸是否符合条件：大小在 15%-70% 之间，且正对度 >= 85%
+    if (faceRatio > 15 && faceRatio < 70 && frontal >= 85) {
+      emit('face-detected', { faceInfo })
+      drawFaces(ctx, faces, 'green')
+      
+      if (props.mode === 'collection') {
+        // 采集模式：检测到合格人脸后停止并返回图片
+        stopDetection()
+        emit('face-collected', { imageData: captureFrame(), faceBox })
+      } else {
+        // 活体检测模式：进行活体验证
+        verifyLiveness(face, result.gesture)
+      }
+    } else {
+      // 人脸不符合条件，继续检测
+      emit('face-detected', { faceInfo })
+      drawFaces(ctx, faces, 'orange')
+      animationFrameId = requestAnimationFrame(detect)
+    }
   } else {
-    // Normal face detection mode
-    await handleFaceDetection(result, ctx)
+    // 未检测到人脸或检测到多个人脸，继续检测
+    animationFrameId = requestAnimationFrame(detect)
+  }
+}
+
+/**
+ * 检查人脸是否正对摄像头
+ * @param {Object} face - 人脸检测结果
+ * @returns {number} 正对度评分 (0-100)
+ */
+function checkFaceFrontal(face) {
+  // 获取人脸的 yaw (左右摇晃)、pitch (上下俯仰)、roll (旋转) 角度
+  const ang = face.rotation?.angle || { yaw: 0, pitch: 0, roll: 0 }
+  
+  // 各角度的正对度评分
+  let y = 100, p = 100, r = 100
+  
+  // 如果 yaw 角度超过 8°，按指数衰减评分
+  if (Math.abs(ang.yaw) > 8) y = Math.max(0, 100 * Math.pow(0.92, Math.abs(ang.yaw) - 8))
+  // 如果 pitch 角度超过 8°
+  if (Math.abs(ang.pitch) > 8) p = Math.max(0, 100 * Math.pow(0.92, Math.abs(ang.pitch) - 8))
+  // 如果 roll 角度超过 5°
+  if (Math.abs(ang.roll) > 5) r = Math.max(0, 100 * Math.pow(0.90, Math.abs(ang.roll) - 5))
+  
+  // 加权平均：yaw 占 60%，pitch 占 25%，roll 占 15%
+  return y * 0.6 + p * 0.25 + r * 0.15
+}
+
+/**
+ * 活体检测验证：检测用户是否执行指定的活体动作
+ * @param {Object} face - 人脸检测结果
+ * @param {Array} gestures - 检测到的手势/表情
+ */
+function verifyLiveness(face, gestures) {
+  // 如果所有活体检测项都已完成
+  if (currentLivenessIndex >= props.livenessChecks.length) {
+    stopDetection()
+    emit('liveness-completed', { imageData: captureFrame(), faceBox: face.box })
+    return
   }
   
+  // 获取当前需要检测的活体动作
+  const action = props.livenessChecks[currentLivenessIndex]
+  let detected = false
+  
+  // 根据动作类型进行检测
+  if (action === 'blink' && gestures) {
+    // 眨眼检测：检查 gesture 中是否包含 'blink'
+    detected = gestures.some(g => g.gesture?.includes('blink'))
+  } else if (action === 'shake') {
+    // 摇头检测：通过头部 yaw 角度的变化来判断
+    const ang = face.rotation?.angle?.yaw || 0
+    
+    // 初始化摇头的中心位置
+    if (centerYaw === null) centerYaw = ang
+    
+    if (lastYaw !== null) {
+      // 计算相对于中心位置的偏差
+      const dev = Math.abs(ang - centerYaw)
+      
+      // 记录最大偏差
+      if (dev > maxYawDeviation) maxYawDeviation = dev
+      
+      // 判断是否完成摇头：最大偏差 >= 8°，当前偏差 < 5°，且速度较慢 (<= 3°/帧)
+      if (maxYawDeviation >= 8 && dev < 5 && Math.abs(ang - lastYaw) <= 3) {
+        detected = true
+      }
+    }
+    lastYaw = ang
+  }
+  
+  // 如果检测到活体动作
+  if (detected) {
+    emit('liveness-action', { action, status: 'completed' })
+    currentLivenessIndex++
+    
+    // 重置摇头检测的相关变量
+    lastYaw = null
+    maxYawDeviation = 0
+    centerYaw = null
+  }
+  
+  // 继续检测下一帧
   animationFrameId = requestAnimationFrame(detect)
 }
 
-// Handle face detection
-async function handleFaceDetection(result, ctx) {
-  const faces = result.face || []
-  
-  faceInfo.value = {
-    count: faces.length
-  }
-  
-  if (faces.length === 0) {
-    statusTitle.value = '未检测到人脸'
-    statusMessage.value = '请确保您的脸在摄像头范围内'
-    detectionSuccess.value = false
-    return
-  }
-  
-  if (faces.length > 1) {
-    statusTitle.value = '检测到多张人脸'
-    statusMessage.value = '请确保画面中只有一个人'
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'orange')
-    return
-  }
-  
-  const face = faces[0]
-  
-  // Check face size (should occupy most of the frame)
-  const faceBox = face.box || face.boxRaw
-  const faceArea = faceBox[2] * faceBox[3]
-  const frameArea = videoWidth.value * videoHeight.value
-  const faceRatio = (faceArea / frameArea) * 100
-  
-  faceInfo.value.size = faceRatio.toFixed(1)
-  
-  // Check if face is frontal
-  const frontalConfidence = checkFaceFrontal(face)
-  faceInfo.value.frontal = frontalConfidence.toFixed(1)
-  
-  // Adjust thresholds for mobile (smaller screen)
-  const minFaceRatio = isMobileDevice.value ? 10 : 15
-  const maxFaceRatio = isMobileDevice.value ? 75 : 70
-  
-  // Check if face size is adequate
-  if (faceRatio < minFaceRatio) {
-    statusTitle.value = '距离太远'
-    statusMessage.value = '请靠近摄像头，让脸部占据更大的画面'
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'yellow')
-    return
-  }
-  
-  // Check if face is too large
-  if (faceRatio > maxFaceRatio) {
-    statusTitle.value = '距离太近'
-    statusMessage.value = '请稍微远离摄像头'
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'yellow')
-    return
-  }
-  
-  // Check if face is frontal
-  if (frontalConfidence < 85) {
-    statusTitle.value = '请正对摄像头'
-    statusMessage.value = '请保持面部正对摄像头，不要转头或抬头低头'
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'orange')
-    return
-  }
-  
-  // Check face completeness (all key points should be visible)
-  if (!checkFaceComplete(face)) {
-    statusTitle.value = '人脸不完整'
-    statusMessage.value = '请确保整个面部都在画面内'
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'orange')
-    return
-  }
-  
-  // All checks passed
-  statusTitle.value = '检测成功'
-  statusMessage.value = '人脸检测成功！可以进行活体检测'
-  detectionSuccess.value = true
-  drawFaces(ctx, faces, 'green')
+// ===== 工具方法 =====
+/**
+ * 捕获当前视频帧并转换为 JPEG 图片
+ * @returns {string} Base64 格式的 JPEG 图片数据
+ */
+function captureFrame() {
+  const c = document.createElement('canvas')
+  c.width = videoWidth.value
+  c.height = videoHeight.value
+  c.getContext('2d').drawImage(videoRef.value, 0, 0, videoWidth.value, videoHeight.value)
+  return c.toDataURL('image/jpeg', 0.95)
 }
 
-// Handle liveness detection
-async function handleLivenessDetection(result, ctx) {
-  const faces = result.face || []
-  
-  faceInfo.value = {
-    count: faces.length
-  }
-  
-  // Check if face disappeared or multiple faces
-  if (faces.length === 0) {
-    statusTitle.value = '活体检测失败'
-    statusMessage.value = '人脸消失，检测失败'
-    isLivenessMode.value = false
-    detectionSuccess.value = false
-    return
-  }
-  
-  if (faces.length > 1) {
-    statusTitle.value = '活体检测失败'
-    statusMessage.value = '检测到多张人脸，检测失败'
-    isLivenessMode.value = false
-    detectionSuccess.value = false
-    drawFaces(ctx, faces, 'red')
-    return
-  }
-  
-  const face = faces[0]
-  drawFaces(ctx, faces, 'blue')
-  
-  // Check current action
-  if (currentAction.value && !actionCompleted.value) {
-    const detected = currentAction.value.check(face, result.gesture)
-    
-    if (detected) {
-      actionCompleted.value = true
-      currentActionIndex.value++
-      
-      if (currentActionIndex.value >= livenessActions.value.length) {
-        // All actions completed
-        statusTitle.value = '活体检测成功'
-        statusMessage.value = '所有动作检测完成！'
-        isLivenessMode.value = false
-        setTimeout(() => {
-          if (!isLivenessMode.value) {
-            statusTitle.value = '检测成功'
-            statusMessage.value = '人脸检测成功！可以进行活体检测'
-          }
-        }, 2000)
-      } else {
-        // Move to next action
-        currentAction.value = livenessActions.value[currentActionIndex.value]
-        actionCompleted.value = false
-        statusMessage.value = `动作 ${currentActionIndex.value}/${livenessActions.value.length} 完成`
-      }
-    }
-  }
-}
-
-function checkFaceFrontal(face) {
-  // Use face angle/rotation to determine if frontal
-  // Human.js provides rotation angles in face.rotation
-  const rotation = face.rotation || { angle: { roll: 0, yaw: 0, pitch: 0 } }
-  const angle = rotation.angle || { roll: 0, yaw: 0, pitch: 0 }
-  
-  // Calculate frontal confidence based on rotation angles
-  // Yaw (left-right), Pitch (up-down), Roll (tilt) should be close to 0
-  const yawDiff = Math.abs(angle.yaw || 0)
-  const pitchDiff = Math.abs(angle.pitch || 0)
-  const rollDiff = Math.abs(angle.roll || 0)
-  
-  // Very strict thresholds for accurate frontal detection
-  // These are designed to capture only true frontal faces
-  const yawThreshold = 8      // Allow only ±8 degrees left-right
-  const pitchThreshold = 8    // Allow only ±8 degrees up-down
-  const rollThreshold = 5     // Allow only ±5 degrees tilt
-  
-  // Penalty-based scoring - starts from 100 and decreases with deviation
-  // Using aggressive exponential decay for strictness
-  let yawScore = 100
-  let pitchScore = 100
-  let rollScore = 100
-  
-  // Yaw penalty (left-right is most critical for frontal)
-  if (yawDiff > yawThreshold) {
-    yawScore = Math.max(0, 100 * Math.pow(0.92, yawDiff - yawThreshold))
-  }
-  
-  // Pitch penalty (up-down)
-  if (pitchDiff > pitchThreshold) {
-    pitchScore = Math.max(0, 100 * Math.pow(0.92, pitchDiff - pitchThreshold))
-  }
-  
-  // Roll penalty (tilt)
-  if (rollDiff > rollThreshold) {
-    rollScore = Math.max(0, 100 * Math.pow(0.90, rollDiff - rollThreshold))
-  }
-  
-  // Stricter weighted average - yaw is most important
-  // Weight: yaw 60%, pitch 25%, roll 15%
-  const frontalConfidence = (yawScore * 0.6 + pitchScore * 0.25 + rollScore * 0.15)
-  
-  return frontalConfidence
-}
-
-// Check if face is complete
-function checkFaceComplete(face) {
-  // Check if face mesh has sufficient points
-  const mesh = face.mesh || face.meshRaw
-  if (!mesh || mesh.length < 100) return false
-  
-  // Check if key facial landmarks are present
-  // Eyes, nose, mouth should be visible
-  const annotations = face.annotations || {}
-  
-  return true // Simplified - mesh presence indicates completeness
-}
-
-// Draw faces on canvas
+/**
+ * 在画布上绘制人脸检测框（内切圆形式）
+ * @param {CanvasRenderingContext2D} ctx - 画布上下文
+ * @param {Array} faces - 人脸数组
+ * @param {string} color - 检测框颜色
+ */
 function drawFaces(ctx, faces, color) {
-  faces.forEach(face => {
-    const box = face.box || face.boxRaw
+  faces.forEach(f => {
+    const box = f.box || f.boxRaw
     if (box) {
+      // box 格式：[x, y, width, height]
+      const x = box[0]
+      const y = box[1]
+      const width = box[2]
+      const height = box[3]
+      
+      // 计算圆心（正方形中心）
+      const centerX = x + width / 2
+      const centerY = y + height / 2
+      
+      // 计算半径（取正方形边长的一半）
+      const radius = Math.min(width, height) / 2
+      
+      // 绘制内切圆
       ctx.strokeStyle = color
       ctx.lineWidth = 3
-      ctx.strokeRect(box[0], box[1], box[2], box[3])
+      ctx.beginPath()
+      ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI)
+      ctx.stroke()
     }
   })
 }
 
-// Detect device type
-function detectDevice() {
-  const userAgent = navigator.userAgent.toLowerCase()
-  const mobileKeywords = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i
-  
-  isMobileDevice.value = mobileKeywords.test(userAgent) || window.innerWidth < 768
-  
-  // Set video dimensions based on device
-  if (isMobileDevice.value) {
-    const width = window.innerWidth
-    const height = window.innerHeight
-    
-    if (isPortrait.value) {
-      // Portrait mode on mobile
-      videoWidth.value = Math.min(width - 40, 480)
-      videoHeight.value = Math.min(height - 200, 640)
-    } else {
-      // Landscape mode on mobile
-      videoWidth.value = Math.min(width - 40, 640)
-      videoHeight.value = Math.min(height - 200, 480)
-    }
-  } else {
-    // Desktop dimensions
-    videoWidth.value = 640
-    videoHeight.value = 480
-  }
-  
-  console.log(`Device type: ${isMobileDevice.value ? 'mobile' : 'desktop'}, Video size: ${videoWidth.value}x${videoHeight.value}`)
-}
-
-// Handle orientation changes
-function handleOrientationChange() {
-  isPortrait.value = window.innerHeight >= window.innerWidth
-  
-  // If detection is active, restart with new dimensions
-  if (isDetecting.value) {
-    // Stop current stream
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop())
-      stream = null
-    }
-    
-    // Recalculate dimensions
-    detectDevice()
-    
-    // Restart detection after a brief delay to allow DOM update
-    setTimeout(() => {
-      startDetection()
-    }, 500)
-  } else {
-    detectDevice()
-  }
-}
-
-// Start liveness check
-function startLivenessCheck() {
-  if (!detectionSuccess.value) return
-  
-  isLivenessMode.value = true
-  currentActionIndex.value = 0
-  actionCompleted.value = false
-  
-  // Randomly select 2-3 actions
-  const numActions = 2 + Math.floor(Math.random() * 2) // 2 or 3 actions
-  const shuffled = [...actions].sort(() => Math.random() - 0.5)
-  livenessActions.value = shuffled.slice(0, numActions)
-  
-  currentAction.value = livenessActions.value[0]
-  
-  statusTitle.value = '活体检测进行中'
-  statusMessage.value = `请按照提示完成动作 (1/${livenessActions.value.length})`
-}
-
-// Cancel liveness check
-function cancelLiveness() {
-  isLivenessMode.value = false
-  currentAction.value = null
-  actionCompleted.value = false
-  livenessActions.value = []
-  currentActionIndex.value = 0
-  
-  statusTitle.value = '活体检测已取消'
-  statusMessage.value = '已取消活体检测'
-  
-  setTimeout(() => {
-    if (!isLivenessMode.value && detectionSuccess.value) {
-      statusTitle.value = '检测成功'
-      statusMessage.value = '人脸检测成功！可以进行活体检测'
-    }
-  }, 2000)
-}
-
-// Check mouth open
-function checkMouthOpen(face, gestures) {
-  // Check mouth landmarks distance
-  const annotations = face.annotations || {}
-  const lipsUpper = annotations.lipsUpperOuter || []
-  const lipsLower = annotations.lipsLowerOuter || []
-  
-  if (lipsUpper.length > 0 && lipsLower.length > 0) {
-    // Calculate vertical distance between upper and lower lip center
-    const upperCenter = lipsUpper[lipsUpper.length / 2]
-    const lowerCenter = lipsLower[lipsLower.length / 2]
-    
-    if (upperCenter && lowerCenter) {
-      const distance = Math.abs(lowerCenter[1] - upperCenter[1])
-      // Threshold for mouth open (adjust as needed)
-      return distance > 15
-    }
-  }
-  
-  return false
-}
-
-// Check blink
-let blinkDetected = false
-let blinkTimer = null
-
-function checkBlink(face, gestures) {
-  // Check eye openness
-  const annotations = face.annotations || {}
-  const leftEye = annotations.leftEyeUpper0 || []
-  const rightEye = annotations.rightEyeUpper0 || []
-  
-  if (leftEye.length > 0 && rightEye.length > 0) {
-    // Simple blink detection: check if eyes are closed
-    // This is a simplified version - you might need more sophisticated detection
-    
-    // Check gestures for blink
-    if (gestures && Array.isArray(gestures)) {
-      for (const gesture of gestures) {
-        if (gesture.gesture && gesture.gesture.includes('blink')) {
-          blinkDetected = true
-          if (blinkTimer) clearTimeout(blinkTimer)
-          blinkTimer = setTimeout(() => {
-            blinkDetected = false
-          }, 2000)
-          return true
-        }
-      }
-    }
-  }
-  
-  return false
-}
-
-// Check head shake
-let lastYaw = null
-let maxYawDeviation = 0 // Track maximum yaw deviation from center
-let centerYaw = null // Reference center yaw position
-const yawChangeThreshold = 3 // degrees - very sensitive
-const minShakeAmplitude = 8 // Minimum amplitude to consider as shake (degrees)
-
-function checkHeadShake(face, gestures) {
-  const rotation = face.rotation || { angle: { yaw: 0 } }
-  const currentYaw = rotation.angle?.yaw || 0
-  
-  // Initialize center position on first call
-  if (centerYaw === null) {
-    centerYaw = currentYaw
-  }
-  
-  if (lastYaw !== null) {
-    const yawDiff = currentYaw - lastYaw
-    
-    // Track maximum deviation from center
-    const deviation = Math.abs(currentYaw - centerYaw)
-    
-    if (deviation > maxYawDeviation) {
-      maxYawDeviation = deviation
-    }
-    
-    // Check if head is returning towards center after significant deviation
-    // This detects: move to one side (left or right) then come back
-    if (maxYawDeviation >= minShakeAmplitude && Math.abs(currentYaw - centerYaw) < 5) {
-      // Head has deviated enough and is now returning to center
-      const isReturning = Math.abs(yawDiff) <= yawChangeThreshold
-      
-      if (isReturning && maxYawDeviation >= minShakeAmplitude) {
-        // Reset for next shake detection
-        maxYawDeviation = 0
-        centerYaw = currentYaw
-        lastYaw = null
-        return true
-      }
-    }
-  }
-  
-  lastYaw = currentYaw
-  return false
-}
+// 暴露方法供父组件调用
+defineExpose({ startDetection, stopDetection })
 </script>
 
 <style scoped>
+/* 人脸检测主容器样式 */
 .face-detector {
-  max-width: 900px;
-  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   padding: 15px;
-  box-sizing: border-box;
 }
 
-.face-detector.is-mobile {
-  padding: 10px;
-}
-
+/* 设备信息展示样式 */
 .device-info {
   font-size: 12px;
   color: #999;
   margin-bottom: 10px;
-  text-align: center;
 }
 
+/* 视频容器样式 */
 .video-container {
   position: relative;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  margin: 15px auto;
   width: 100%;
   max-width: 640px;
-  aspect-ratio: 1;
+  aspect-ratio: 1; /* 保持 1:1 的正方形比例 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f0f0f0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-video {
-  display: block;
+/* 视频和画布共同样式 */
+video, canvas {
   width: 100%;
   height: 100%;
-  border: 2px solid #ccc;
-  border-radius: 50%;
-  background: #000;
-  object-fit: cover;
+  aspect-ratio: 1;
+  border-radius: 50%;  /* 圆形显示 - 内切圆 */
+  border: 2px solid #ddd;
+  box-sizing: border-box;
 }
 
+/* 视频元素样式 */
+video {
+  background: #000;       /* 黑色背景 */
+  object-fit: cover;      /* 填充覆盖模式 */
+  display: block;
+}
+
+/* 画布元素样式 */
 canvas {
-  position: absolute;
+  position: absolute;     /* 绝对定位，覆盖在视频上方 */
   top: 0;
   left: 0;
-  pointer-events: none;
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-}
-
-.controls {
-  margin: 15px 0;
-  display: flex;
-  gap: 8px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-
-button {
-  padding: 10px 16px;
-  font-size: 14px;
-  border: none;
-  border-radius: 5px;
-  background-color: #42b983;
-  color: white;
-  cursor: pointer;
-  transition: background-color 0.3s;
-  white-space: nowrap;
-}
-
-button:hover:not(:disabled) {
-  background-color: #358f6b;
-}
-
-button:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-button:disabled {
-  background-color: #ccc;
-  cursor: not-allowed;
-}
-
-.status {
-  margin: 15px 0;
-  padding: 15px;
-  border-radius: 8px;
-  background-color: #f5f5f5;
-}
-
-.status.idle {
-  background-color: #f5f5f5;
-  color: #666;
-}
-
-.status.detecting {
-  background-color: #fff3cd;
-  color: #856404;
-}
-
-.status.success {
-  background-color: #d4edda;
-  color: #155724;
-}
-
-.status h3 {
-  margin: 0 0 8px 0;
-  font-size: 18px;
-}
-
-.status p {
-  margin: 5px 0;
-  font-size: 14px;
-}
-
-.action-prompt {
-  font-size: 20px;
-  font-weight: bold;
-  color: #007bff;
-  margin-top: 12px;
-  animation: pulse 0.6s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.7;
-  }
-}
-
-.info {
-  margin: 15px 0;
-  padding: 12px;
-  background-color: #e7f3ff;
-  border-radius: 8px;
-  text-align: left;
-}
-
-.info h4 {
-  margin-top: 0;
-  margin-bottom: 8px;
-  color: #0056b3;
-  font-size: 14px;
-}
-
-.info p {
-  margin: 5px 0;
-  color: #333;
-  font-size: 13px;
-}
-
-/* Mobile responsive styles */
-@media (max-width: 768px) {
-  .face-detector {
-    padding: 10px;
-  }
-  
-  .video-container {
-    margin: 10px auto;
-  }
-  
-  .controls {
-    gap: 6px;
-    margin: 10px 0;
-  }
-  
-  button {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-  
-  .status {
-    padding: 12px;
-    margin: 10px 0;
-  }
-  
-  .status h3 {
-    font-size: 16px;
-    margin-bottom: 6px;
-  }
-  
-  .status p {
-    font-size: 12px;
-  }
-  
-  .action-prompt {
-    font-size: 18px;
-    margin-top: 10px;
-  }
-  
-  .info {
-    padding: 10px;
-    margin: 10px 0;
-  }
-  
-  .info h4 {
-    font-size: 13px;
-  }
-  
-  .info p {
-    font-size: 12px;
-  }
-  
-  .device-info {
-    font-size: 11px;
-  }
-}
-
-@media (max-width: 480px) {
-  .face-detector {
-    padding: 8px;
-  }
-  
-  .controls {
-    gap: 5px;
-  }
-  
-  button {
-    padding: 8px 10px;
-    font-size: 11px;
-    flex: 1 1 48%;
-  }
-  
-  .status h3 {
-    font-size: 14px;
-  }
-  
-  .status p {
-    font-size: 11px;
-  }
-  
-  .action-prompt {
-    font-size: 16px;
-  }
-}
-
-/* Landscape mode optimization */
-@media (orientation: landscape) and (max-height: 500px) {
-  .face-detector {
-    padding: 5px;
-  }
-  
-  .controls {
-    margin: 8px 0;
-    gap: 5px;
-  }
-  
-  button {
-    padding: 6px 10px;
-    font-size: 11px;
-  }
-  
-  .status {
-    padding: 8px;
-    margin: 5px 0;
-  }
-  
-  .status h3 {
-    font-size: 14px;
-    margin-bottom: 3px;
-  }
-  
-  .status p {
-    font-size: 11px;
-    margin: 2px 0;
-  }
+  background: transparent;
 }
 </style>
