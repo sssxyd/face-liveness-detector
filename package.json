@@ -6,14 +6,17 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "publish": "node publish.js",
+    "publish:build": "npm run build && npm run publish"
   },
   "dependencies": {
-    "vue": "^3.4.0",
-    "@vladmandic/human": "^3.3.0"
+    "@vladmandic/human": "^3.3.0",
+    "vue": "^3.4.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
+    "ssh2-sftp-client": "^12.0.1",
     "vite": "^5.0.0"
   }
 }

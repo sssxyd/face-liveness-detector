@@ -1,10 +1,15 @@
 <template>
-  <div class="face-detector">
+  <div class="face-detector" :class="{ 'is-mobile': isMobileDevice }">
+    <div class="device-info">
+      设备: {{ deviceInfo }} | 方向: {{ orientationLabel }}
+    </div>
+
     <div class="video-container">
       <video
         ref="videoRef"
         autoplay
         playsinline
+        muted
         :width="videoWidth"
         :height="videoHeight"
       ></video>
@@ -17,16 +22,16 @@
 
     <div class="controls">
       <button @click="startDetection" :disabled="isDetecting || isLivenessMode">
-        开始人脸检测
+        {{ isMobileDevice ? '开始检测' : '开始人脸检测' }}
       </button>
       <button @click="stopDetection" :disabled="!isDetecting">
         停止检测
       </button>
       <button @click="startLivenessCheck" :disabled="!detectionSuccess || isLivenessMode">
-        开始活体检测
+        {{ isMobileDevice ? '活体检测' : '开始活体检测' }}
       </button>
       <button @click="cancelLiveness" :disabled="!isLivenessMode">
-        取消活体检测
+        取消
       </button>
     </div>
 
@@ -48,7 +53,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import Human from '@vladmandic/human'
 
 // Refs
@@ -64,10 +69,12 @@ const currentAction = ref(null)
 const actionCompleted = ref(false)
 const livenessActions = ref([])
 const currentActionIndex = ref(0)
+const isMobileDevice = ref(false)
+const isPortrait = ref(true)
 
-// Video dimensions
-const videoWidth = 640
-const videoHeight = 480
+// Video dimensions - will be updated based on device
+let videoWidth = ref(640)
+let videoHeight = ref(480)
 
 // Human.js instance
 let human = null
@@ -76,7 +83,6 @@ let animationFrameId = null
 
 // Liveness detection actions
 const actions = [
-  { key: 'mouth', text: '张嘴', check: checkMouthOpen },
   { key: 'blink', text: '眨眼', check: checkBlink },
   { key: 'shake', text: '左右摇头', check: checkHeadShake }
 ]
@@ -92,8 +98,27 @@ const actionText = computed(() => {
   return currentAction.value ? currentAction.value.text : ''
 })
 
+// Device info display
+const deviceInfo = computed(() => {
+  return isMobileDevice.value ? '移动设备' : '桌面设备'
+})
+
+const orientationLabel = computed(() => {
+  return isPortrait.value ? '竖屏' : '横屏'
+})
+
 // Initialize Human.js
 onMounted(async () => {
+  // Detect device type
+  detectDevice()
+  
+  // Handle orientation changes
+  window.addEventListener('orientationchange', handleOrientationChange)
+  window.addEventListener('resize', handleOrientationChange)
+  
+  // Set initial orientation
+  handleOrientationChange()
+  
   const config = {
     modelBasePath: 'https://cdn.jsdelivr.net/npm/@vladmandic/human/models',
     face: {
@@ -117,18 +142,42 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopDetection()
+  window.removeEventListener('orientationchange', handleOrientationChange)
+  window.removeEventListener('resize', handleOrientationChange)
 })
 
 // Start camera and detection
 async function startDetection() {
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: videoWidth, height: videoHeight }
-    })
+    const constraints = {
+      video: {
+        width: { ideal: videoWidth.value },
+        height: { ideal: videoHeight.value },
+        facingMode: 'user' // Use front camera on mobile
+      },
+      audio: false
+    }
+    
+    stream = await navigator.mediaDevices.getUserMedia(constraints)
     
     if (videoRef.value) {
       videoRef.value.srcObject = stream
+      
+      // Wait for video to be loadable
+      await new Promise((resolve) => {
+        const onLoadedMetadata = () => {
+          videoRef.value.removeEventListener('loadedmetadata', onLoadedMetadata)
+          resolve()
+        }
+        videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata)
+      })
+      
       await videoRef.value.play()
+      
+      // Update actual video dimensions after loading
+      const settings = stream.getVideoTracks()[0].getSettings()
+      videoWidth.value = settings.width || videoWidth.value
+      videoHeight.value = settings.height || videoHeight.value
     }
     
     isDetecting.value = true
@@ -139,8 +188,16 @@ async function startDetection() {
     detect()
   } catch (error) {
     console.error('Error accessing camera:', error)
-    statusTitle.value = '错误'
-    statusMessage.value = '无法访问摄像头，请检查权限设置'
+    if (error.name === 'NotAllowedError') {
+      statusTitle.value = '权限被拒绝'
+      statusMessage.value = '请允许访问摄像头'
+    } else if (error.name === 'NotFoundError') {
+      statusTitle.value = '未找到摄像头'
+      statusMessage.value = '设备上未找到摄像头'
+    } else {
+      statusTitle.value = '错误'
+      statusMessage.value = '无法访问摄像头，请检查权限设置'
+    }
   }
 }
 
@@ -167,7 +224,7 @@ function stopDetection() {
   // Clear canvas
   if (canvasRef.value) {
     const ctx = canvasRef.value.getContext('2d')
-    ctx.clearRect(0, 0, videoWidth, videoHeight)
+    ctx.clearRect(0, 0, videoWidth.value, videoHeight.value)
   }
   
   statusTitle.value = '已停止'
@@ -184,7 +241,7 @@ async function detect() {
   // Draw on canvas
   const canvas = canvasRef.value
   const ctx = canvas.getContext('2d')
-  ctx.clearRect(0, 0, videoWidth, videoHeight)
+  ctx.clearRect(0, 0, videoWidth.value, videoHeight.value)
   
   if (isLivenessMode.value) {
     // Liveness detection mode
@@ -225,7 +282,7 @@ async function handleFaceDetection(result, ctx) {
   // Check face size (should occupy most of the frame)
   const faceBox = face.box || face.boxRaw
   const faceArea = faceBox[2] * faceBox[3]
-  const frameArea = videoWidth * videoHeight
+  const frameArea = videoWidth.value * videoHeight.value
   const faceRatio = (faceArea / frameArea) * 100
   
   faceInfo.value.size = faceRatio.toFixed(1)
@@ -234,8 +291,12 @@ async function handleFaceDetection(result, ctx) {
   const frontalConfidence = checkFaceFrontal(face)
   faceInfo.value.frontal = frontalConfidence.toFixed(1)
   
-  // Check if face size is adequate (at least 15% of frame)
-  if (faceRatio < 15) {
+  // Adjust thresholds for mobile (smaller screen)
+  const minFaceRatio = isMobileDevice.value ? 10 : 15
+  const maxFaceRatio = isMobileDevice.value ? 75 : 70
+  
+  // Check if face size is adequate
+  if (faceRatio < minFaceRatio) {
     statusTitle.value = '距离太远'
     statusMessage.value = '请靠近摄像头，让脸部占据更大的画面'
     detectionSuccess.value = false
@@ -243,8 +304,8 @@ async function handleFaceDetection(result, ctx) {
     return
   }
   
-  // Check if face is too large (more than 70% of frame)
-  if (faceRatio > 70) {
+  // Check if face is too large
+  if (faceRatio > maxFaceRatio) {
     statusTitle.value = '距离太近'
     statusMessage.value = '请稍微远离摄像头'
     detectionSuccess.value = false
@@ -348,17 +409,22 @@ function checkFaceFrontal(face) {
   const pitchDiff = Math.abs(angle.pitch || 0)
   const rollDiff = Math.abs(angle.roll || 0)
   
-  // Max acceptable deviation (in degrees)
-  const maxYaw = 25
-  const maxPitch = 20
-  const maxRoll = 20
+  // Max acceptable deviation (in degrees) - stricter thresholds
+  const maxYaw = 15    // More strict for left-right movement
+  const maxPitch = 15  // More strict for up-down movement
+  const maxRoll = 10   // More strict for tilt
   
-  const yawScore = Math.max(0, 100 - (yawDiff / maxYaw) * 100)
-  const pitchScore = Math.max(0, 100 - (pitchDiff / maxPitch) * 100)
-  const rollScore = Math.max(0, 100 - (rollDiff / maxRoll) * 100)
+  // Use exponential decay for more accurate penalization
+  // This means even small deviations reduce confidence more significantly
+  const yawScore = Math.max(0, 100 * Math.pow(0.95, yawDiff))
+  const pitchScore = Math.max(0, 100 * Math.pow(0.95, pitchDiff))
+  const rollScore = Math.max(0, 100 * Math.pow(0.93, rollDiff))
   
-  // Average score
-  return (yawScore + pitchScore + rollScore) / 3
+  // Weighted average - yaw (side-to-side) is most important for frontal detection
+  // Weight: yaw 50%, pitch 30%, roll 20%
+  const frontalConfidence = (yawScore * 0.5 + pitchScore * 0.3 + rollScore * 0.2)
+  
+  return frontalConfidence
 }
 
 // Check if face is complete
@@ -384,6 +450,60 @@ function drawFaces(ctx, faces, color) {
       ctx.strokeRect(box[0], box[1], box[2], box[3])
     }
   })
+}
+
+// Detect device type
+function detectDevice() {
+  const userAgent = navigator.userAgent.toLowerCase()
+  const mobileKeywords = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i
+  
+  isMobileDevice.value = mobileKeywords.test(userAgent) || window.innerWidth < 768
+  
+  // Set video dimensions based on device
+  if (isMobileDevice.value) {
+    const width = window.innerWidth
+    const height = window.innerHeight
+    
+    if (isPortrait.value) {
+      // Portrait mode on mobile
+      videoWidth.value = Math.min(width - 40, 480)
+      videoHeight.value = Math.min(height - 200, 640)
+    } else {
+      // Landscape mode on mobile
+      videoWidth.value = Math.min(width - 40, 640)
+      videoHeight.value = Math.min(height - 200, 480)
+    }
+  } else {
+    // Desktop dimensions
+    videoWidth.value = 640
+    videoHeight.value = 480
+  }
+  
+  console.log(`Device type: ${isMobileDevice.value ? 'mobile' : 'desktop'}, Video size: ${videoWidth.value}x${videoHeight.value}`)
+}
+
+// Handle orientation changes
+function handleOrientationChange() {
+  isPortrait.value = window.innerHeight >= window.innerWidth
+  
+  // If detection is active, restart with new dimensions
+  if (isDetecting.value) {
+    // Stop current stream
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop())
+      stream = null
+    }
+    
+    // Recalculate dimensions
+    detectDevice()
+    
+    // Restart detection after a brief delay to allow DOM update
+    setTimeout(() => {
+      startDetection()
+    }, 500)
+  } else {
+    detectDevice()
+  }
 }
 
 // Start liveness check
@@ -524,21 +644,42 @@ function checkHeadShake(face, gestures) {
 
 <style scoped>
 .face-detector {
-  max-width: 800px;
+  max-width: 900px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 15px;
+  box-sizing: border-box;
+}
+
+.face-detector.is-mobile {
+  padding: 10px;
+}
+
+.device-info {
+  font-size: 12px;
+  color: #999;
+  margin-bottom: 10px;
+  text-align: center;
 }
 
 .video-container {
   position: relative;
-  display: inline-block;
-  margin: 20px 0;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 15px auto;
+  width: 100%;
+  max-width: 640px;
+  aspect-ratio: 1;
 }
 
 video {
   display: block;
+  width: 100%;
+  height: 100%;
   border: 2px solid #ccc;
-  border-radius: 8px;
+  border-radius: 50%;
+  background: #000;
+  object-fit: cover;
 }
 
 canvas {
@@ -546,29 +687,37 @@ canvas {
   top: 0;
   left: 0;
   pointer-events: none;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
 }
 
 .controls {
-  margin: 20px 0;
+  margin: 15px 0;
   display: flex;
-  gap: 10px;
+  gap: 8px;
   justify-content: center;
   flex-wrap: wrap;
 }
 
 button {
-  padding: 10px 20px;
-  font-size: 16px;
+  padding: 10px 16px;
+  font-size: 14px;
   border: none;
   border-radius: 5px;
   background-color: #42b983;
   color: white;
   cursor: pointer;
   transition: background-color 0.3s;
+  white-space: nowrap;
 }
 
 button:hover:not(:disabled) {
   background-color: #358f6b;
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 button:disabled {
@@ -577,8 +726,8 @@ button:disabled {
 }
 
 .status {
-  margin: 20px 0;
-  padding: 20px;
+  margin: 15px 0;
+  padding: 15px;
   border-radius: 8px;
   background-color: #f5f5f5;
 }
@@ -599,23 +748,35 @@ button:disabled {
 }
 
 .status h3 {
-  margin: 0 0 10px 0;
+  margin: 0 0 8px 0;
+  font-size: 18px;
 }
 
 .status p {
   margin: 5px 0;
+  font-size: 14px;
 }
 
 .action-prompt {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: bold;
   color: #007bff;
-  margin-top: 15px;
+  margin-top: 12px;
+  animation: pulse 0.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .info {
-  margin: 20px 0;
-  padding: 15px;
+  margin: 15px 0;
+  padding: 12px;
   background-color: #e7f3ff;
   border-radius: 8px;
   text-align: left;
@@ -623,11 +784,131 @@ button:disabled {
 
 .info h4 {
   margin-top: 0;
+  margin-bottom: 8px;
   color: #0056b3;
+  font-size: 14px;
 }
 
 .info p {
   margin: 5px 0;
   color: #333;
+  font-size: 13px;
+}
+
+/* Mobile responsive styles */
+@media (max-width: 768px) {
+  .face-detector {
+    padding: 10px;
+  }
+  
+  .video-container {
+    margin: 10px auto;
+  }
+  
+  .controls {
+    gap: 6px;
+    margin: 10px 0;
+  }
+  
+  button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  
+  .status {
+    padding: 12px;
+    margin: 10px 0;
+  }
+  
+  .status h3 {
+    font-size: 16px;
+    margin-bottom: 6px;
+  }
+  
+  .status p {
+    font-size: 12px;
+  }
+  
+  .action-prompt {
+    font-size: 18px;
+    margin-top: 10px;
+  }
+  
+  .info {
+    padding: 10px;
+    margin: 10px 0;
+  }
+  
+  .info h4 {
+    font-size: 13px;
+  }
+  
+  .info p {
+    font-size: 12px;
+  }
+  
+  .device-info {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 480px) {
+  .face-detector {
+    padding: 8px;
+  }
+  
+  .controls {
+    gap: 5px;
+  }
+  
+  button {
+    padding: 8px 10px;
+    font-size: 11px;
+    flex: 1 1 48%;
+  }
+  
+  .status h3 {
+    font-size: 14px;
+  }
+  
+  .status p {
+    font-size: 11px;
+  }
+  
+  .action-prompt {
+    font-size: 16px;
+  }
+}
+
+/* Landscape mode optimization */
+@media (orientation: landscape) and (max-height: 500px) {
+  .face-detector {
+    padding: 5px;
+  }
+  
+  .controls {
+    margin: 8px 0;
+    gap: 5px;
+  }
+  
+  button {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+  
+  .status {
+    padding: 8px;
+    margin: 5px 0;
+  }
+  
+  .status h3 {
+    font-size: 14px;
+    margin-bottom: 3px;
+  }
+  
+  .status p {
+    font-size: 11px;
+    margin: 2px 0;
+  }
 }
 </style>
