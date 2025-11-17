@@ -28,6 +28,11 @@ const REMOTE_PRIVATE_KEY = process.env.REMOTE_PRIVATE_KEY || 'C:\\Users\\sssxyd\
 const REMOTE_PATH = '/home/js-face-detector';
 const LOCAL_DIST = path.join(__dirname, 'dist');
 
+// 需要强制覆盖的文件列表（相对于 dist 目录的路径）
+const FORCE_OVERWRITE_FILES = [
+  'index.html'
+];
+
 // 颜色输出
 const colors = {
   reset: '\x1b[0m',
@@ -109,7 +114,9 @@ async function getRemoteFiles(sftp, remotePath, prefix = '') {
       const relativePath = prefix ? `${prefix}/${item.name}` : item.name;
 
       if (item.type === 'd') {
-        files.push(...await getRemoteFiles(sftp, path.join(remotePath, item.name), relativePath));
+        // 递归遍历子目录，使用正斜杠拼接路径
+        const subDir = remotePath.endsWith('/') ? `${remotePath}${item.name}` : `${remotePath}/${item.name}`;
+        files.push(...await getRemoteFiles(sftp, subDir, relativePath));
       } else {
         files.push(relativePath);
       }
@@ -192,70 +199,70 @@ async function publishViaSFTP() {
     log(`\n⏳ 扫描本地文件...`, 'blue');
     const localFiles = getAllFiles(LOCAL_DIST);
     log(`✓ 扫描本地文件 完成 (${localFiles.length} 个文件)`, 'green');
+    localFiles.forEach(f => log(`  • ${f.remote}`, 'cyan'));
 
     log(`\n⏳ 扫描远程文件...`, 'blue');
     const remoteFiles = await getRemoteFiles(sftp, REMOTE_PATH);
     log(`✓ 扫描远程文件 完成 (${remoteFiles.length} 个文件)`, 'green');
+    remoteFiles.forEach(f => log(`  • ${f}`, 'cyan'));
 
-    // 分类处理 assets 目录文件
-    const localAssetsFiles = localFiles.filter(f => f.remote.startsWith('assets/'));
-    const remoteAssetsFiles = remoteFiles.filter(f => f.startsWith('assets/'));
-    const localAssetSet = new Set(localAssetsFiles.map(f => f.remote));
-    const remoteAssetSet = new Set(remoteAssetsFiles);
-    
-    // 需要删除的 assets 文件：在远程存在但本地不存在
-    const assetsToDelete = Array.from(remoteAssetSet).filter(f => !localAssetSet.has(f));
+    // 步骤1：将远程所有文件的相对路径放入 Set
+    const remotePathSet = new Set(remoteFiles);
+    log(`\n📊 远程文件集合初始大小: ${remotePathSet.size}`, 'cyan');
 
-    // 上传本地文件
+    // 步骤2：遍历本地文件
     log(`\n⏳ 上传文件...`, 'blue');
     let uploadCount = 0;
     
     for (const file of localFiles) {
       const remoteFilePath = path.join(REMOTE_PATH, file.remote).replace(/\\/g, '/');
       const remoteDir = path.dirname(remoteFilePath).replace(/\\/g, '/');
+      const relativePath = file.remote;
 
       try {
-        // assets 目录中的同名文件不再上传（保持现有版本）
-        if (file.remote.startsWith('assets/') && remoteAssetSet.has(file.remote)) {
-          log(`  ⊘ ${file.remote} (已存在，跳过上传)`, 'yellow');
+        // 检查是否是需要强制覆盖的文件
+        const shouldForceOverwrite = FORCE_OVERWRITE_FILES.includes(relativePath);
+
+        if (shouldForceOverwrite) {
+          // 强制覆盖：一律上传并从 Set 中移除
+          await sftp.mkdir(remoteDir, true);
+          await sftp.fastPut(file.local, remoteFilePath);
+          uploadCount++;
+          log(`  ✓ ${relativePath} (强制更新)`, 'cyan');
+          remotePathSet.delete(relativePath);
           continue;
         }
 
-        // 确保远程目录存在
-        await sftp.mkdir(remoteDir, true);
-        
-        // 上传文件
-        await sftp.fastPut(file.local, remoteFilePath);
-        uploadCount++;
-        log(`  ✓ ${file.remote}`, 'cyan');
+        // 其他文件：如果在远程存在则跳过，不存在则上传
+        if (remotePathSet.has(relativePath)) {
+          log(`  ⊘ ${relativePath} (已存在，跳过)`, 'yellow');
+          remotePathSet.delete(relativePath);
+        } else {
+          await sftp.mkdir(remoteDir, true);
+          await sftp.fastPut(file.local, remoteFilePath);
+          uploadCount++;
+          log(`  ✓ ${relativePath}`, 'cyan');
+          remotePathSet.delete(relativePath);
+        }
       } catch (error) {
-        log(`  ✗ 上传失败: ${file.remote} - ${error.message}`, 'red');
+        log(`  ✗ 上传失败: ${relativePath} - ${error.message}`, 'red');
         throw error;
       }
     }
     log(`✓ 上传文件 完成 (${uploadCount} 个文件)`, 'green');
 
-    // 删除远程不存在的文件（包括 assets 中本地没有的）
-    log(`\n⏳ 清理远程不存在的文件...`, 'blue');
+    // 步骤3：删除 pathSet 中剩余的文件（服务端存在但本地不存在）
+    log(`\n⏳ 清理远程多余文件...`, 'blue');
     let deleteCount = 0;
-    const localFileSet = new Set(localFiles.map(f => f.remote));
 
-    for (const remoteFile of remoteFiles) {
-      // 跳过 assets 中需要保留的文件
-      if (remoteFile.startsWith('assets/') && remoteAssetSet.has(remoteFile) && localAssetSet.has(remoteFile)) {
-        continue;
-      }
-      
-      // 删除不在本地的文件
-      if (!localFileSet.has(remoteFile)) {
-        try {
-          const remoteFilePath = path.join(REMOTE_PATH, remoteFile).replace(/\\/g, '/');
-          await sftp.delete(remoteFilePath);
-          deleteCount++;
-          log(`  🗑️  ${remoteFile}`, 'cyan');
-        } catch (error) {
-          log(`  ⚠️  删除失败: ${remoteFile} - ${error.message}`, 'yellow');
-        }
+    for (const remainingPath of remotePathSet) {
+      try {
+        const remoteFilePath = path.join(REMOTE_PATH, remainingPath).replace(/\\/g, '/');
+        await sftp.delete(remoteFilePath);
+        deleteCount++;
+        log(`  🗑️  ${remainingPath}`, 'cyan');
+      } catch (error) {
+        log(`  ⚠️  删除失败: ${remainingPath} - ${error.message}`, 'yellow');
       }
     }
     log(`✓ 清理远程文件 完成 (删除 ${deleteCount} 个文件)`, 'green');
