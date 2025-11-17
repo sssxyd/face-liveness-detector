@@ -396,7 +396,6 @@ async function handleLivenessDetection(result, ctx) {
   }
 }
 
-// Check if face is frontal
 function checkFaceFrontal(face) {
   // Use face angle/rotation to determine if frontal
   // Human.js provides rotation angles in face.rotation
@@ -616,39 +615,42 @@ function checkBlink(face, gestures) {
 
 // Check head shake
 let lastYaw = null
-let yawChanges = []
-const yawChangeThreshold = 10 // degrees
+let maxYawDeviation = 0 // Track maximum yaw deviation from center
+let centerYaw = null // Reference center yaw position
+const yawChangeThreshold = 3 // degrees - very sensitive
+const minShakeAmplitude = 8 // Minimum amplitude to consider as shake (degrees)
 
 function checkHeadShake(face, gestures) {
   const rotation = face.rotation || { angle: { yaw: 0 } }
   const currentYaw = rotation.angle?.yaw || 0
   
+  // Initialize center position on first call
+  if (centerYaw === null) {
+    centerYaw = currentYaw
+  }
+  
   if (lastYaw !== null) {
     const yawDiff = currentYaw - lastYaw
     
-    if (Math.abs(yawDiff) > yawChangeThreshold) {
-      yawChanges.push(yawDiff)
+    // Track maximum deviation from center
+    const deviation = Math.abs(currentYaw - centerYaw)
+    
+    if (deviation > maxYawDeviation) {
+      maxYawDeviation = deviation
+    }
+    
+    // Check if head is returning towards center after significant deviation
+    // This detects: move to one side (left or right) then come back
+    if (maxYawDeviation >= minShakeAmplitude && Math.abs(currentYaw - centerYaw) < 5) {
+      // Head has deviated enough and is now returning to center
+      const isReturning = Math.abs(yawDiff) <= yawChangeThreshold
       
-      // Keep only recent changes (last 2 seconds worth)
-      if (yawChanges.length > 10) {
-        yawChanges.shift()
-      }
-      
-      // Check for alternating directions (shake)
-      if (yawChanges.length >= 4) {
-        let alternating = true
-        for (let i = 1; i < yawChanges.length; i++) {
-          if ((yawChanges[i] > 0) === (yawChanges[i - 1] > 0)) {
-            alternating = false
-            break
-          }
-        }
-        
-        if (alternating) {
-          yawChanges = []
-          lastYaw = null
-          return true
-        }
+      if (isReturning && maxYawDeviation >= minShakeAmplitude) {
+        // Reset for next shake detection
+        maxYawDeviation = 0
+        centerYaw = currentYaw
+        lastYaw = null
+        return true
       }
     }
   }
