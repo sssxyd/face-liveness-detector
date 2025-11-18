@@ -30,12 +30,12 @@
 
 <script setup lang="ts">
 // 导入 Vue 3 Composition API 相关方法
-import { ref, computed, onMounted, onUnmounted, Ref } from 'vue'
+import { ref, computed, onMounted, onUnmounted, Ref, reactive } from 'vue'
 // 导入人脸检测库
 import Human from '@vladmandic/human'
 // 导入类型定义
 import type { FaceInfo, FaceCollectedData, LivenessCompletedData, LivenessActionData, ErrorData, FaceDetectorProps } from './face-detector'
-import { DetectionMode, LivenessAction, LivenessActionStatus, ACTION_DESCRIPTIONS, FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES } from './face-detector'
+import { DetectionMode, LivenessAction, LivenessActionStatus, ACTION_DESCRIPTIONS, FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, CONFIG } from './face-detector'
 
 // 定义组件 props
 const props = withDefaults(defineProps<FaceDetectorProps>(), {
@@ -77,42 +77,60 @@ const isPortrait: Ref<boolean> = ref(true)
 // 是否正在进行检测
 const isDetecting: Ref<boolean> = ref(false)
 
+// 视频画布上下文
+let canvasCtx: CanvasRenderingContext2D | null = null
+// 结果画布上下文
+let resultCanvasCtx: CanvasRenderingContext2D | null = null
+
+// 缓存的临时 canvas 对象（用于画面捕获）
+let captureCanvas: HTMLCanvasElement | null = null
+let captureCtx: CanvasRenderingContext2D | null = null
+
 // 视频宽度
-let videoWidth: Ref<number> = ref(640)
+let videoWidth: Ref<number> = ref(CONFIG.DETECTION.DEFAULT_VIDEO_WIDTH)
 // 视频高度
-let videoHeight: Ref<number> = ref(480)
+let videoHeight: Ref<number> = ref(CONFIG.DETECTION.DEFAULT_VIDEO_HEIGHT)
 // Human 检测库实例
 let human: Human | null = null
 // 摄像头流对象
 let stream: MediaStream | null = null
-// 检测循环的定时器 ID
-let detectionTimeoutId: ReturnType<typeof setTimeout> | null = null
+
+
+
+// ===== 活体检测相关类型定义 =====
+interface DetectionState {
+  currentLivenessIndex: number
+  livenessCompleted: Set<LivenessAction>
+  baselineFaceData: string | null
+  livenessStarted: boolean
+  nodHeadSequence: string[]
+  silentLivenessStarted: boolean
+  silentLivenessCapturedImage: string | null
+  currentRandomAction: LivenessAction | null
+  currentActionCompletedCount: number
+  actionTimeoutId: ReturnType<typeof setTimeout> | null
+  detectionTimeoutId: ReturnType<typeof setTimeout> | null
+}
 
 // ===== 活体检测相关变量 =====
-// 当前活体检测项的索引
-let currentLivenessIndex: number = 0
-// 已完成的活体检测项集合
-let livenessCompleted: Set<LivenessAction> = new Set()
-// 暂存的基准图片（在第一次检测到正脸时捕获）
-let baselineFaceData: string | null = null
-// 标记是否已进入活体检测流程（防止人脸切换）
-let livenessStarted: boolean = false
-// 点头检测：记录检测到的 head 方向序列
-let nodHeadSequence: string[] = []
-// 静默活体检测：是否已进入静默检测阶段
-let silentLivenessStarted: boolean = false
-// 静默活体检测：采集的完整摄像头照片（用于活体检测）
-let silentLivenessCapturedImage: string | null = null
-// 当前随机选择的活体检测动作
-let currentRandomAction: LivenessAction | null = null
-// 当前动作的完成次数
-let currentActionCompletedCount: number = 0
-// 当前动作的超时定时器
-let actionTimeoutId: ReturnType<typeof setTimeout> | null = null
+const detectionState = reactive<DetectionState>({
+  currentLivenessIndex: 0,
+  livenessCompleted: new Set(),
+  baselineFaceData: null,
+  livenessStarted: false,
+  nodHeadSequence: [],
+  silentLivenessStarted: false,
+  silentLivenessCapturedImage: null,
+  currentRandomAction: null,
+  currentActionCompletedCount: 0,
+  actionTimeoutId: null,
+  detectionTimeoutId: null
+})
+
 // 摄像头上显示的提示文本
 const actionPromptText: Ref<string> = ref('')
 // 视频容器的边框颜色状态
-const videoBorderColor: Ref<string> = ref(BORDER_COLOR_STATES.IDLE)  // 默认灰色
+const videoBorderColor: Ref<string> = ref(BORDER_COLOR_STATES.IDLE)
 
 // 是否正在初始化检测库
 const isInitializing: Ref<boolean> = ref(false)
@@ -149,25 +167,23 @@ onMounted(async () => {
     console.error('Failed to load Human library:', e)
   }
   isInitializing.value = false
+
+  // 预先获取上下文
+  canvasCtx = canvasRef.value?.getContext('2d') || null
+  resultCanvasCtx = resultCanvasRef.value?.getContext('2d') || null
 })
 
 // 组件卸载时清理资源
 onUnmounted(() => {
   stopDetection()
   window.removeEventListener('orientationchange', handleOrientationChange)
+  // 清理缓存的临时 canvas
+  captureCanvas = null
+  captureCtx = null
 })
 
 // ===== 常量定义 =====
-const CONSTANTS = Object.freeze({
-  VIDEO_LOAD_TIMEOUT: 5000,
-  MOBILE_VIDEO_WIDTH_OFFSET: 40,
-  MOBILE_VIDEO_HEIGHT_OFFSET: 200,
-  MOBILE_MAX_WIDTH: 480,
-  MOBILE_MAX_HEIGHT: 640,
-  DESKTOP_VIDEO_WIDTH: 640,
-  DESKTOP_VIDEO_HEIGHT: 480,
-  MOBILE_WIDTH_THRESHOLD: 768
-})
+// 使用 CONFIG 替代本地常量定义（已从 face-detector.ts 导入）
 
 // ===== 设备检测与方向处理 =====
 /**
@@ -175,18 +191,18 @@ const CONSTANTS = Object.freeze({
  */
 function detectDevice(): void {
   // 判断是否为移动设备
-  isMobileDevice.value = navigator.userAgent.toLowerCase().match(/android|iphone/) !== null || window.innerWidth < CONSTANTS.MOBILE_WIDTH_THRESHOLD
+  isMobileDevice.value = navigator.userAgent.toLowerCase().match(/android|iphone/) !== null || window.innerWidth < CONFIG.MOBILE.WIDTH_THRESHOLD
   // 判断是否为竖屏
   isPortrait.value = window.innerHeight >= window.innerWidth
   
   if (isMobileDevice.value) {
     // 移动设备：尽量适配屏幕尺寸
-    videoWidth.value = Math.min(window.innerWidth - CONSTANTS.MOBILE_VIDEO_WIDTH_OFFSET, CONSTANTS.MOBILE_MAX_WIDTH)
-    videoHeight.value = Math.min(window.innerHeight - CONSTANTS.MOBILE_VIDEO_HEIGHT_OFFSET, CONSTANTS.MOBILE_MAX_HEIGHT)
+    videoWidth.value = Math.min(window.innerWidth - CONFIG.MOBILE.VIDEO_WIDTH_OFFSET, CONFIG.MOBILE.MAX_WIDTH)
+    videoHeight.value = Math.min(window.innerHeight - CONFIG.MOBILE.VIDEO_HEIGHT_OFFSET, CONFIG.MOBILE.MAX_HEIGHT)
   } else {
     // 桌面设备：使用固定尺寸
-    videoWidth.value = CONSTANTS.DESKTOP_VIDEO_WIDTH
-    videoHeight.value = CONSTANTS.DESKTOP_VIDEO_HEIGHT
+    videoWidth.value = CONFIG.DETECTION.DEFAULT_VIDEO_WIDTH
+    videoHeight.value = CONFIG.DETECTION.DEFAULT_VIDEO_HEIGHT
   }
 }
 
@@ -199,9 +215,16 @@ function handleOrientationChange(): void {
   // 如果正在检测，则重启检测以适配新的方向
   if (isDetecting.value) {
     if (stream) stream.getTracks().forEach(t => t.stop())
+    // 重新初始化上下文
+    canvasCtx = null
+    resultCanvasCtx = null
     detectDevice()
     // 延迟重启，确保 DOM 更新完成
-    setTimeout(() => startDetection(), 500)
+    setTimeout(() => {
+      canvasCtx = canvasRef.value?.getContext('2d') || null
+      resultCanvasCtx = resultCanvasRef.value?.getContext('2d') || null
+      startDetection()
+    }, 500)
   }
 }
 
@@ -217,32 +240,30 @@ function resetDetectionState(): void {
   videoBorderColor.value = BORDER_COLOR_STATES.IDLE
   
   // 重置活体检测相关索引和状态
-  currentLivenessIndex = 0
-  livenessCompleted.clear()
-  nodHeadSequence = []
-  baselineFaceData = null
-  livenessStarted = false
-  silentLivenessStarted = false
-  silentLivenessCapturedImage = null
-  currentRandomAction = null
-  currentActionCompletedCount = 0
+  detectionState.currentLivenessIndex = 0
+  detectionState.livenessCompleted.clear()
+  detectionState.nodHeadSequence = []
+  detectionState.baselineFaceData = null
+  detectionState.livenessStarted = false
+  detectionState.silentLivenessStarted = false
+  detectionState.silentLivenessCapturedImage = null
+  detectionState.currentRandomAction = null
+  detectionState.currentActionCompletedCount = 0
   actionPromptText.value = ''
   
   // 清空所有定时器
-  if (detectionTimeoutId) clearTimeout(detectionTimeoutId)
-  if (actionTimeoutId) clearTimeout(actionTimeoutId)
+  if (detectionState.detectionTimeoutId) clearTimeout(detectionState.detectionTimeoutId)
+  if (detectionState.actionTimeoutId) clearTimeout(detectionState.actionTimeoutId)
   
   // 清空两个 canvas
   // 清空结果画布
-  if (resultCanvasRef.value) {
-    const resultCtx = resultCanvasRef.value.getContext('2d')
-    if (resultCtx) resultCtx.clearRect(0, 0, resultCanvasRef.value.width, resultCanvasRef.value.height)
+  if (resultCanvasCtx) {
+    resultCanvasCtx.clearRect(0, 0, resultCanvasRef.value!.width, resultCanvasRef.value!.height)
   }
   
   // 清空检测画布
-  if (canvasRef.value) {
-    const detectionCtx = canvasRef.value.getContext('2d')
-    if (detectionCtx) detectionCtx.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
+  if (canvasCtx) {
+    canvasCtx.clearRect(0, 0, canvasRef.value!.width, canvasRef.value!.height)
   }
 }
 
@@ -280,7 +301,7 @@ async function startDetection(): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Video loading timeout'))
-      }, CONSTANTS.VIDEO_LOAD_TIMEOUT)
+      }, CONFIG.DETECTION.VIDEO_LOAD_TIMEOUT)
       
       const onCanPlay = () => {
         clearTimeout(timeout)
@@ -314,12 +335,12 @@ async function startDetection(): Promise<void> {
 function stopDetection(success: boolean = false): void {
   isDetecting.value = false
   
-  if (detectionTimeoutId) clearTimeout(detectionTimeoutId)
-  if (actionTimeoutId) clearTimeout(actionTimeoutId)
+  if (detectionState.detectionTimeoutId) clearTimeout(detectionState.detectionTimeoutId)
+  if (detectionState.actionTimeoutId) clearTimeout(detectionState.actionTimeoutId)
   if (stream) stream.getTracks().forEach(t => t.stop())
 
-  if (success && baselineFaceData) {
-    displayResultImage(baselineFaceData)
+  if (success && detectionState.baselineFaceData) {
+    displayResultImage(detectionState.baselineFaceData)
   } else {
     const lastFrameImageBase64 = captureFrame()
     if (lastFrameImageBase64) {
@@ -328,9 +349,8 @@ function stopDetection(success: boolean = false): void {
   }
   
   // 清空检测画布
-  if (canvasRef.value) {
-    const ctx = canvasRef.value.getContext('2d')
-    if (ctx) ctx.clearRect(0, 0, canvasRef.value.width, canvasRef.value.height)
+  if (canvasCtx) {
+    canvasCtx.clearRect(0, 0, canvasRef.value!.width, canvasRef.value!.height)
   }
   
   // 停止视频
@@ -338,6 +358,124 @@ function stopDetection(success: boolean = false): void {
 }
 
 // ===== 人脸检测与活体验证核心逻辑 =====
+
+/**
+ * 处理检测到单张人脸的情况
+ * @param {Object} face - 人脸数据
+ * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
+ * @param {number} faceRatio - 人脸占画面比例 (%)
+ * @param {number} frontal - 人脸正对度评分 (0-100)
+ * @param {Array} gestures - 检测到的手势/表情
+ */
+function handleSingleFace(face: any, faceBox: number[], faceRatio: number, frontal: number, gestures: any): void {
+  // 人脸信息
+  const faceInfo: FaceInfo = { 
+    count: 1,
+    size: faceRatio, 
+    frontal: frontal
+  }
+  
+  // 触发 face-detected 事件
+  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
+  // 更新边框颜色
+  updateBorderColor(faceInfo)
+  
+  // 判断人脸是否符合条件：大小在范围内，且正对度符合要求
+  if (faceRatio > props.minFaceRatio && faceRatio < props.maxFaceRatio && frontal >= props.minFrontal) {
+    console.log('[FaceDetector] Valid face detected, drawing green')
+    if (!canvasCtx) return
+    canvasCtx.clearRect(0, 0, videoWidth.value, videoHeight.value)
+    drawFaces(canvasCtx, [face], 'green')
+    
+    // 根据检测模式处理
+    if (props.mode === DetectionMode.COLLECTION) {
+      handleCollectionMode(faceBox)
+    } else if (props.mode === DetectionMode.SILENT_LIVENESS) {
+      handleSilentLivenessMode(faceBox)
+    } else if (props.mode === DetectionMode.LIVENESS) {
+      handleLivenessMode(gestures, faceBox)
+    }
+  } else {
+    // 人脸不符合条件，继续检测
+    console.log('[FaceDetector] Face not valid, ratio:', faceRatio, 'frontal:', frontal)
+    if (canvasCtx) {
+      canvasCtx.clearRect(0, 0, videoWidth.value, videoHeight.value)
+      drawFaces(canvasCtx, [face], 'orange')
+    }
+    setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
+  }
+}
+
+/**
+ * 处理检测到多个或零个人脸的情况
+ * @param {number} faceCount - 人脸数量
+ */
+function handleMultipleFaces(faceCount: number): void {
+  const faceInfo: FaceInfo = { 
+    count: faceCount,
+    size: 0,
+    frontal: 0
+  }
+  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
+  // 更新边框颜色
+  updateBorderColor(faceInfo)
+  
+  // 在 LIVENESS 或 SILENT_LIVENESS 模式下，如果已开始活体检测，不能检测不到人脸或多个人脸
+  if (props.mode === DetectionMode.LIVENESS && detectionState.livenessStarted && faceCount !== 1) {
+    console.error('[FaceDetector] Face count changed during liveness detection, expected 1 but got', faceCount)
+    videoBorderColor.value = BORDER_COLOR_STATES.ERROR
+    emit(FACE_DETECTOR_EVENTS.ERROR, { message: `检测到人脸数量变化，期望1张，实际${faceCount}张。请保持正脸对着摄像头，重新开始检测。` })
+    stopDetection()
+    return
+  }
+  
+  if (props.mode === DetectionMode.SILENT_LIVENESS && detectionState.silentLivenessStarted && faceCount !== 1) {
+    console.error('[FaceDetector] Face count changed during silent liveness detection, expected 1 but got', faceCount)
+    videoBorderColor.value = BORDER_COLOR_STATES.ERROR
+    emit(FACE_DETECTOR_EVENTS.ERROR, { message: `检测到人脸数量变化，期望1张，实际${faceCount}张。请保持正脸对着摄像头，重新开始检测。` })
+    stopDetection()
+    return
+  }
+
+  setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
+}
+
+/**
+ * 处理采集模式：检测到合格人脸后裁切并返回图片
+ * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
+ */
+function handleCollectionMode(faceBox: number[]): void {
+  detectionState.baselineFaceData = captureFaceFrame(faceBox)
+  emit(FACE_DETECTOR_EVENTS.FACE_COLLECTED, { faceImageData: detectionState.baselineFaceData })
+  videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
+  stopDetection(true)
+}
+
+/**
+ * 处理静默活体检测模式：采集图片后自动进行活体检测
+ * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
+ */
+function handleSilentLivenessMode(faceBox: number[]): void {
+  if (!detectionState.silentLivenessStarted) {
+    console.log('[FaceDetector] Valid face detected, entering silent liveness detection')
+    detectionState.silentLivenessCapturedImage = captureFrame()  // 捕获完整摄像头照片
+    detectionState.baselineFaceData = captureFaceFrame(faceBox)  // 也保存裁切后的人脸
+    detectionState.silentLivenessStarted = true
+    
+    // 异步执行活体检测
+    performSilentLivenessDetection()
+  }
+}
+
+/**
+ * 处理活体检测模式：需要用户执行指定动作
+ * @param {Array} gestures - 检测到的手势/表情
+ * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
+ */
+function handleLivenessMode(gestures: any, faceBox: number[]): void {
+  verifyLiveness(gestures, faceBox)
+}
+
 /**
  * 检测循环：不断获取视频帧进行人脸检测
  */
@@ -348,7 +486,7 @@ async function detect(): Promise<void> {
     // 快速检查必需的对象
     if (!videoRef.value || !canvasRef.value || !human) {
       console.warn('[FaceDetector] Missing required objects, retrying...')
-      setTimeout(detect, 100)
+      setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
       return
     }
     
@@ -357,116 +495,42 @@ async function detect(): Promise<void> {
     const result = await human.detect(videoRef.value)
     console.log('[FaceDetector] Detection result:', result.face?.length || 0, 'faces')
     
-    // 获取画布上下文并清空
-    const ctx = canvasRef.value.getContext('2d')
-    if (!ctx) {
-      console.error('[FaceDetector] Failed to get canvas context')
-      setTimeout(detect, 100)
+    // 使用缓存的 canvas 上下文
+    if (!canvasCtx) {
+      console.error('[FaceDetector] Canvas context is not available')
+      setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
       return
     }
-    ctx.clearRect(0, 0, videoWidth.value, videoHeight.value)
+    canvasCtx.clearRect(0, 0, videoWidth.value, videoHeight.value)
     
     // 获取检测到的所有人脸
     const faces = result.face || []
     
     if (faces.length === 1) {
+      // 处理单人脸的情况
       const face = faces[0] as any
       const faceBox = face.box || face.boxRaw
       
       if (!faceBox) {
-        // 继续检测
-        setTimeout(detect, 100)
+        setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
         return
       }
       
       // 计算人脸占视频画面的比例 (%)
       const faceRatio = (faceBox[2] * faceBox[3]) / (videoWidth.value * videoHeight.value) * 100
       
-      // 检查人脸是否正对摄像头 (0-100 分数)，使用 gestures 判定
+      // 检查人脸是否正对摄像头 (0-100 分数)
       const frontal = checkFaceFrontal(face, result.gesture)
       
-      // 人脸信息
-      const faceInfo: FaceInfo = { 
-        count: 1,
-        size: faceRatio, 
-        frontal: frontal
-      }
-      
-      // 触发 face-detected 事件
-      emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
-      // 更新边框颜色
-      updateBorderColor(faceInfo)
-      
-      // 判断人脸是否符合条件：大小在范围内，且正对度符合要求
-      if (faceRatio > props.minFaceRatio && faceRatio < props.maxFaceRatio && frontal >= props.minFrontal) {
-        console.log('[FaceDetector] Valid face detected, drawing green')
-        drawFaces(ctx, faces, 'green')
-        
-        if (props.mode === 'collection') {
-          // 采集模式：检测到合格人脸后裁切、停止并返回图片
-          baselineFaceData = captureFaceFrame(faceBox)
-          emit(FACE_DETECTOR_EVENTS.FACE_COLLECTED, { faceImageData: baselineFaceData })
-          // 设置成功颜色
-          videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
-          stopDetection(true)
-        } else if (props.mode === 'silent_liveness') {
-          // 静默活体检测模式：采集完整摄像头照片，然后进行活体检测
-          if (!silentLivenessStarted) {
-            console.log('[FaceDetector] Valid face detected, entering silent liveness detection')
-            silentLivenessCapturedImage = captureFrame()  // 捕获完整摄像头照片
-            baselineFaceData = captureFaceFrame(faceBox)  // 也保存裁切后的人脸
-            silentLivenessStarted = true
-            
-            // 异步执行活体检测
-            performSilentLivenessDetection()
-          }
-        } else {
-          // 活体检测模式：进行活体验证，暂存图片和faceBox，在所有检测完成后统一emit
-          verifyLiveness(result.gesture, faceBox)
-        }
-      } else {
-        // 人脸不符合条件，继续检测
-        console.log('[FaceDetector] Face not valid, ratio:', faceRatio, 'frontal:', frontal)
-        drawFaces(ctx, faces, 'orange')
-        setTimeout(detect, 100)
-      }
+      handleSingleFace(face, faceBox, faceRatio, frontal, result.gesture)
     } else {
-      // 未检测到人脸或检测到多个人脸
-      console.log('[FaceDetector] Face count:', faces.length)
-      const faceInfo: FaceInfo = { 
-        count: faces.length,
-        size: 0,
-        frontal: 0
-      }
-      emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
-      // 更新边框颜色
-      updateBorderColor(faceInfo)
-      
-      // 在 LIVENESS 或 SILENT_LIVENESS 模式下，如果已开始活体检测，不能检测不到人脸或多个人脸
-      if (props.mode === 'liveness' && livenessStarted && faces.length !== 1) {
-        console.error('[FaceDetector] Face count changed during liveness detection, expected 1 but got', faces.length)
-        // 设置错误颜色
-        videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-        emit(FACE_DETECTOR_EVENTS.ERROR, { message: `检测到人脸数量变化，期望1张，实际${faces.length}张。请保持正脸对着摄像头，重新开始检测。` })
-        stopDetection()
-        return
-      }
-      
-      if (props.mode === 'silent_liveness' && silentLivenessStarted && faces.length !== 1) {
-        console.error('[FaceDetector] Face count changed during silent liveness detection, expected 1 but got', faces.length)
-        // 设置错误颜色
-        videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-        emit(FACE_DETECTOR_EVENTS.ERROR, { message: `检测到人脸数量变化，期望1张，实际${faces.length}张。请保持正脸对着摄像头，重新开始检测。` })
-        stopDetection()
-        return
-      }
-
-      setTimeout(detect, 100)
+      // 处理多人脸或无人脸的情况
+      handleMultipleFaces(faces.length)
     }
   } catch (error) {
     console.error('[FaceDetector] Detection error:', error)
     // 发生错误时继续检测
-    setTimeout(detect, 200)
+    setTimeout(detect, CONFIG.DETECTION.ERROR_RETRY_DELAY)
   }
 }
 
@@ -509,7 +573,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
   
   // Yaw 角度惩罚（左右摇晃）- 权重最高 (60%)
   // 目标：yaw 应该在 ±3° 以内
-  const yawThreshold = 3
+  const yawThreshold = CONFIG.LIVENESS.FRONTAL_YAW_THRESHOLD
   const yawPenalty = Math.abs(ang.yaw) > yawThreshold 
     ? Math.abs(ang.yaw) - yawThreshold  // 超出部分作为惩罚
     : 0
@@ -518,7 +582,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
   
   // Pitch 角度惩罚（上下俯仰）- 权重中等 (25%)
   // 目标：pitch 应该在 ±4° 以内
-  const pitchThreshold = 4
+  const pitchThreshold = CONFIG.LIVENESS.FRONTAL_PITCH_THRESHOLD
   const pitchPenalty = Math.abs(ang.pitch) > pitchThreshold 
     ? Math.abs(ang.pitch) - pitchThreshold
     : 0
@@ -527,7 +591,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
   
   // Roll 角度惩罚（旋转）- 权重最低 (15%)
   // 目标：roll 应该在 ±2° 以内
-  const rollThreshold = 2
+  const rollThreshold = CONFIG.LIVENESS.FRONTAL_ROLL_THRESHOLD
   const rollPenalty = Math.abs(ang.roll) > rollThreshold 
     ? Math.abs(ang.roll) - rollThreshold
     : 0
@@ -545,63 +609,63 @@ function checkFaceFrontal(face: any, gestures: any): number {
  */
 function verifyLiveness(gestures: any, faceBox: number[]): void {
   // 如果是第一次检测到符合条件的人脸，先捕获并暂存（不立即emit）
-    if (currentLivenessIndex === 0 && livenessCompleted.size === 0 && !baselineFaceData) {
+    if (detectionState.currentLivenessIndex === 0 && detectionState.livenessCompleted.size === 0 && !detectionState.baselineFaceData) {
     console.log('[FaceDetector] First valid face detected in liveness mode, capturing baseline')
-    baselineFaceData = captureFaceFrame(faceBox)
+    detectionState.baselineFaceData = captureFaceFrame(faceBox)
     // 标记活体检测已开始，后续 detect 方法需要检查人脸数量
-    livenessStarted = true
+    detectionState.livenessStarted = true
     
     // 选择第一个随机动作
     selectNextRandomAction()
   }
   
   // 检查是否达到动作次数限制
-  if (currentLivenessIndex >= normalizedLivenessActionCount.value) {
+  if (detectionState.currentLivenessIndex >= normalizedLivenessActionCount.value) {
     console.log('[FaceDetector] All liveness checks completed')
     // 设置成功颜色
     videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
     // 抛出 liveness-completed 事件
-    emit(FACE_DETECTOR_EVENTS.LIVENESS_COMPLETED, { faceImageData: baselineFaceData, liveness: 1.0 })
+    emit(FACE_DETECTOR_EVENTS.LIVENESS_COMPLETED, { faceImageData: detectionState.baselineFaceData, liveness: 1.0 })
     stopDetection(true)
     return
   }  // 获取当前需要检测的随机动作
-  if (!currentRandomAction) {
+  if (!detectionState.currentRandomAction) {
     console.warn('[FaceDetector] No current action selected')
-    setTimeout(detect, 100)
+    setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
     return
   }
   
   // 检测当前帧是否有指定的动作
-  const detected = detectAction(currentRandomAction, gestures)
+  const detected = detectAction(detectionState.currentRandomAction, gestures)
   
   // 如果检测到动作
   if (detected) {
-    currentActionCompletedCount++
-    console.log('[FaceDetector] Action detected:', currentRandomAction, 'count:', currentActionCompletedCount)
+    detectionState.currentActionCompletedCount++
+    console.log('[FaceDetector] Action detected:', detectionState.currentRandomAction, 'count:', detectionState.currentActionCompletedCount)
     
     // 检查是否达到了所需的次数
-    if (currentActionCompletedCount >= normalizedLivenessActionCount.value) {
-      console.log('[FaceDetector] Liveness action completed:', currentRandomAction)
-      emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: currentRandomAction, description: getActionDescription(currentRandomAction), status: LivenessActionStatus.COMPLETED })
-      livenessCompleted.add(currentRandomAction)
-      currentLivenessIndex++
+    if (detectionState.currentActionCompletedCount >= normalizedLivenessActionCount.value) {
+      console.log('[FaceDetector] Liveness action completed:', detectionState.currentRandomAction)
+      emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: detectionState.currentRandomAction, description: getActionDescription(detectionState.currentRandomAction), status: LivenessActionStatus.COMPLETED })
+      detectionState.livenessCompleted.add(detectionState.currentRandomAction)
+      detectionState.currentLivenessIndex++
       
       // 清空当前动作信息，准备选择下一个
-      currentRandomAction = null
-      currentActionCompletedCount = 0
+      detectionState.currentRandomAction = null
+      detectionState.currentActionCompletedCount = 0
       
       // 清除超时定时器
-      if (actionTimeoutId) clearTimeout(actionTimeoutId)
-      actionTimeoutId = null
+      if (detectionState.actionTimeoutId) clearTimeout(detectionState.actionTimeoutId)
+      detectionState.actionTimeoutId = null
       actionPromptText.value = ''
       
       // 继续检测下一帧
-      setTimeout(detect, 100)
+      setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
     }
   }
   
   // 继续检测下一帧
-  setTimeout(detect, 100)
+  setTimeout(detect, CONFIG.DETECTION.DETECTION_FRAME_DELAY)
 }
 
 /**
@@ -609,7 +673,7 @@ function verifyLiveness(gestures: any, faceBox: number[]): void {
  */
 function selectNextRandomAction(): void {
   // 从未完成的动作中随机选择
-  const availableActions = props.livenessChecks.filter(action => !livenessCompleted.has(action))
+  const availableActions = props.livenessChecks.filter(action => !detectionState.livenessCompleted.has(action))
   
   if (availableActions.length === 0) {
     console.log('[FaceDetector] All actions have been completed')
@@ -617,24 +681,24 @@ function selectNextRandomAction(): void {
   }
   
   // 随机选择一个动作
-  currentRandomAction = availableActions[Math.floor(Math.random() * availableActions.length)]
-  currentActionCompletedCount = 0
+  detectionState.currentRandomAction = availableActions[Math.floor(Math.random() * availableActions.length)]
+  detectionState.currentActionCompletedCount = 0
   
   // 更新提示文本
-  updateActionPrompt(currentRandomAction)
-  emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: currentRandomAction, description: getActionDescription(currentRandomAction), status: LivenessActionStatus.STARTED })
+  updateActionPrompt(detectionState.currentRandomAction)
+  emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: detectionState.currentRandomAction, description: getActionDescription(detectionState.currentRandomAction), status: LivenessActionStatus.STARTED })
   
-  console.log('[FaceDetector] Selected action:', currentRandomAction)
+  console.log('[FaceDetector] Selected action:', detectionState.currentRandomAction)
   
   // 设置超时定时器
-  if (actionTimeoutId) clearTimeout(actionTimeoutId)
-  actionTimeoutId = setTimeout(() => {
-    if (currentRandomAction) {
-      emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: currentRandomAction, description: getActionDescription(currentRandomAction), status: LivenessActionStatus.TIMEOUT })
-      console.error('[FaceDetector] Action timeout:', currentRandomAction)
+  if (detectionState.actionTimeoutId) clearTimeout(detectionState.actionTimeoutId)
+  detectionState.actionTimeoutId = setTimeout(() => {
+    if (detectionState.currentRandomAction) {
+      emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: detectionState.currentRandomAction, description: getActionDescription(detectionState.currentRandomAction), status: LivenessActionStatus.TIMEOUT })
+      console.error('[FaceDetector] Action timeout:', detectionState.currentRandomAction)
       // 设置错误颜色
       videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-      emit(FACE_DETECTOR_EVENTS.ERROR, { message: `动作检测超时（${props.livenessActionTimeout}秒）：未在规定时间内检测到${getActionDescription(currentRandomAction)}，请重试` })
+      emit(FACE_DETECTOR_EVENTS.ERROR, { message: `动作检测超时（${props.livenessActionTimeout}秒）：未在规定时间内检测到${getActionDescription(detectionState.currentRandomAction)}，请重试` })
       stopDetection()
     }
   }, props.livenessActionTimeout * 1000)
@@ -704,7 +768,7 @@ function detectAction(action: string, gestures: any): boolean {
       const percent = percentMatch ? parseInt(percentMatch) : 0
       
       // 判断嘴巴打开（> 20% 认为是打开状态）
-      return percent > 20
+      return percent > CONFIG.LIVENESS.MIN_MOUTH_OPEN_PERCENT
     })
     
   } else if (action === LivenessAction.NOD && gestures) {
@@ -718,18 +782,18 @@ function detectAction(action: string, gestures: any): boolean {
       // 提取 head 方向（up/down）
       const headDirection = currentHead.match(/(up|down)/)?.[0]
       
-      if (headDirection && headDirection !== nodHeadSequence[nodHeadSequence.length - 1]) {
+      if (headDirection && headDirection !== detectionState.nodHeadSequence[detectionState.nodHeadSequence.length - 1]) {
         // 方向改变时，添加到序列中
-        nodHeadSequence.push(headDirection)
+        detectionState.nodHeadSequence.push(headDirection)
         
         // 检查是否完成了点头动作
         // 检测模式：up -> down -> up（模拟点头的上-下-上运动）
-        if (nodHeadSequence.length >= 3) {
-          const seq = nodHeadSequence
+        if (detectionState.nodHeadSequence.length >= CONFIG.LIVENESS.NOD_SEQUENCE_LENGTH) {
+          const seq = detectionState.nodHeadSequence
           const isNodGesture = seq[seq.length - 3] === 'up' && seq[seq.length - 2] === 'down' && seq[seq.length - 1] === 'up'
           
           if (isNodGesture) {
-            nodHeadSequence = [] // 重置序列
+            detectionState.nodHeadSequence = [] // 重置序列
             return true
           }
         }
@@ -756,11 +820,13 @@ function displayResultImage(resultImageBase64: string): void {
       const canvasHeight = resultCanvasRef.value!.height
       
       // 在结果画布上绘制图片
-      const ctx = resultCanvasRef.value!.getContext('2d')
-      if (!ctx) return
+      if (!resultCanvasCtx) {
+        console.error('[FaceDetector] Result canvas context is not available')
+        return
+      }
       
       // 清空画布
-      ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+      resultCanvasCtx.clearRect(0, 0, canvasWidth, canvasHeight)
       
       // 图片宽高
       const imgWidth = img.width
@@ -778,7 +844,7 @@ function displayResultImage(resultImageBase64: string): void {
       const drawY = (canvasHeight - scaledHeight) / 2
       
       // 直接绘制整个图片，保持宽高比，CSS会通过圆形裁切处理
-      ctx.drawImage(img, drawX, drawY, scaledWidth, scaledHeight)
+      resultCanvasCtx.drawImage(img, drawX, drawY, scaledWidth, scaledHeight)
       
       console.log('[FaceDetector] Image displayed on result canvas (CSS circle clipping)', {
         imgWidth,
@@ -808,18 +874,24 @@ function displayResultImage(resultImageBase64: string): void {
  */
 function captureFrame(): string | null {
   try {
-    const c = document.createElement('canvas')
     if (!videoRef.value) return null
     
-    c.width = videoRef.value.videoWidth || videoWidth.value
-    c.height = videoRef.value.videoHeight || videoHeight.value
+    const videoWidth_actual = videoRef.value.videoWidth || videoWidth.value
+    const videoHeight_actual = videoRef.value.videoHeight || videoHeight.value
     
-    const ctx = c.getContext('2d')
-    if (!ctx) return null
+    // 如果缓存的 canvas 尺寸不匹配，重新创建
+    if (!captureCanvas || captureCanvas.width !== videoWidth_actual || captureCanvas.height !== videoHeight_actual) {
+      captureCanvas = document.createElement('canvas')
+      captureCanvas.width = videoWidth_actual
+      captureCanvas.height = videoHeight_actual
+      captureCtx = captureCanvas.getContext('2d')
+    }
     
-    ctx.drawImage(videoRef.value, 0, 0, c.width, c.height)
+    if (!captureCtx) return null
     
-    const imageData = c.toDataURL('image/jpeg', 0.9)
+    captureCtx.drawImage(videoRef.value, 0, 0, videoWidth_actual, videoHeight_actual)
+    
+    const imageData = captureCanvas.toDataURL('image/jpeg', 0.9)
     console.log('[FaceDetector] Frame captured, size:', imageData.length)
     return imageData
   } catch (e) {
@@ -842,22 +914,24 @@ function captureFaceFrame(faceBox: number[]): string | null {
 
     const [x, y, width, height] = faceBox
     
-    // 创建裁切后的 canvas
-    const c = document.createElement('canvas')
-    c.width = width
-    c.height = height
+    // 如果缓存的 canvas 尺寸不匹配，重新创建
+    if (!captureCanvas || captureCanvas.width !== width || captureCanvas.height !== height) {
+      captureCanvas = document.createElement('canvas')
+      captureCanvas.width = width
+      captureCanvas.height = height
+      captureCtx = captureCanvas.getContext('2d')
+    }
     
-    const ctx = c.getContext('2d')
-    if (!ctx) return null
+    if (!captureCtx) return null
     
     // 从视频中裁切人脸区域
-    ctx.drawImage(
+    captureCtx.drawImage(
       videoRef.value,
       x, y, width, height,      // 源区域（视频中的人脸位置）
       0, 0, width, height        // 目标区域（canvas）
     )
     
-    const croppedImageData = c.toDataURL('image/jpeg', 0.9)
+    const croppedImageData = captureCanvas.toDataURL('image/jpeg', 0.9)
     console.log('[FaceDetector] Face frame captured and cropped, size:', croppedImageData.length, 'box:', faceBox)
     return croppedImageData
   } catch (e) {
@@ -872,7 +946,7 @@ function captureFaceFrame(faceBox: number[]): string | null {
  * 使用 Human.js 的 liveness 检测能力
  */
 async function performSilentLivenessDetection(): Promise<void> {
-  if (!silentLivenessCapturedImage) {
+  if (!detectionState.silentLivenessCapturedImage) {
     console.error('[FaceDetector] No captured image for silent liveness detection')
     // 设置错误颜色
     videoBorderColor.value = BORDER_COLOR_STATES.ERROR
@@ -973,7 +1047,7 @@ async function performSilentLivenessDetection(): Promise<void> {
           
           // 发送成功事件
           emit(FACE_DETECTOR_EVENTS.LIVENESS_COMPLETED, {
-            faceImageData: silentLivenessCapturedImage,
+            faceImageData: detectionState.silentLivenessCapturedImage,
             liveness: realScore
           })
           
@@ -1005,7 +1079,7 @@ async function performSilentLivenessDetection(): Promise<void> {
     }
 
     // 加载采集的图片
-    tempImg.src = silentLivenessCapturedImage
+    tempImg.src = detectionState.silentLivenessCapturedImage
   } catch (e) {
     console.error('[FaceDetector] Error in performSilentLivenessDetection:', e)
     // 设置错误颜色

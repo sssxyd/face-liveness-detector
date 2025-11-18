@@ -139,3 +139,45 @@ export interface FaceDetectorEvents {
 export interface ErrorData {
   message: string
 }
+
+export const CONFIG = Object.freeze({
+  // 检测相关配置
+  DETECTION: {
+    // 视频加载超时时间（毫秒）- 等待视频元素可播放的最长时间
+    VIDEO_LOAD_TIMEOUT: 5000,
+    // 检测循环帧延迟（毫秒）- 两次检测之间的间隔，越小检测越频繁
+    DETECTION_FRAME_DELAY: 100,
+    // 错误重试延迟（毫秒）- 检测出错时的重试间隔
+    ERROR_RETRY_DELAY: 200,
+    // 默认视频宽度（像素）- 桌面设备使用的固定宽度
+    DEFAULT_VIDEO_WIDTH: 640,
+    // 默认视频高度（像素）- 桌面设备使用的固定高度
+    DEFAULT_VIDEO_HEIGHT: 480
+  },
+  // 移动设备适配配置
+  MOBILE: {
+    // 视频宽度偏移（像素）- 移动设备视频宽度减少的像素数，用于留出边距
+    VIDEO_WIDTH_OFFSET: 40,
+    // 视频高度偏移（像素）- 移动设备视频高度减少的像素数，用于留出边距（包括顶部栏、底部操作栏等）
+    VIDEO_HEIGHT_OFFSET: 200,
+    // 移动设备最大视频宽度（像素）- 移动设备宽度上限
+    MAX_WIDTH: 480,
+    // 移动设备最大视频高度（像素）- 移动设备高度上限
+    MAX_HEIGHT: 640,
+    // 移动设备判断阈值（像素）- 屏幕宽度小于此值则判定为移动设备
+    WIDTH_THRESHOLD: 768
+  },
+  // 活体检测相关配置
+  LIVENESS: {
+    // 张嘴判定阈值（百分比）- 嘴巴打开度超过此百分比才算张嘴
+    MIN_MOUTH_OPEN_PERCENT: 20,
+    // 点头动作序列长度 - 需要检测到的头部运动序列数（up -> down -> up）
+    NOD_SEQUENCE_LENGTH: 3,
+    // 正脸Yaw角度阈值（度）- 左右摇晃不能超过此角度，超出则扣分
+    FRONTAL_YAW_THRESHOLD: 3,
+    // 正脸Pitch角度阈值（度）- 上下俯仰不能超过此角度，超出则扣分
+    FRONTAL_PITCH_THRESHOLD: 4,
+    // 正脸Roll角度阈值（度）- 旋转不能超过此角度，超出则扣分
+    FRONTAL_ROLL_THRESHOLD: 2
+  }
+})
