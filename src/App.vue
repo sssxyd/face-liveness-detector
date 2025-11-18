@@ -30,7 +30,7 @@
         <svg class="github-icon" viewBox="0 0 16 16" fill="currentColor" width="16" height="16">
           <path d="M8 .25a.75.75 0 00-.75.75v5.69L2.28 2.28a.75.75 0 00-1.06 1.06L6.19 8l-4.97 4.97a.75.75 0 101.06 1.06l5.44-5.44V15a.75.75 0 001.5 0V.75A.75.75 0 008 .25z"/>
         </svg>
-        <span>Star</span>
+        <span>👍</span>
       </a>
     </div>
 

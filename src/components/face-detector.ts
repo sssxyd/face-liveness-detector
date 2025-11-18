@@ -96,6 +96,7 @@ export interface FaceInfo {
  * 人脸采集数据
  */
 export interface FaceCollectedData {
+    cameraImageData: string | null
     faceImageData: string | null
 }
 
@@ -103,6 +104,7 @@ export interface FaceCollectedData {
  * 活体检测完成数据
  */
 export interface LivenessCompletedData {
+    cameraImageData: string | null
     faceImageData: string | null
     liveness: number  // 活体检测得分 (0-1)
 }
