@@ -20,8 +20,6 @@ export enum DetectionMode {
 export enum LivenessAction {
   // 眨眼
   BLINK = 'blink',
-  // 摇头
-  SHAKE = 'shake',
   // 张嘴
   MOUTH_OPEN = 'mouth_open',
   // 点头

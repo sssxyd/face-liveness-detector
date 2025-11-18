@@ -120,10 +120,10 @@
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
 import FaceDetector from '../components/FaceDetector.vue'
-import type { FaceInfo } from '../types/face-detector'
+import { LivenessAction, type FaceInfo } from '../types/face-detector'
 
 // Configurable liveness checks
-const livenessChecks: Ref<string[]> = ref(['blink', 'shake'])
+const livenessChecks: Ref<string[]> = ref([LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD])
 
 const faceDetectorRef: Ref<any> = ref(null)
 const faceInfo: Ref<FaceInfo | null> = ref(null)
@@ -139,7 +139,8 @@ const minFrontal: Ref<number> = ref(90)
 function getActionLabel(action: string): string {
   const labels: Record<string, string> = {
     blink: '眨眼',
-    shake: '摇头'
+    mouth_open: '张嘴',
+    nod: '点头'
   }
   return labels[action] || action
 }
