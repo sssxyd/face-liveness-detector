@@ -18,6 +18,13 @@
         >
           活体验证
         </button>
+        <button 
+          class="nav-btn" 
+          :class="{ active: currentPage === 'silent_liveness' }"
+          @click="currentPage = 'silent_liveness'"
+        >
+          静默活体
+        </button>
       </div>
     </div>
 
