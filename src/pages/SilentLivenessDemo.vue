@@ -75,6 +75,7 @@
     </div>
 
     <div v-if="errorMessage" class="error-panel">
+      <p v-if="errorCode">错误代码: {{ errorCode }}</p>
       <p>{{ errorMessage }}</p>
     </div>
 
@@ -99,7 +100,7 @@
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
 import FaceDetector from '../components/FaceDetector.vue'
-import { FaceInfo } from '../components/face-detector'
+import { ErrorCode, FaceInfo } from '../components/face-detector'
 
 // 人脸检测参数
 const minFaceRatio: Ref<number> = ref(50)  // 最小人脸占比(%)
@@ -109,6 +110,7 @@ const minFrontal: Ref<number> = ref(90)    // 最小正对度(%)
 const faceDetectorRef: Ref<any> = ref(null)
 const faceInfo: Ref<FaceInfo | null> = ref(null)
 const verifiedImage: Ref<string | null> = ref(null)
+const errorCode: Ref<ErrorCode | null> = ref(null)
 const errorMessage: Ref<string | null> = ref(null)
 const livenessScore: Ref<number | null> = ref(null)
 const isDetecting: Ref<boolean> = ref(false)
@@ -130,13 +132,15 @@ function handleLivenessCompleted(data: { faceImageData: string | null; liveness?
   console.log('Liveness detection completed successfully!')
 }
 
-function handleError(error: { message: string }): void {
+function handleError(error: { code: ErrorCode, message: string }): void {
+  errorCode.value = error.code
   errorMessage.value = error.message
   isDetecting.value = false
 }
 
 async function startDetection(): Promise<void> {
   isDetecting.value = true
+  errorCode.value = null
   errorMessage.value = null
   try {
     await faceDetectorRef.value?.startDetection()
@@ -158,6 +162,7 @@ function resetDetection(): void {
   errorMessage.value = null
   livenessScore.value = null
   isDetecting.value = false
+  errorCode.value = null
 }
 
 function handleImageError(error: Event): void {

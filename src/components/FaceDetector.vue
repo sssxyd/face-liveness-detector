@@ -182,7 +182,8 @@ onMounted(async () => {
       enabled: true,
       detector: { rotation: false, return: true },
       mesh: { enabled: true },      // 面部网格点
-      iris: { enabled: true }       // 虹膜检测
+      iris: { enabled: true },      // 虹膜检测
+      antispoof: { enabled: true }  // 启用活体检测（反欺骗）
     },
     body: { enabled: false },      // 禁用身体检测
     hand: { enabled: false },      // 禁用手部检测
@@ -193,6 +194,7 @@ onMounted(async () => {
   try {
     await human.load()
     console.log('Human library loaded successfully')
+    console.log('[FaceDetector] Available models:', human.models)
   } catch (e) {
     console.error('Failed to load Human library:', e)
   }
@@ -914,10 +916,7 @@ async function performSilentLivenessDetection(): Promise<void> {
           return
         }
 
-        console.log('[FaceDetector] Liveness detection result:', {
-          faces: result.face?.length || 0,
-          faceData: result.face?.[0]
-        })
+        console.log('[FaceDetector] Detection complete, face count:', result.face?.length || 0)
 
         // 提取 liveness 检测结果
         const faces = result.face || []
@@ -933,35 +932,91 @@ async function performSilentLivenessDetection(): Promise<void> {
         // 获取第一张脸的数据
         const faceData = faces[0] as any
         
+        console.log('[FaceDetector] Full face data keys:', Object.keys(faceData))
+        console.log('[FaceDetector] Full face data:', JSON.stringify(faceData, null, 2))
+        
         // Human.js liveness 返回两个值：real 和 spoof
         // real: 真实人脸的置信度 [0-1]
         // spoof: 欺骗/合成的置信度 [0-1]
-        const livenessData = faceData.liveness || []
+        let realScore = 0
+        let livenessFound = false
         
-        console.log('[FaceDetector] Liveness data structure:', livenessData)
+        // 尝试多种可能的 liveness 数据结构
+        
+        // 方案 1: 直接在 faceData 中寻找 liveness 属性
+        if (faceData.liveness !== undefined) {
+          console.log('[FaceDetector] Found liveness at faceData.liveness:', faceData.liveness, 'type:', typeof faceData.liveness)
+          livenessFound = true
+          
+          const livenessData = faceData.liveness
+          
+          // 子方案 1a: 数组格式 [{label: 'real', value: x}, {label: 'spoof', value: y}]
+          if (Array.isArray(livenessData) && livenessData.length > 0) {
+            console.log('[FaceDetector] Liveness is array, length:', livenessData.length, 'first item:', livenessData[0])
+            
+            if ('label' in livenessData[0] && 'value' in livenessData[0]) {
+              const realObj = livenessData.find((item: any) => item.label === 'real')
+              realScore = realObj ? realObj.value : 0
+              console.log('[FaceDetector] Case 1a: Parsed from labeled array, real score:', realScore)
+            } else if ('real' in livenessData[0]) {
+              realScore = livenessData[0].real || 0
+              console.log('[FaceDetector] Case 1a: Parsed from object with real key, real score:', realScore)
+            }
+          }
+          // 子方案 1b: 直接是对象 {real: x, spoof: y}
+          else if (typeof livenessData === 'object' && 'real' in livenessData) {
+            realScore = livenessData.real || 0
+            console.log('[FaceDetector] Case 1b: Parsed from direct object, real score:', realScore)
+          }
+          // 子方案 1c: 直接是数字（某些版本可能直接返回分数）
+          else if (typeof livenessData === 'number') {
+            realScore = livenessData
+            console.log('[FaceDetector] Case 1c: Parsed from direct number, real score:', realScore)
+          }
+        }
+        
+        // 方案 2: 检查 antispoof 属性
+        if (!livenessFound && faceData.antispoof !== undefined) {
+          console.log('[FaceDetector] Found antispoof data:', faceData.antispoof, 'type:', typeof faceData.antispoof)
+          livenessFound = true
+          
+          if (typeof faceData.antispoof === 'number') {
+            realScore = faceData.antispoof
+            console.log('[FaceDetector] Case 2: Parsed from antispoof number, real score:', realScore)
+          } else if (Array.isArray(faceData.antispoof) && faceData.antispoof.length > 0) {
+            // antispoof 可能是数组
+            realScore = typeof faceData.antispoof[0] === 'number' ? faceData.antispoof[0] : 0
+            console.log('[FaceDetector] Case 2: Parsed from antispoof array, real score:', realScore)
+          }
+        }
+        
+        // 方案 3: 检查 spoof 属性（反向判断）
+        if (!livenessFound && faceData.spoof !== undefined) {
+          console.log('[FaceDetector] Found spoof data:', faceData.spoof, 'type:', typeof faceData.spoof)
+          livenessFound = true
+          
+          if (typeof faceData.spoof === 'number') {
+            // spoof 是欺骗/假脸的分数，所以 real = 1 - spoof
+            realScore = 1 - faceData.spoof
+            console.log('[FaceDetector] Case 3: Calculated from spoof, real score:', realScore)
+          }
+        }
+        
+        console.log('[FaceDetector] Extracted liveness score:', realScore, 'found:', livenessFound)
 
-        if (!Array.isArray(livenessData) || livenessData.length === 0) {
-          console.warn('[FaceDetector] No liveness data in detection result')
+        if (!livenessFound) {
+          console.warn('[FaceDetector] Could not extract liveness score from any location')
+          console.log('[FaceDetector] Face data contents:', {
+            keys: Object.keys(faceData),
+            livenessType: typeof faceData.liveness,
+            antispoofType: typeof faceData.antispoof,
+            spoofType: typeof faceData.spoof
+          })
           // 设置错误颜色
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-          emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_LIVENESS_RESULT, message: '无法获取活体检测结果，请重试' })
+          emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_LIVENESS_RESULT, message: '无法获取活体检测结果，请确保模型已正确加载' })
           stopDetection()
           return
-        }
-
-        // 通常格式为 [{label: 'real', value: x}, {label: 'spoof', value: y}]
-        // 或者直接是 [{real: x, spoof: y}] 这样的格式
-        let realScore = 0
-        
-        if (typeof livenessData[0] === 'object') {
-          if ('label' in livenessData[0] && 'value' in livenessData[0]) {
-            // 格式 1: 带 label 的对象数组
-            const realObj = livenessData.find((item: any) => item.label === 'real')
-            realScore = realObj ? realObj.value : 0
-          } else if ('real' in livenessData[0]) {
-            // 格式 2: 直接包含 real/spoof 的对象
-            realScore = livenessData[0].real || 0
-          }
         }
 
         console.log('[FaceDetector] Liveness score (real):', realScore, 'threshold:', props.silentLivenessThreshold)
