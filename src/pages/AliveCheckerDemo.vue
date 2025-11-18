@@ -31,6 +31,7 @@
       :min-frontal="minFrontal"
       :liveness-action-count="livenessActionCount"
       :liveness-action-timeout="livenessActionTimeout"
+      :show-action-prompt="showActionPrompt"
       @face-detected="handleFaceDetected"
       @liveness-action="handleLivenessAction"
       @liveness-completed="handleLivenessCompleted"
@@ -120,6 +121,7 @@ const maxFaceRatio: Ref<number> = ref(80)
 const minFrontal: Ref<number> = ref(90)
 const livenessActionCount: Ref<number> = ref(1)      // 活体检测动作次数
 const livenessActionTimeout: Ref<number> = ref(60)   // 活体检测动作时间限制（秒）
+const showActionPrompt: Ref<boolean> = ref(true)     // 是否显示活体检测动作提示文本
 
 function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
   faceInfo.value = data.faceInfo

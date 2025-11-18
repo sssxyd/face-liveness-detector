@@ -47,6 +47,17 @@ export const FACE_DETECTOR_EVENTS = Object.freeze({
 })
 
 /**
+ * 视频容器边框颜色状态
+ */
+export const BORDER_COLOR_STATES = Object.freeze({
+  IDLE: '#ddd',          // 未检测到人脸：灰色
+  MULTIPLE_FACES: '#f56c6c',  // 检测到多个人脸：红色
+  PERFECT: '#42b983',    // 条件都满足：绿色
+  PARTIAL: '#ffc107',    // 条件部分满足：黄色
+  INVALID: '#ff9800'     // 条件都不满足：橙色
+})
+
+/**
  * FaceDetector 组件 Props 接口
  */
 export interface FaceDetectorProps {
@@ -66,6 +77,8 @@ export interface FaceDetectorProps {
   livenessActionCount?: number
   // 活体检测动作时间限制（秒，默认60秒）
   livenessActionTimeout?: number
+  // 是否显示活体检测动作提示文本（默认 true）
+  showActionPrompt?: boolean
 }
 
 /**
