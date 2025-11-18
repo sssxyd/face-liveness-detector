@@ -40,8 +40,12 @@ export interface FaceDetectorProps {
   maxFaceRatio?: number
   // 正脸置信度的最小值（百分比）
   minFrontal?: number
-  // 静默活体检测的阈值（0-1，默认 0.5）：用于判定是否为真实人脸
+  // 静默活体检测的阈值（0-100，默认 90）：用于判定是否为真实人脸
   silentLivenessThreshold?: number
+  // 活体检测动作次数（默认1，表示每个动作只需做一次）
+  livenessActionCount?: number
+  // 活体检测动作时间限制（秒，默认60秒）
+  livenessActionTimeout?: number
 }
 
 /**

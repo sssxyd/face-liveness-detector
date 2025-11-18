@@ -29,6 +29,8 @@
       :min-face-ratio="minFaceRatio"
       :max-face-ratio="maxFaceRatio"
       :min-frontal="minFrontal"
+      :liveness-action-count="livenessActionCount"
+      :liveness-action-timeout="livenessActionTimeout"
       @face-detected="handleFaceDetected"
       @liveness-action="handleLivenessAction"
       @liveness-completed="handleLivenessCompleted"
@@ -135,12 +137,14 @@ const isDetecting: Ref<boolean> = ref(false)
 const minFaceRatio: Ref<number> = ref(50)
 const maxFaceRatio: Ref<number> = ref(80)
 const minFrontal: Ref<number> = ref(90)
+const livenessActionCount: Ref<number> = ref(1)      // 活体检测动作次数
+const livenessActionTimeout: Ref<number> = ref(60)   // 活体检测动作时间限制（秒）
 
 function getActionLabel(action: string): string {
   const labels: Record<string, string> = {
-    blink: '眨眼',
-    mouth_open: '张嘴',
-    nod: '点头'
+    [LivenessAction.BLINK]: '眨眼',
+    [LivenessAction.MOUTH_OPEN]: '张嘴',
+    [LivenessAction.NOD]: '点头'
   }
   return labels[action] || action
 }

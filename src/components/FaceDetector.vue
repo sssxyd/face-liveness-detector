@@ -12,6 +12,10 @@
       <video ref="videoRef" autoplay playsinline muted :width="videoWidth" :height="videoHeight"></video>
       <!-- 画布元素：用于绘制人脸检测框和相关标记 -->
       <canvas ref="canvasRef" :width="videoWidth" :height="videoHeight"></canvas>
+      <!-- 活体检测提示文本 -->
+      <div v-if="actionPromptText" class="action-prompt">
+        {{ actionPromptText }}
+      </div>
     </div>
   </div>
 </template>
@@ -32,7 +36,14 @@ const props = withDefaults(defineProps<FaceDetectorProps>(), {
   minFaceRatio: 50,
   maxFaceRatio: 80,
   minFrontal: 90,
-  silentLivenessThreshold: 90  // 静默活体检测阈值 (百分比: 0-100)
+  silentLivenessThreshold: 90,  // 静默活体检测阈值 (百分比: 0-100)
+  livenessActionCount: 1,        // 活体检测动作次数，默认为1
+  livenessActionTimeout: 60      // 活体检测动作时间限制，默认60秒
+})
+
+const normalizedLivenessActionCount = computed(() => {
+  // 如果 livenessActionCount > livenessChecks 长度，则设置为等于长度
+  return Math.min(props.livenessActionCount, props.livenessChecks.length)
 })
 
 // 定义组件事件
@@ -81,6 +92,16 @@ let nodHeadSequence: string[] = []
 let silentLivenessStarted: boolean = false
 // 静默活体检测：采集的完整摄像头照片（用于活体检测）
 let silentLivenessCapturedImage: string | null = null
+// 当前随机选择的活体检测动作
+let currentRandomAction: string | null = null
+// 当前动作的完成次数
+let currentActionCompletedCount: number = 0
+// 当前动作的开始时间戳
+let currentActionStartTime: number = 0
+// 当前动作的超时定时器
+let actionTimeoutId: ReturnType<typeof setTimeout> | null = null
+// 摄像头上显示的提示文本
+const actionPromptText: Ref<string> = ref('')
 
 // 是否正在初始化检测库
 const isInitializing: Ref<boolean> = ref(false)
@@ -239,6 +260,7 @@ function stopDetection(success: boolean = false): void {
   isDetecting.value = false
   
   if (detectionTimeoutId) clearTimeout(detectionTimeoutId)
+  if (actionTimeoutId) clearTimeout(actionTimeoutId)
   if (stream) stream.getTracks().forEach(t => t.stop())
   
   // 如果检测成功且有基准人脸数据，用图片替换视频
@@ -257,6 +279,10 @@ function stopDetection(success: boolean = false): void {
   livenessStarted = false
   silentLivenessStarted = false
   silentLivenessCapturedImage = null
+  currentRandomAction = null
+  currentActionCompletedCount = 0
+  currentActionStartTime = 0
+  actionPromptText.value = ''
 }
 
 // ===== 人脸检测与活体验证核心逻辑 =====
@@ -462,9 +488,12 @@ function verifyLiveness(gestures: any, faceBox: number[]): void {
     baselineFaceData = captureFaceFrame(faceBox)
     // 标记活体检测已开始，后续 detect 方法需要检查人脸数量
     livenessStarted = true
+    
+    // 选择第一个随机动作
+    selectNextRandomAction()
   }
   
-  // 如果所有活体检测项都已完成
+  // 检查是否所有动作都已完成
   if (currentLivenessIndex >= props.livenessChecks.length) {
     console.log('[FaceDetector] All liveness checks completed')
     // 抛出 liveness-completed 事件
@@ -473,18 +502,111 @@ function verifyLiveness(gestures: any, faceBox: number[]): void {
     return
   }
   
-  // 获取当前需要检测的活体动作
-  const action = props.livenessChecks[currentLivenessIndex]
-  let detected = false
+  // 获取当前需要检测的随机动作
+  if (!currentRandomAction) {
+    console.warn('[FaceDetector] No current action selected')
+    setTimeout(detect, 100)
+    return
+  }
   
-  // 根据动作类型进行检测
+  // 检测当前帧是否有指定的动作
+  const detected = detectAction(currentRandomAction, gestures)
+  
+  // 如果检测到动作
+  if (detected) {
+    currentActionCompletedCount++
+    console.log('[FaceDetector] Action detected:', currentRandomAction, 'count:', currentActionCompletedCount)
+    
+    // 检查是否达到了所需的次数
+    if (currentActionCompletedCount >= normalizedLivenessActionCount.value) {
+      console.log('[FaceDetector] Liveness action completed:', currentRandomAction)
+      emit('liveness-action', { action: currentRandomAction, status: 'completed' })
+      livenessCompleted.add(currentRandomAction)
+      currentLivenessIndex++
+      
+      // 清空当前动作信息，准备选择下一个
+      currentRandomAction = null
+      currentActionCompletedCount = 0
+      
+      // 清除超时定时器
+      if (actionTimeoutId) clearTimeout(actionTimeoutId)
+      actionTimeoutId = null
+      actionPromptText.value = ''
+      
+      // 继续检测下一帧
+      setTimeout(detect, 100)
+    }
+  }
+  
+  // 继续检测下一帧
+  setTimeout(detect, 100)
+}
+
+/**
+ * 选择下一个随机的活体检测动作
+ */
+function selectNextRandomAction(): void {
+  // 从未完成的动作中随机选择
+  const availableActions = props.livenessChecks.filter(action => !livenessCompleted.has(action))
+  
+  if (availableActions.length === 0) {
+    console.log('[FaceDetector] All actions have been completed')
+    return
+  }
+  
+  // 随机选择一个动作
+  currentRandomAction = availableActions[Math.floor(Math.random() * availableActions.length)]
+  currentActionCompletedCount = 0
+  currentActionStartTime = Date.now()
+  
+  // 更新提示文本
+  updateActionPrompt(currentRandomAction)
+  
+  console.log('[FaceDetector] Selected action:', currentRandomAction)
+  
+  // 设置超时定时器
+  if (actionTimeoutId) clearTimeout(actionTimeoutId)
+  actionTimeoutId = setTimeout(() => {
+    if (currentRandomAction) {
+      console.error('[FaceDetector] Action timeout:', currentRandomAction)
+      emit('error', { message: `动作检测超时（${props.livenessActionTimeout}秒）：未在规定时间内检测到${getActionDescription(currentRandomAction)}，请重试` })
+      stopDetection()
+    }
+  }, props.livenessActionTimeout * 1000)
+}
+
+/**
+ * 获取动作的描述文本
+ */
+function getActionDescription(action: string): string {
+  const descriptions: Record<string, string> = {
+    blink: '眨眼',
+    mouth_open: '张嘴',
+    nod: '点头'
+  }
+  return descriptions[action] || action
+}
+
+/**
+ * 更新摄像头上的提示文本
+ */
+function updateActionPrompt(action: string): void {
+  const prompt = `请${getActionDescription(action)}`
+  actionPromptText.value = prompt
+  console.log('[FaceDetector] Prompt updated:', prompt)
+}
+
+/**
+ * 检测指定的动作是否被执行
+ */
+function detectAction(action: string, gestures: any): boolean {
   if (action === LivenessAction.BLINK && gestures) {
     // 眨眼检测：检查 gesture 中是否包含 'blink'
-    detected = gestures.some((g: any) => g.gesture?.includes('blink'))
+    return gestures.some((g: any) => g.gesture?.includes('blink'))
     
   } else if (action === LivenessAction.MOUTH_OPEN && gestures) {
     // 张嘴检测：检查嘴巴是否打开（任何打开百分比 > 0%）
-    detected = gestures.some((g: any) => {
+    return gestures.some((g: any) => {
       const mouthGesture = g.gesture
       if (!mouthGesture?.includes('mouth')) return false
       
@@ -518,27 +640,15 @@ function verifyLiveness(gestures: any, faceBox: number[]): void {
           const isNodGesture = seq[seq.length - 3] === 'up' && seq[seq.length - 2] === 'down' && seq[seq.length - 1] === 'up'
           
           if (isNodGesture) {
-            detected = true
             nodHeadSequence = [] // 重置序列
+            return true
           }
         }
       }
     }
   }
   
-  // 如果检测到活体动作
-  if (detected) {
-    console.log('[FaceDetector] Liveness action detected:', action)
-    emit('liveness-action', { action, status: 'completed' })
-    livenessCompleted.add(action)
-    currentLivenessIndex++
-    
-    // 重置所有检测序列
-    nodHeadSequence = []
-  }
-  
-  // 继续检测下一帧
-  setTimeout(detect, 100)
+  return false
 }
 
 // ===== 工具方法 =====
@@ -915,5 +1025,33 @@ canvas {
   top: 0;
   left: 0;
   background: transparent;
+}
+
+/* 活体检测提示文本样式 */
+.action-prompt {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  z-index: 10;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
 }
 </style>
