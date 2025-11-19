@@ -119,10 +119,10 @@ function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
   faceInfo.value = data.faceInfo
 }
 
-function handleLivenessCompleted(data: { faceImageData: string | null; liveness?: number }): void {
-  console.log('[SilentLiveness] Detection completed, imageData length:', data.faceImageData?.length || 0)
-  if (data.faceImageData) {
-    verifiedImage.value = data.faceImageData
+function handleLivenessCompleted(data: { imageData: string | null; liveness?: number }): void {
+  console.log('[SilentLiveness] Detection completed, imageData length:', data.imageData?.length || 0)
+  if (data.imageData) {
+    verifiedImage.value = data.imageData
     livenessScore.value = data.liveness || 0
     console.log('[SilentLiveness] Image set, verifiedImage:', verifiedImage.value ? 'has data' : 'null')
   } else {

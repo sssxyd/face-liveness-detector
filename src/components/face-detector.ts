@@ -96,16 +96,14 @@ export interface FaceInfo {
  * 人脸采集数据
  */
 export interface FaceCollectedData {
-    cameraImageData: string | null
-    faceImageData: string | null
+    imageData: string | null
 }
 
 /**
  * 活体检测完成数据
  */
 export interface LivenessCompletedData {
-    cameraImageData: string | null
-    faceImageData: string | null
+    imageData: string | null
     liveness: number  // 活体检测得分 (0-1)
 }
 
@@ -195,10 +193,10 @@ export const CONFIG = Object.freeze({
     DETECTION_FRAME_DELAY: 100,
     // 错误重试延迟（毫秒）- 检测出错时的重试间隔
     ERROR_RETRY_DELAY: 200,
-    // 默认视频宽度（像素）- 桌面设备使用的固定宽度
+    // 默认视频宽度（像素）- 桌面设备使用的固定宽度 (1:1 比例)
     DEFAULT_VIDEO_WIDTH: 640,
-    // 默认视频高度（像素）- 桌面设备使用的固定高度
-    DEFAULT_VIDEO_HEIGHT: 480
+    // 默认视频高度（像素）- 桌面设备使用的固定高度 (1:1 比例)
+    DEFAULT_VIDEO_HEIGHT: 640
   },
   // 移动设备适配配置
   MOBILE: {
@@ -206,10 +204,8 @@ export const CONFIG = Object.freeze({
     VIDEO_WIDTH_OFFSET: 40,
     // 视频高度偏移（像素）- 移动设备视频高度减少的像素数，用于留出边距（包括顶部栏、底部操作栏等）
     VIDEO_HEIGHT_OFFSET: 200,
-    // 移动设备最大视频宽度（像素）- 移动设备宽度上限
-    MAX_WIDTH: 480,
-    // 移动设备最大视频高度（像素）- 移动设备高度上限
-    MAX_HEIGHT: 640,
+    // 移动设备最大视频尺寸（像素）- 移动设备边长上限 (1:1 比例)
+    MAX_WIDTH: 640,
     // 移动设备判断阈值（像素）- 屏幕宽度小于此值则判定为移动设备
     WIDTH_THRESHOLD: 768
   },
@@ -225,5 +221,10 @@ export const CONFIG = Object.freeze({
     FRONTAL_PITCH_THRESHOLD: 4,
     // 正脸Roll角度阈值（度）- 旋转不能超过此角度，超出则扣分
     FRONTAL_ROLL_THRESHOLD: 2
+  },
+  // 检测超时相关配置
+  TIMEOUT: {
+    // 检测总超时时长（毫秒）- 如果60秒内没有检测到合格人脸，则主动退出
+    DETECTION_TIMEOUT: 60000
   }
 })

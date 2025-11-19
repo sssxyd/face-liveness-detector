@@ -85,6 +85,10 @@ let lastDetectionTime: number = 0
 // ===== 定时器独立管理 =====
 let actionTimeoutId: ReturnType<typeof setTimeout> | null = null
 
+// ===== 检测超时相关变量 =====
+let detectionStartTime: number = 0
+let noFaceFrameCount: number = 0
+
 // ===== 活体检测相关类型定义 =====
 interface DetectionState {
   // === 流程控制 ===
@@ -97,7 +101,6 @@ interface DetectionState {
   
   // === 图片采集 ===
   baselineImage: string | null
-  capturedImage: string | null
 }
 
 // ===== 活体检测相关变量 =====
@@ -106,8 +109,7 @@ const detectionState = reactive<DetectionState>({
   isSilentLivenessStarted: false,
   completedActions: new Set(),
   currentAction: null,
-  baselineImage: null,
-  capturedImage: null
+  baselineImage: null
 })
 
 /**
@@ -172,6 +174,22 @@ onMounted(async () => {
   // 监听设备方向改变事件
   window.addEventListener('orientationchange', handleOrientationChange)
   
+  // Safari 兼容性：监听可见性变化，确保后台不被限流
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      console.log('[FaceDetector] Page hidden, pausing detection')
+      if (isDetecting.value) {
+        cancelPendingDetection()
+      }
+    } else {
+      console.log('[FaceDetector] Page visible again, resuming detection')
+      if (isDetecting.value) {
+        scheduleNextDetection(0) // 立即重新启动检测
+      }
+    }
+  }
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  
   // 配置 Human 检测库
   isInitializing.value = true
   const config = {
@@ -192,19 +210,31 @@ onMounted(async () => {
   }
   human = new Human(config as any)
   try {
+    console.log('[FaceDetector] Loading Human.js library...')
+    const userAgent = navigator.userAgent
+    const isSafari = /Safari/.test(userAgent) && !/Chrome/.test(userAgent)
+    console.log('[FaceDetector] Browser: Safari=' + isSafari + ', UserAgent=' + userAgent)
+    
     await human.load()
-    console.log('Human library loaded successfully')
+    console.log('[FaceDetector] Human.js library loaded successfully')
     console.log('[FaceDetector] Available models:', human.models)
   } catch (e) {
-    console.error('Failed to load Human library:', e)
+    console.error('[FaceDetector] Failed to load Human library:', e)
+    emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.ENGINE_NOT_INITIALIZED, message: '检测库加载失败: ' + (e instanceof Error ? e.message : '未知错误') })
   }
   isInitializing.value = false
+  
+  // 返回清理函数
+  return () => {
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }
 })
 
 // 组件卸载时清理资源
 onUnmounted(() => {
   stopDetection()
   window.removeEventListener('orientationchange', handleOrientationChange)
+  document.removeEventListener('visibilitychange', () => {}) // 移除可见性监听
   // 清理缓存的临时 canvas
   captureCanvas = null
   captureCtx = null
@@ -217,7 +247,7 @@ onUnmounted(() => {
 
 // ===== 设备检测与方向处理 =====
 /**
- * 检测设备类型和屏幕方向，并调整视频尺寸
+ * 检测设备类型和屏幕方向，并调整视频尺寸（1:1 比例）
  */
 function detectDevice(): void {
   // 判断是否为移动设备
@@ -226,11 +256,14 @@ function detectDevice(): void {
   isPortrait.value = window.innerHeight >= window.innerWidth
   
   if (isMobileDevice.value) {
-    // 移动设备：尽量适配屏幕尺寸
-    videoWidth.value = Math.min(window.innerWidth - CONFIG.MOBILE.VIDEO_WIDTH_OFFSET, CONFIG.MOBILE.MAX_WIDTH)
-    videoHeight.value = Math.min(window.innerHeight - CONFIG.MOBILE.VIDEO_HEIGHT_OFFSET, CONFIG.MOBILE.MAX_HEIGHT)
+    // 移动设备：根据屏幕方向调整，但保持 1:1 比例
+    // 取屏幕宽高中较小值作为视频边长（减去 padding）
+    const screenSize = Math.min(window.innerWidth, window.innerHeight)
+    const videoSize = Math.min(screenSize - CONFIG.MOBILE.VIDEO_WIDTH_OFFSET, CONFIG.MOBILE.MAX_WIDTH)
+    videoWidth.value = videoSize
+    videoHeight.value = videoSize
   } else {
-    // 桌面设备：使用固定尺寸
+    // 桌面设备：使用固定尺寸（1:1 比例）
     videoWidth.value = CONFIG.DETECTION.DEFAULT_VIDEO_WIDTH
     videoHeight.value = CONFIG.DETECTION.DEFAULT_VIDEO_HEIGHT
   }
@@ -268,7 +301,6 @@ function resetDetectionState(): void {
   // 重置活体检测相关状态
   detectionState.completedActions.clear()
   detectionState.baselineImage = null
-  detectionState.capturedImage = null
   detectionState.currentAction = null
   actionPromptText.value = ''
   
@@ -277,7 +309,10 @@ function resetDetectionState(): void {
   
   // 清空结果图片
   resultImageSrc.value = ''
-
+  
+  // 重置检测超时计数器
+  detectionStartTime = performance.now()
+  noFaceFrameCount = 0
 }
 
 /**
@@ -299,11 +334,34 @@ async function startDetection(): Promise<void> {
     // 获取用户摄像头权限和视频流
     console.log('[FaceDetector] Requesting camera access...')
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: videoWidth.value }, height: { ideal: videoHeight.value } },
+      video: { 
+        facingMode: 'user', 
+        // 请求 1:1 的正方形视频（宽高相同）
+        width: { ideal: videoWidth.value }, 
+        height: { ideal: videoWidth.value },  // 确保高度等于宽度
+        // 优先使用可用的分辨率
+        aspectRatio: { ideal: 1.0 }
+      },
       audio: false
     })
     
     console.log('[FaceDetector] Camera stream obtained')
+    
+    // 获取实际的视频流分辨率（Safari 兼容性修复）
+    const videoTrack = stream.getVideoTracks()[0]
+    if (videoTrack) {
+      const settings = videoTrack.getSettings?.()
+      if (settings) {
+        console.log('[FaceDetector] Actual video settings:', settings.width, 'x', settings.height)
+        // 更新实际的视频尺寸为 1:1 比例
+        // 优先取较小的尺寸作为边长，保证能显示完整
+        const minSize = Math.min(settings.width || videoWidth.value, settings.height || videoHeight.value)
+        videoWidth.value = minSize
+        videoHeight.value = minSize
+        console.log('[FaceDetector] Normalized to 1:1 ratio:', minSize, 'x', minSize)
+      }
+    }
+    
     if (videoRef.value) {
       videoRef.value.style.display = 'block'  // 确保摄像头视频可见
       videoRef.value.srcObject = stream
@@ -316,17 +374,53 @@ async function startDetection(): Promise<void> {
         reject(new Error('Video loading timeout'))
       }, CONFIG.DETECTION.VIDEO_LOAD_TIMEOUT)
       
-      const onCanPlay = () => {
-        clearTimeout(timeout)
-        if (videoRef.value) {
+      const checkVideoReady = () => {
+        // Safari 兼容性：检查 videoWidth 和 videoHeight
+        // 某些浏览器的 canplay 事件可能不可靠，需要额外检查实际视频尺寸
+        if (videoRef.value && videoRef.value.videoWidth > 0 && videoRef.value.videoHeight > 0) {
+          clearTimeout(timeout)
           videoRef.value.removeEventListener('canplay', onCanPlay)
+          videoRef.value.removeEventListener('loadedmetadata', onLoadedMetadata)
+          console.log('[FaceDetector] Video ready, dimensions:', videoRef.value.videoWidth, 'x', videoRef.value.videoHeight)
+          resolve()
+          return true
         }
-        resolve()
+        return false
+      }
+      
+      const onCanPlay = () => {
+        console.log('[FaceDetector] canplay event fired')
+        if (checkVideoReady()) {
+          // 事件处理已完成，不再需要做什么
+        }
+      }
+      
+      const onLoadedMetadata = () => {
+        console.log('[FaceDetector] loadedmetadata event fired')
+        if (checkVideoReady()) {
+          // 事件处理已完成，不再需要做什么
+        }
       }
       
       if (videoRef.value) {
-        videoRef.value.addEventListener('canplay', onCanPlay)
-        videoRef.value.play().catch(reject)
+        // 同时监听 canplay 和 loadedmetadata，以支持不同浏览器
+        videoRef.value.addEventListener('canplay', onCanPlay, { once: true })
+        videoRef.value.addEventListener('loadedmetadata', onLoadedMetadata, { once: true })
+        
+        // 播放视频
+        videoRef.value.play().catch(err => {
+          clearTimeout(timeout)
+          videoRef.value?.removeEventListener('canplay', onCanPlay)
+          videoRef.value?.removeEventListener('loadedmetadata', onLoadedMetadata)
+          reject(err)
+        })
+        
+        // 额外的轮询检查（备选方案，用于Safari等特殊情况）
+        const pollInterval = setInterval(() => {
+          if (checkVideoReady()) {
+            clearInterval(pollInterval)
+          }
+        }, 100)
       }
     })
     
@@ -356,8 +450,6 @@ function stopDetection(success: boolean = false): void {
 
   if (success && detectionState.baselineImage) {
     displayResultImage(detectionState.baselineImage)
-  } else if (detectionState.capturedImage){
-    displayResultImage(detectionState.capturedImage)
   } else {
     const lastFrameImageBase64 = captureFrame()
     if (lastFrameImageBase64) {
@@ -376,13 +468,11 @@ function stopDetection(success: boolean = false): void {
 
 /**
  * 处理检测到单张人脸的情况
- * @param {Object} face - 人脸数据
- * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
  * @param {number} faceRatio - 人脸占画面比例 (%)
  * @param {number} frontal - 人脸正对度评分 (0-100)
  * @param {Array} gestures - 检测到的手势/表情
  */
-function handleSingleFace(faceBox: number[], faceRatio: number, frontal: number, gestures: any): void {
+function handleSingleFace(faceRatio: number, frontal: number, gestures: any): void {
   // 人脸信息
   const faceInfo: FaceInfo = { 
     count: 1,
@@ -401,11 +491,11 @@ function handleSingleFace(faceBox: number[], faceRatio: number, frontal: number,
     
     // 根据检测模式处理
     if (props.mode === DetectionMode.COLLECTION) {
-      handleCollectionMode(faceBox)
+      handleCollectionMode()
     } else if (props.mode === DetectionMode.SILENT_LIVENESS) {
-      handleSilentLivenessMode(faceBox)
+      handleSilentLivenessMode()
     } else if (props.mode === DetectionMode.LIVENESS) {
-      handleLivenessMode(gestures, faceBox)
+      handleLivenessMode(gestures)
     }
   } else {
     // 人脸不符合条件，继续检测
@@ -449,15 +539,12 @@ function handleMultipleFaces(faceCount: number): void {
 }
 
 /**
- * 处理采集模式：检测到合格人脸后裁切并返回图片
- * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
+ * 处理采集模式：检测到合格人脸后截取图片
  */
-function handleCollectionMode(faceBox: number[]): void {
-  detectionState.capturedImage = captureFrame()
-  detectionState.baselineImage = captureFaceFrame(faceBox)
+function handleCollectionMode(): void {
+  detectionState.baselineImage = captureFrame()
   emit(FACE_DETECTOR_EVENTS.FACE_COLLECTED, { 
-    cameraImageData: detectionState.capturedImage,
-    faceImageData: detectionState.baselineImage 
+    imageData: detectionState.baselineImage 
   })
   videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
   stopDetection(true)
@@ -465,13 +552,11 @@ function handleCollectionMode(faceBox: number[]): void {
 
 /**
  * 处理静默活体检测模式：采集图片后自动进行活体检测
- * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
  */
-function handleSilentLivenessMode(faceBox: number[]): void {
+function handleSilentLivenessMode(): void {
   if (!detectionState.isSilentLivenessStarted) {
     console.log('[FaceDetector] Valid face detected, entering silent liveness detection')
-    detectionState.capturedImage = captureFrame()  // 捕获完整摄像头照片
-    detectionState.baselineImage = captureFaceFrame(faceBox)  // 也保存裁切后的人脸
+    detectionState.baselineImage = captureFrame()  // 捕获完整摄像头照片
     detectionState.isSilentLivenessStarted = true
 
     // 异步执行活体检测
@@ -482,10 +567,9 @@ function handleSilentLivenessMode(faceBox: number[]): void {
 /**
  * 处理活体检测模式：需要用户执行指定动作
  * @param {Array} gestures - 检测到的手势/表情
- * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
  */
-function handleLivenessMode(gestures: any, faceBox: number[]): void {
-  verifyLiveness(gestures, faceBox)
+function handleLivenessMode(gestures: any): void {
+  verifyLiveness(gestures)
 }
 
 /**
@@ -502,15 +586,36 @@ async function detect(): Promise<void> {
       return
     }
     
+    // Safari 兼容性检查：确保视频已加载且可绘制
+    if (videoRef.value.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      console.warn('[FaceDetector] Video not ready, readyState:', videoRef.value.readyState)
+      scheduleNextDetection(CONFIG.DETECTION.ERROR_RETRY_DELAY)
+      return
+    }
+    
+    // 检测超时控制：如果长时间没有检测到人脸，主动退出
+    const elapsedTime = performance.now() - detectionStartTime
+    if (elapsedTime > CONFIG.TIMEOUT.DETECTION_TIMEOUT) {
+      console.error('[FaceDetector] Detection timeout: no valid face detected for', Math.round(CONFIG.TIMEOUT.DETECTION_TIMEOUT / 1000), 'seconds')
+      videoBorderColor.value = BORDER_COLOR_STATES.ERROR
+      emit(FACE_DETECTOR_EVENTS.ERROR, { 
+        code: ErrorCode.DETECTION_ERROR, 
+        message: `检测超时：未能在${Math.round(CONFIG.TIMEOUT.DETECTION_TIMEOUT / 1000)}秒内检测到合格人脸，请检查摄像头或重新开始` 
+      })
+      stopDetection()
+      return
+    }
+    
     // 对当前视频帧进行人脸检测
-    console.log('[FaceDetector] Running detection...')
     const result = await human.detect(videoRef.value)
-    console.log('[FaceDetector] Detection result:', result.face?.length || 0, 'faces')
     
     // 获取检测到的所有人脸
     const faces = result.face || []
     
     if (faces.length === 1) {
+      // 重置无人脸计数器
+      noFaceFrameCount = 0
+      
       // 处理单人脸的情况
       const face = faces[0] as any
       const faceBox = face.box || face.boxRaw
@@ -526,14 +631,17 @@ async function detect(): Promise<void> {
       // 检查人脸是否正对摄像头 (0-100 分数)
       const frontal = checkFaceFrontal(face, result.gesture)
       
-      handleSingleFace(faceBox, faceRatio, frontal, result.gesture)
+      handleSingleFace(faceRatio, frontal, result.gesture)
     } else {
+      // 累计无人脸帧数，用于超时检测
+      noFaceFrameCount++
+      
       // 处理多人脸或无人脸的情况
       handleMultipleFaces(faces.length)
     }
   } catch (error) {
     console.error('[FaceDetector] Detection error:', error)
-    // 发生错误时继续检测
+    // 发生错误时继续检测，但增加重试延迟
     scheduleNextDetection(CONFIG.DETECTION.ERROR_RETRY_DELAY)
   }
 }
@@ -609,14 +717,12 @@ function checkFaceFrontal(face: any, gestures: any): number {
 /**
  * 活体检测验证：检测用户是否执行指定的活体动作
  * @param {Array} gestures - 检测到的手势/表情
- * @param {Array} faceBox - 人脸边界框
  */
-function verifyLiveness(gestures: any, faceBox: number[]): void {
+function verifyLiveness(gestures: any): void {
   // 如果是第一次检测到符合条件的人脸，先捕获并暂存（不立即emit）
   if (detectionState.completedActions.size === 0 && !detectionState.baselineImage) {
     console.log('[FaceDetector] First valid face detected in liveness mode, capturing baseline')
-    detectionState.capturedImage = captureFrame()  // 捕获完整摄像头照片
-    detectionState.baselineImage = captureFaceFrame(faceBox)
+    detectionState.baselineImage = captureFrame()  // 捕获完整摄像头照片
     // 标记活体检测已开始，后续 detect 方法需要检查人脸数量
     detectionState.isLivenessStarted = true
     
@@ -631,8 +737,7 @@ function verifyLiveness(gestures: any, faceBox: number[]): void {
     videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
     // 抛出 liveness-completed 事件
     emit(FACE_DETECTOR_EVENTS.LIVENESS_COMPLETED, { 
-      cameraImageData: detectionState.capturedImage,
-      faceImageData: detectionState.baselineImage, 
+      imageData: detectionState.baselineImage, 
       liveness: 1.0 }
     )
     stopDetection(true)
@@ -808,8 +913,24 @@ function captureFrame(): string | null {
   try {
     if (!videoRef.value) return null
     
-    const videoWidth_actual = videoRef.value.videoWidth || videoWidth.value
-    const videoHeight_actual = videoRef.value.videoHeight || videoHeight.value
+    // Safari 兼容性修复：
+    // 某些情况下 videoWidth/videoHeight 可能为 0 或 undefined
+    // 优先使用实际设置的宽高值，而不仅依赖于 video 元素的 videoWidth/videoHeight 属性
+    let videoWidth_actual = videoRef.value.videoWidth
+    let videoHeight_actual = videoRef.value.videoHeight
+    
+    // 如果获取不到视频实际尺寸，使用 canvas 尺寸作为后备
+    if (!videoWidth_actual || !videoHeight_actual) {
+      console.warn('[FaceDetector] video.videoWidth/videoHeight is 0, using fallback:', videoWidth.value, 'x', videoHeight.value)
+      videoWidth_actual = videoWidth.value
+      videoHeight_actual = videoHeight.value
+    }
+    
+    // 再次检查是否为有效值
+    if (!videoWidth_actual || !videoHeight_actual) {
+      console.error('[FaceDetector] Unable to get valid video dimensions')
+      return null
+    }
     
     // 如果缓存的 canvas 尺寸不匹配，重新创建
     if (!captureCanvas || captureCanvas.width !== videoWidth_actual || captureCanvas.height !== videoHeight_actual) {
@@ -817,14 +938,22 @@ function captureFrame(): string | null {
       captureCanvas.width = videoWidth_actual
       captureCanvas.height = videoHeight_actual
       captureCtx = captureCanvas.getContext('2d')
+      console.log('[FaceDetector] Canvas created/resized:', videoWidth_actual, 'x', videoHeight_actual)
     }
     
     if (!captureCtx) return null
     
+    // 在尝试绘制前，再次验证视频的可绘制性（Safari 特定修复）
+    if (videoRef.value.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA && 
+        videoRef.value.readyState !== HTMLMediaElement.HAVE_CURRENT_DATA) {
+      console.warn('[FaceDetector] Video not ready for drawing, readyState:', videoRef.value.readyState)
+      return null
+    }
+    
     captureCtx.drawImage(videoRef.value, 0, 0, videoWidth_actual, videoHeight_actual)
     
     const imageData = captureCanvas.toDataURL('image/jpeg', 0.9)
-    console.log('[FaceDetector] Frame captured, size:', imageData.length)
+    console.log('[FaceDetector] Frame captured, size:', imageData.length, 'bytes')
     return imageData
   } catch (e) {
     console.error('[FaceDetector] Failed to capture frame:', e)
@@ -837,48 +966,48 @@ function captureFrame(): string | null {
  * @param {Array} faceBox - 人脸边界框 [x, y, width, height]
  * @returns {string} Base64 格式的 JPEG 图片数据（只包含人脸区域）
  */
-function captureFaceFrame(faceBox: number[]): string | null {
-  try {
-    if (!faceBox || !videoRef.value) {
-      console.warn('[FaceDetector] Invalid faceBox, using full frame')
-      return captureFrame()
-    }
+// function captureFaceFrame(faceBox: number[]): string | null {
+//   try {
+//     if (!faceBox || !videoRef.value) {
+//       console.warn('[FaceDetector] Invalid faceBox, using full frame')
+//       return captureFrame()
+//     }
 
-    const [x, y, width, height] = faceBox
+//     const [x, y, width, height] = faceBox
     
-    // 如果缓存的 canvas 尺寸不匹配，重新创建
-    if (!captureCanvas || captureCanvas.width !== width || captureCanvas.height !== height) {
-      captureCanvas = document.createElement('canvas')
-      captureCanvas.width = width
-      captureCanvas.height = height
-      captureCtx = captureCanvas.getContext('2d')
-    }
+//     // 如果缓存的 canvas 尺寸不匹配，重新创建
+//     if (!captureCanvas || captureCanvas.width !== width || captureCanvas.height !== height) {
+//       captureCanvas = document.createElement('canvas')
+//       captureCanvas.width = width
+//       captureCanvas.height = height
+//       captureCtx = captureCanvas.getContext('2d')
+//     }
     
-    if (!captureCtx) return null
+//     if (!captureCtx) return null
     
-    // 从视频中裁切人脸区域
-    captureCtx.drawImage(
-      videoRef.value,
-      x, y, width, height,      // 源区域（视频中的人脸位置）
-      0, 0, width, height        // 目标区域（canvas）
-    )
+//     // 从视频中裁切人脸区域
+//     captureCtx.drawImage(
+//       videoRef.value,
+//       x, y, width, height,      // 源区域（视频中的人脸位置）
+//       0, 0, width, height        // 目标区域（canvas）
+//     )
     
-    const croppedImageData = captureCanvas.toDataURL('image/jpeg', 0.9)
-    console.log('[FaceDetector] Face frame captured and cropped, size:', croppedImageData.length, 'box:', faceBox)
-    return croppedImageData
-  } catch (e) {
-    console.error('[FaceDetector] Failed to capture face frame:', e)
-    // 降级：返回完整帧
-    return captureFrame()
-  }
-}
+//     const croppedImageData = captureCanvas.toDataURL('image/jpeg', 0.9)
+//     console.log('[FaceDetector] Face frame captured and cropped, size:', croppedImageData.length, 'box:', faceBox)
+//     return croppedImageData
+//   } catch (e) {
+//     console.error('[FaceDetector] Failed to capture face frame:', e)
+//     // 降级：返回完整帧
+//     return captureFrame()
+//   }
+// }
 
 /**
  * 进行静默活体检测（自动检测采集的图片是否为真实人脸）
  * 使用 Human.js 的 liveness 检测能力
  */
 async function performSilentLivenessDetection(): Promise<void> {
-  if (!detectionState.capturedImage) {
+  if (!detectionState.baselineImage) {
     console.error('[FaceDetector] No captured image for silent liveness detection')
     // 设置错误颜色
     videoBorderColor.value = BORDER_COLOR_STATES.ERROR
@@ -1032,8 +1161,7 @@ async function performSilentLivenessDetection(): Promise<void> {
           
           // 发送成功事件
           emit(FACE_DETECTOR_EVENTS.LIVENESS_COMPLETED, {
-            cameraImageData: detectionState.capturedImage,
-            faceImageData: detectionState.baselineImage,
+            imageData: detectionState.baselineImage,
             liveness: realScore
           })
           
@@ -1063,7 +1191,7 @@ async function performSilentLivenessDetection(): Promise<void> {
     }
 
     // 加载采集的图片
-    tempImg.src = detectionState.capturedImage
+    tempImg.src = detectionState.baselineImage
   } catch (e) {
     console.error('[FaceDetector] Error in performSilentLivenessDetection:', e)
     // 设置错误颜色

@@ -113,10 +113,10 @@ function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
   faceInfo.value = data.faceInfo
 }
 
-function handleFaceCollected(data: { faceImageData: string | null}): void {
-  console.log('[FaceCollector] Face collected, imageData length:', data.faceImageData?.length || 0)
-  if (data.faceImageData) {
-    collectedImage.value = data.faceImageData
+function handleFaceCollected(data: { imageData: string | null}): void {
+  console.log('[FaceCollector] Face collected, imageData length:', data.imageData?.length || 0)
+  if (data.imageData) {
+    collectedImage.value = data.imageData
     console.log('[FaceCollector] Image set, collectedImage:', collectedImage.value ? 'has data' : 'null')
   } else {
     console.error('[FaceCollector] No image data received')

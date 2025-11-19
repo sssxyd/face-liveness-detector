@@ -148,8 +148,8 @@ function handleLivenessAction(data: { action: LivenessAction; description: strin
   }
 }
 
-function handleLivenessCompleted(data: { faceImageData: string | null}): void {
-  verifiedImage.value = data.faceImageData
+function handleLivenessCompleted(data: { imageData: string | null, liveness: number}): void {
+  verifiedImage.value = data.imageData
   isDetecting.value = false
   console.log('Liveness verification completed!')
 }
