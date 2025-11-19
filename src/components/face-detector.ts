@@ -42,6 +42,7 @@ export const FACE_DETECTOR_EVENTS = Object.freeze({
   FACE_DETECTED: 'face-detected',
   FACE_COLLECTED: 'face-collected',
   LIVENESS_ACTION: 'liveness-action',
+  LIVENESS_DETECTED: 'liveness-detected',
   LIVENESS_COMPLETED: 'liveness-completed',
   ERROR: 'error'
 })
@@ -73,7 +74,7 @@ export interface FaceDetectorProps {
   maxFaceRatio?: number
   // 正脸置信度的最小值（0-1）
   minFrontal?: number
-  // 静默活体检测的阈值（0-1，默认 0.9）：用于判定是否为真实人脸
+  // 静默活体检测的阈值（0-1，默认 0.85）：用于判定是否为真实人脸
   silentLivenessThreshold?: number
   // 活体检测动作次数（默认1，表示进行几次活体动作检测）
   livenessActionCount?: number
@@ -81,16 +82,23 @@ export interface FaceDetectorProps {
   livenessActionTimeout?: number
   // 是否显示活体检测动作提示文本（默认 true）
   showActionPrompt?: boolean
+  // Human.js 自定义配置（可选）：允许用户自定义模型路径、启用/禁用各个模块等
+  // 详见 Human.js Config 接口：https://github.com/vladmandic/human/blob/main/src/config.ts
+  humanConfig?: Record<string, any>
 }
 
 /**
- * 人脸信息
+ * 人脸检测数据
  */
-export interface FaceInfo {
+export interface FaceDetectedData {
     count: number
     size: number
     frontal: number
-    liveness?: number
+}
+
+export interface LivenessDetectedData {
+    real: number  // 反欺骗（anti-spoofing）得分 (0-1)
+    live: number  // 活体检测得分 (0-1)
 }
 
 /**
@@ -151,6 +159,8 @@ export enum ErrorCode {
   LIVENESS_DETECTION_FAILED = 'LIVENESS_DETECTION_FAILED',
   // 活体检测得分不足
   LIVENESS_SCORE_INSUFFICIENT = 'LIVENESS_SCORE_INSUFFICIENT',
+  // 欺诈检测：检测到非真实人脸
+  FRAUD_DETECTED = 'FRAUD_DETECTED',
   // 图片加载失败
   IMAGE_LOAD_FAILED = 'IMAGE_LOAD_FAILED',
   // 检测异常
@@ -173,6 +183,7 @@ export const ERROR_CODE_DESCRIPTIONS: Record<ErrorCode, string> = {
   [ErrorCode.NO_LIVENESS_RESULT]: '无法获取活体检测结果',
   [ErrorCode.LIVENESS_DETECTION_FAILED]: '活体检测失败',
   [ErrorCode.LIVENESS_SCORE_INSUFFICIENT]: '活体检测得分不足',
+  [ErrorCode.FRAUD_DETECTED]: '欺诈检测：检测到非真实人脸，请使用真实人脸重试',
   [ErrorCode.IMAGE_LOAD_FAILED]: '图片加载失败',
   [ErrorCode.DETECTION_ERROR]: '检测异常'
 }
@@ -214,14 +225,14 @@ export const CONFIG = Object.freeze({
   LIVENESS: {
     // 张嘴判定阈值（百分比）- 嘴巴打开度超过此百分比才算张嘴
     MIN_MOUTH_OPEN_PERCENT: 20,
-    // 点头动作序列长度 - 需要检测到的头部运动序列数（up -> down -> up）
-    NOD_SEQUENCE_LENGTH: 3,
     // 正脸Yaw角度阈值（度）- 左右摇晃不能超过此角度，超出则扣分
     FRONTAL_YAW_THRESHOLD: 3,
     // 正脸Pitch角度阈值（度）- 上下俯仰不能超过此角度，超出则扣分
     FRONTAL_PITCH_THRESHOLD: 4,
     // 正脸Roll角度阈值（度）- 旋转不能超过此角度，超出则扣分
-    FRONTAL_ROLL_THRESHOLD: 2
+    FRONTAL_ROLL_THRESHOLD: 2,
+    // 反欺骗（anti-spoofing）阈值 - 如果 real 分数低于此值，判定为欺诈
+    ANTI_SPOOFING_THRESHOLD: 0.5
   },
   // 检测超时相关配置
   TIMEOUT: {

@@ -96,7 +96,7 @@
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
 import FaceDetector from '../components/FaceDetector.vue'
-import { FaceInfo} from '../components/face-detector'
+import { FaceCollectedData, FaceDetectedData} from '../components/face-detector'
 
 // 人脸检测参数
 const minFaceRatio: Ref<number> = ref(0.5)  // 最小人脸占比(0-1)
@@ -104,16 +104,16 @@ const maxFaceRatio: Ref<number> = ref(0.8)  // 最大人脸占比(0-1)
 const minFrontal: Ref<number> = ref(0.9)    // 最小正对度(0-1)
 
 const faceDetectorRef: Ref<any> = ref(null)
-const faceInfo: Ref<FaceInfo | null> = ref(null)
+const faceInfo: Ref<FaceDetectedData | null> = ref(null)
 const collectedImage: Ref<string | null> = ref(null)
 const errorMessage: Ref<string | null> = ref(null)
 const isDetecting: Ref<boolean> = ref(false)
 
-function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
-  faceInfo.value = data.faceInfo
+function handleFaceDetected(data: FaceDetectedData): void {
+  faceInfo.value = data
 }
 
-function handleFaceCollected(data: { imageData: string | null}): void {
+function handleFaceCollected(data: FaceCollectedData): void {
   console.log('[FaceCollector] Face collected, imageData length:', data.imageData?.length || 0)
   if (data.imageData) {
     collectedImage.value = data.imageData

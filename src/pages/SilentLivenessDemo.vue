@@ -28,14 +28,26 @@
       :min-face-ratio="minFaceRatio"
       :max-face-ratio="maxFaceRatio"
       :min-frontal="minFrontal"
+      :silent-liveness-threshold="0.85"
       @face-detected="handleFaceDetected"
       @liveness-completed="handleLivenessCompleted"
+      @liveness-detected="handleLivenessDetected"
       @error="handleError"
     />
 
     <div class="info-panel">
       <h3>检测信息</h3>
       <div v-if="faceInfo" class="face-info-detail">
+        <div v-if="livenessInfo" class="info-row">
+          <span class="label">反欺诈得分:</span>
+          <span class="value" :class="livenessInfo.real >= 0.5 ? 'success' : 'warning'">
+            {{ (livenessInfo.real * 100).toFixed(1) }}%
+          </span>
+          <span class="label">活体得分:</span>
+          <span class="value" :class="livenessInfo.live >= 0.5 ? 'success' : 'warning'">
+            {{ (livenessInfo.live * 100).toFixed(1) }}%
+          </span>
+        </div>
         <div class="info-row">
           <span class="label">人脸数量:</span>
           <span class="value" :class="faceInfo.count === 1 ? 'success' : 'warning'">
@@ -57,7 +69,7 @@
           <span class="progress-bar">
             <span class="progress-fill" :style="{ width: (faceInfo.frontal * 100) + '%' }"></span>
           </span>
-        </div>
+        </div>  
         <div v-if="isDetecting && faceInfo.frontal < minFrontal" class="hint-text">
           💡 请将脸正对摄像头
         </div>
@@ -100,7 +112,7 @@
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
 import FaceDetector from '../components/FaceDetector.vue'
-import { ErrorCode, FaceInfo } from '../components/face-detector'
+import { ErrorCode, FaceDetectedData, LivenessCompletedData, LivenessDetectedData } from '../components/face-detector'
 
 // 人脸检测参数
 const minFaceRatio: Ref<number> = ref(0.5)  // 最小人脸占比(0-1)
@@ -108,18 +120,23 @@ const maxFaceRatio: Ref<number> = ref(0.8)  // 最大人脸占比(0-1)
 const minFrontal: Ref<number> = ref(0.9)    // 最小正对度(0-1)
 
 const faceDetectorRef: Ref<any> = ref(null)
-const faceInfo: Ref<FaceInfo | null> = ref(null)
+const faceInfo: Ref<FaceDetectedData | null> = ref(null)
+const livenessInfo: Ref<LivenessDetectedData | null> = ref(null)
 const verifiedImage: Ref<string | null> = ref(null)
 const errorCode: Ref<ErrorCode | null> = ref(null)
 const errorMessage: Ref<string | null> = ref(null)
 const livenessScore: Ref<number | null> = ref(null)
 const isDetecting: Ref<boolean> = ref(false)
 
-function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
-  faceInfo.value = data.faceInfo
+function handleFaceDetected(data: FaceDetectedData): void {
+  faceInfo.value = data
 }
 
-function handleLivenessCompleted(data: { imageData: string | null; liveness?: number }): void {
+function handleLivenessDetected(data: LivenessDetectedData): void {
+  livenessInfo.value = data
+}
+
+function handleLivenessCompleted(data: LivenessCompletedData): void {
   console.log('[SilentLiveness] Detection completed, imageData length:', data.imageData?.length || 0)
   if (data.imageData) {
     verifiedImage.value = data.imageData

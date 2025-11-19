@@ -20,7 +20,7 @@ import { ref, computed, onMounted, onUnmounted, Ref, reactive } from 'vue'
 // 导入人脸检测库
 import Human from '@vladmandic/human'
 // 导入类型定义
-import type { FaceInfo, FaceCollectedData, LivenessCompletedData, LivenessActionData, ErrorData, FaceDetectorProps } from './face-detector'
+import type { FaceDetectedData, FaceCollectedData, LivenessCompletedData, LivenessActionData, ErrorData, FaceDetectorProps, LivenessDetectedData } from './face-detector'
 import { DetectionMode, LivenessAction, LivenessActionStatus, ACTION_DESCRIPTIONS, FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, CONFIG, ErrorCode } from './face-detector'
 
 // 定义组件 props
@@ -30,10 +30,16 @@ const props = withDefaults(defineProps<FaceDetectorProps>(), {
   minFaceRatio: 0.5,
   maxFaceRatio: 0.9,
   minFrontal: 0.9,
-  silentLivenessThreshold: 0.9,  // 静默活体检测阈值 (0-1)
+  silentLivenessThreshold: 0.85,  // 静默活体检测阈值 (0-1)
   livenessActionCount: 1,        // 活体检测动作次数，默认为1
   livenessActionTimeout: 60,      // 活体检测动作时间限制，默认60秒
-  showActionPrompt: true          // 是否显示活体检测动作提示文本，默认显示
+  showActionPrompt: true,         // 是否显示活体检测动作提示文本，默认显示
+  humanConfig: () => ({
+    // 运行时配置默认为空对象
+    // 用户可传入此参数来在检测时覆盖初始化配置
+    // 注意：初始化配置（在 onMounted 中）和运行时配置会合并
+    // 运行时配置优先级更高
+  })
 })
 
 const normalizedLivenessActionCount = computed(() => {
@@ -43,9 +49,10 @@ const normalizedLivenessActionCount = computed(() => {
 
 // 定义组件事件
 const emit = defineEmits<{
-  'face-detected': [data: { faceInfo: FaceInfo }]
+  'face-detected': [data: FaceDetectedData]
   'face-collected': [data: FaceCollectedData]
   'liveness-action': [data: LivenessActionData]
+  'liveness-detected': [data: LivenessDetectedData]
   'liveness-completed': [data: LivenessCompletedData]
   'error': [data: ErrorData]
 }>()
@@ -192,23 +199,37 @@ onMounted(async () => {
   
   // 配置 Human 检测库
   isInitializing.value = true
-  const config = {
+  
+  // 默认配置
+  const defaultConfig = {
     // 模型文件本地路径
     modelBasePath: '/models',
     // 人脸检测配置
     face: {
       enabled: true,
       detector: { rotation: false, return: true },
-      mesh: { enabled: true },      // 面部网格点
-      iris: { enabled: true },      // 虹膜检测
-      antispoof: { enabled: true }  // 启用活体检测（反欺骗）
+      mesh: { enabled: true },        // 面部网格点
+      iris: { enabled: true },        // 虹膜检测
+      antispoof: { enabled: true },   // 启用反欺骗检测（active liveness）
+      liveness: { enabled: true }     // 启用活体检测（passive liveness）
     },
     body: { enabled: false },      // 禁用身体检测
     hand: { enabled: false },      // 禁用手部检测
     object: { enabled: false },    // 禁用物体检测
     gesture: { enabled: true }     // 启用手势检测(包含眨眼)
   }
-  human = new Human(config as any)
+  
+  // 深度合并用户配置和默认配置
+  const mergedConfig = {
+    ...defaultConfig,
+    ...props.humanConfig,
+    face: {
+      ...defaultConfig.face,
+      ...(props.humanConfig?.face || {})
+    }
+  }
+  
+  human = new Human(mergedConfig as any)
   try {
     console.log('[FaceDetector] Loading Human.js library...')
     const userAgent = navigator.userAgent
@@ -474,14 +495,12 @@ function stopDetection(success: boolean = false): void {
  */
 function handleSingleFace(faceRatio: number, frontal: number, gestures: any): void {
   // 人脸信息
-  const faceInfo: FaceInfo = { 
+  const faceInfo: FaceDetectedData = {
     count: 1,
     size: faceRatio, 
     frontal: frontal
-  }
-  
-  // 触发 face-detected 事件
-  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
+  }  // 触发 face-detected 事件
+  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, faceInfo)
   // 更新边框颜色
   updateBorderColor(faceInfo)
   
@@ -509,12 +528,12 @@ function handleSingleFace(faceRatio: number, frontal: number, gestures: any): vo
  * @param {number} faceCount - 人脸数量
  */
 function handleMultipleFaces(faceCount: number): void {
-  const faceInfo: FaceInfo = { 
+  const faceInfo: FaceDetectedData = {
     count: faceCount,
     size: 0,
     frontal: 0
   }
-  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, { faceInfo })
+  emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, faceInfo)
   // 更新边框颜色
   updateBorderColor(faceInfo)
   
@@ -559,6 +578,13 @@ function handleSilentLivenessMode(): void {
     detectionState.baselineImage = captureFrame()  // 捕获完整摄像头照片
     detectionState.isSilentLivenessStarted = true
 
+    // 异步执行活体检测
+    performSilentLivenessDetection()
+  } else {
+    // 已经开始了静默活体检测，继续捕获新的图片进行检测
+    console.log('[FaceDetector] Silent liveness already started, capturing new frame for re-detection')
+    detectionState.baselineImage = captureFrame()  // 捕获新的图片
+    
     // 异步执行活体检测
     performSilentLivenessDetection()
   }
@@ -607,7 +633,9 @@ async function detect(): Promise<void> {
     }
     
     // 对当前视频帧进行人脸检测
-    const result = await human.detect(videoRef.value)
+    // 如果用户提供了运行时配置，则使用；否则使用实例初始化时的配置
+    const runtimeConfig = Object.keys(props.humanConfig).length > 0 ? props.humanConfig : undefined
+    const result = await human.detect(videoRef.value, runtimeConfig)
     
     // 获取检测到的所有人脸
     const faces = result.face || []
@@ -811,7 +839,7 @@ function selectNextRandomAction(): void {
 /**
  * 更新视频容器边框颜色
  */
-function updateBorderColor(faceInfo: FaceInfo): void {
+function updateBorderColor(faceInfo: FaceDetectedData): void {
   // 判断面部信息状态
   if (faceInfo.count === 0) {
     // 未检测到人脸：灰色
@@ -1034,7 +1062,9 @@ async function performSilentLivenessDetection(): Promise<void> {
     tempImg.onload = async () => {
       try {
         // 使用 Human.js 的检测功能分析采集的图片
-        const result = await human!.detect(tempImg)
+        // 如果用户提供了运行时配置，则使用；否则使用实例初始化时的配置
+        const runtimeConfig = Object.keys(props.humanConfig).length > 0 ? props.humanConfig : undefined
+        const result = await human!.detect(tempImg, runtimeConfig)
         
         if (!result) {
           console.warn('[FaceDetector] Human.js detection returned no result')
@@ -1062,97 +1092,84 @@ async function performSilentLivenessDetection(): Promise<void> {
         const faceData = faces[0] as any
         
         console.log('[FaceDetector] Full face data keys:', Object.keys(faceData))
-        console.log('[FaceDetector] Full face data:', JSON.stringify(faceData, null, 2))
+        console.log('[FaceDetector] Live value:', faceData.live, 'Real value:', faceData.real)
         
-        // Human.js liveness 返回两个值：real 和 spoof
-        // real: 真实人脸的置信度 [0-1]
-        // spoof: 欺骗/合成的置信度 [0-1]
+        // 根据 Human.js 的 FaceResult 类型定义：
+        // - real?: number  - face anti-spoofing result confidence [0-1] （反欺骗检测：真实人脸置信度）
+        // - live?: number  - face liveness result confidence [0-1] （活体检测：活体置信度）
+        // 
+        // 检测流程：
+        // 1. 先检查 real（反欺骗检测）- 判断是否为真实人脸（排除欺诈）
+        // 2. 如果是真实人脸，则使用 live（活体检测）- 进一步判断是否为活体
+
+        const info: LivenessDetectedData = {
+          real: faceData.real || -1,
+          live: faceData.liveness || -1
+        }
+        emit(FACE_DETECTOR_EVENTS.LIVENESS_DETECTED, info)
+        
         let realScore = 0
-        let livenessFound = false
+        let isFraudDetected = false
         
-        // 尝试多种可能的 liveness 数据结构
-        
-        // 方案 1: 直接在 faceData 中寻找 liveness 属性
-        if (faceData.liveness !== undefined) {
-          console.log('[FaceDetector] Found liveness at faceData.liveness:', faceData.liveness, 'type:', typeof faceData.liveness)
-          livenessFound = true
+        // 策略 1: 优先使用 real 属性进行反欺骗检测（排除欺诈）
+        if (faceData.real !== undefined && typeof faceData.real === 'number') {
+          console.log('[FaceDetector] Antispoof (real) property found:', faceData.real, 'threshold:', CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD)
           
-          const livenessData = faceData.liveness
-          
-          // 子方案 1a: 数组格式 [{label: 'real', value: x}, {label: 'spoof', value: y}]
-          if (Array.isArray(livenessData) && livenessData.length > 0) {
-            console.log('[FaceDetector] Liveness is array, length:', livenessData.length, 'first item:', livenessData[0])
+          // 如果 real 分数低于反欺骗阈值，说明检测到欺诈
+          if (faceData.real < CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD) {
+            isFraudDetected = true
+            realScore = faceData.real
+            console.warn('[FaceDetector] ⚠️ FRAUD DETECTED! Antispoof score too low:', faceData.real, '< threshold:', CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD)
+          } else {
+            // real 分数充分，继续检查 live
+            console.log('[FaceDetector] ✓ Antispoof check passed, real score:', faceData.real)
             
-            if ('label' in livenessData[0] && 'value' in livenessData[0]) {
-              const realObj = livenessData.find((item: any) => item.label === 'real')
-              realScore = realObj ? realObj.value : 0
-              console.log('[FaceDetector] Case 1a: Parsed from labeled array, real score:', realScore)
-            } else if ('real' in livenessData[0]) {
-              realScore = livenessData[0].real || 0
-              console.log('[FaceDetector] Case 1a: Parsed from object with real key, real score:', realScore)
+            // 策略 2: 如果反欺骗检测通过，再用 live 属性进行活体检测
+            if (faceData.live !== undefined && typeof faceData.live === 'number') {
+              realScore = faceData.live
+              console.log('[FaceDetector] ✓ Using live property for final score:', realScore)
+            } else {
+              // 如果没有 live，就用 real 作为最终分数
+              realScore = faceData.real
+              console.log('[FaceDetector] ℹ No live property, using real as final score:', realScore)
             }
           }
-          // 子方案 1b: 直接是对象 {real: x, spoof: y}
-          else if (typeof livenessData === 'object' && 'real' in livenessData) {
-            realScore = livenessData.real || 0
-            console.log('[FaceDetector] Case 1b: Parsed from direct object, real score:', realScore)
-          }
-          // 子方案 1c: 直接是数字（某些版本可能直接返回分数）
-          else if (typeof livenessData === 'number') {
-            realScore = livenessData
-            console.log('[FaceDetector] Case 1c: Parsed from direct number, real score:', realScore)
-          }
         }
-        
-        // 方案 2: 检查 antispoof 属性
-        if (!livenessFound && faceData.antispoof !== undefined) {
-          console.log('[FaceDetector] Found antispoof data:', faceData.antispoof, 'type:', typeof faceData.antispoof)
-          livenessFound = true
-          
-          if (typeof faceData.antispoof === 'number') {
-            realScore = faceData.antispoof
-            console.log('[FaceDetector] Case 2: Parsed from antispoof number, real score:', realScore)
-          } else if (Array.isArray(faceData.antispoof) && faceData.antispoof.length > 0) {
-            // antispoof 可能是数组
-            realScore = typeof faceData.antispoof[0] === 'number' ? faceData.antispoof[0] : 0
-            console.log('[FaceDetector] Case 2: Parsed from antispoof array, real score:', realScore)
-          }
+        // 备选方案: 如果没有 real，尝试使用 live
+        else if (faceData.live !== undefined && typeof faceData.live === 'number') {
+          realScore = faceData.live
+          console.log('[FaceDetector] Using live property (no antispoof available):', realScore)
         }
-        
-        // 方案 3: 检查 spoof 属性（反向判断）
-        if (!livenessFound && faceData.spoof !== undefined) {
-          console.log('[FaceDetector] Found spoof data:', faceData.spoof, 'type:', typeof faceData.spoof)
-          livenessFound = true
-          
-          if (typeof faceData.spoof === 'number') {
-            // spoof 是欺骗/假脸的分数，所以 real = 1 - spoof
-            realScore = 1 - faceData.spoof
-            console.log('[FaceDetector] Case 3: Calculated from spoof, real score:', realScore)
-          }
-        }
-        
-        console.log('[FaceDetector] Extracted liveness score:', realScore, 'found:', livenessFound)
-
-        if (!livenessFound) {
-          console.warn('[FaceDetector] Could not extract liveness score from any location')
+        // 都没有
+        else {
+          console.warn('[FaceDetector] Neither live nor real property found')
           console.log('[FaceDetector] Face data contents:', {
             keys: Object.keys(faceData),
-            livenessType: typeof faceData.liveness,
-            antispoofType: typeof faceData.antispoof,
-            spoofType: typeof faceData.spoof
+            liveValue: faceData.live,
+            realValue: faceData.real,
+            livenessValue: faceData.liveness
           })
           // 设置错误颜色
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-          emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_LIVENESS_RESULT, message: '无法获取活体检测结果，请确保模型已正确加载' })
+          emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_LIVENESS_RESULT, message: '无法获取活体检测结果，请确保 liveness 或 antispoof 模型已正确加载' })
           stopDetection()
           return
         }
-
-        console.log('[FaceDetector] Liveness score (real):', realScore, 'threshold:', props.silentLivenessThreshold)
+        
+        console.log('[FaceDetector] Extracted liveness score:', realScore, 'Fraud detected:', isFraudDetected)
 
         // 判断是否通过活体检测
-        if (realScore >= props.silentLivenessThreshold) {
-          console.log('[FaceDetector] Liveness detection PASSED')
+        if (isFraudDetected) {
+          // 检测到欺诈，直接失败，不再继续检测
+          console.error('[FaceDetector] ❌ LIVENESS CHECK FAILED - Fraud detected! Score:', realScore)
+          videoBorderColor.value = BORDER_COLOR_STATES.ERROR
+          emit(FACE_DETECTOR_EVENTS.ERROR, { 
+            code: ErrorCode.FRAUD_DETECTED, 
+            message: '检测到欺诈行为（可能是照片、视频或面具），请用真实人脸重试' 
+          })
+          stopDetection()
+        } else if (realScore >= props.silentLivenessThreshold) {
+          console.log('[FaceDetector] ✓ Liveness detection PASSED - Score:', realScore)
           
           // 设置成功颜色
           videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
@@ -1165,11 +1182,10 @@ async function performSilentLivenessDetection(): Promise<void> {
           
           stopDetection(true)
         } else {
-          console.warn('[FaceDetector] Liveness detection FAILED, score:', realScore)
-          // 设置错误颜色
-          videoBorderColor.value = BORDER_COLOR_STATES.ERROR
-          emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.LIVENESS_SCORE_INSUFFICIENT, message: `活体检测失败（得分 ${(realScore * 100).toFixed(1)}%），请确保是真实人脸，重新开始检测` })
-          stopDetection()
+          console.warn('[FaceDetector] Liveness detection score insufficient:', realScore, '< threshold:', props.silentLivenessThreshold, 'continuing detection...')
+          // 分数不足时，继续检测，而不是报错
+          // 继续检测下一帧
+          scheduleNextDetection()
         }
       } catch (e) {
         console.error('[FaceDetector] Error during liveness analysis:', e)

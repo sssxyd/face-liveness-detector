@@ -103,13 +103,13 @@
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
 import FaceDetector from '../components/FaceDetector.vue'
-import { LivenessAction, LivenessActionStatus, type FaceInfo } from '../components/face-detector'
+import { LivenessAction, LivenessActionData, LivenessActionStatus, LivenessCompletedData, FaceDetectedData } from '../components/face-detector'
 
 // Configurable liveness checks
 const livenessChecks: Ref<LivenessAction[]> = ref([LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD])
 
 const faceDetectorRef: Ref<any> = ref(null)
-const faceInfo: Ref<FaceInfo | null> = ref(null)
+const faceInfo: Ref<FaceDetectedData | null> = ref(null)
 const verifiedImage: Ref<string | null> = ref(null)
 const errorMessage: Ref<string | null> = ref(null)
 const actionMessage: Ref<string | null> = ref(null)
@@ -123,11 +123,11 @@ const livenessActionCount: Ref<number> = ref(1)      // 活体检测动作次数
 const livenessActionTimeout: Ref<number> = ref(60)   // 活体检测动作时间限制（秒）
 const showActionPrompt: Ref<boolean> = ref(true)     // 是否显示活体检测动作提示文本
 
-function handleFaceDetected(data: { faceInfo: FaceInfo }): void {
-  faceInfo.value = data.faceInfo
+function handleFaceDetected(data: FaceDetectedData): void {
+  faceInfo.value = data
 }
 
-function handleLivenessAction(data: { action: LivenessAction; description: string; status: LivenessActionStatus }): void {
+function handleLivenessAction(data: LivenessActionData): void {
   const statusMap: Record<string, string> = {
     [LivenessActionStatus.STARTED]: `开始检测：${data.description}`,
     [LivenessActionStatus.COMPLETED]: `✓ ${data.description}已完成`,
@@ -148,7 +148,7 @@ function handleLivenessAction(data: { action: LivenessAction; description: strin
   }
 }
 
-function handleLivenessCompleted(data: { imageData: string | null, liveness: number}): void {
+function handleLivenessCompleted(data: LivenessCompletedData): void {
   verifiedImage.value = data.imageData
   isDetecting.value = false
   console.log('Liveness verification completed!')
