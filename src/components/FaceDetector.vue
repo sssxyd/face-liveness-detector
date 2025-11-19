@@ -132,7 +132,6 @@ function emitDebug(stage: string, message: string, details?: Record<string, any>
     details,
     timestamp: Date.now()
   }
-  console.log(`[FaceDetector-Debug] ${stage}: ${message}`, details || '')
   emit(FACE_DETECTOR_EVENTS.DEBUG, debugData)
 }
 
@@ -204,12 +203,12 @@ onMounted(async () => {
   // Safari 兼容性：监听可见性变化，确保后台不被限流
   handleVisibilityChange = () => {
     if (document.hidden) {
-      console.log('[FaceDetector] Page hidden, pausing detection')
+      emitDebug('visibility', '页面隐藏，暂停检测')
       if (isDetecting.value) {
         cancelPendingDetection()
       }
     } else {
-      console.log('[FaceDetector] Page visible again, resuming detection')
+      emitDebug('visibility', '页面恢复，继续检测')
       if (isDetecting.value) {
         scheduleNextDetection(0) // 立即重新启动检测
       }
@@ -453,6 +452,13 @@ async function startDetection(): Promise<void> {
       throw err
     }
     
+    if (!stream) {
+      emitDebug('video-setup', '视频流为空', {}, 'error')
+      throw new Error('Stream is null')
+    }
+    
+    emitDebug('video-setup', '视频流获取成功，准备设置视频元素', { streamTracks: stream.getTracks().length })
+    
     // 获取实际的视频流分辨率
     const videoTrack = stream.getVideoTracks()[0]
     if (videoTrack) {
@@ -483,8 +489,8 @@ async function startDetection(): Promise<void> {
           clearTimeout(timeout)
           videoRef.value.removeEventListener('canplay', onCanPlay)
           videoRef.value.removeEventListener('loadedmetadata', onLoadedMetadata)
-          emitDebug('video-setup', '视频就绪，准备检测', { videoWidth: videoRef.value.videoWidth, videoHeight: videoRef.value.videoHeight })
-          resolve()
+      emitDebug('video-setup', '视频就绪，准备检测', { videoWidth: videoRef.value.videoWidth, videoHeight: videoRef.value.videoHeight })
+      resolve()
           return true
         }
         return false
@@ -526,13 +532,13 @@ async function startDetection(): Promise<void> {
       }
     })
     
-    console.log('[FaceDetector] Video is ready, starting detection loop...')
+    emitDebug('video-setup', '启动检测循环')
     
     // 立即启动检测循环（使用 requestAnimationFrame）
     scheduleNextDetection(0)
   } catch (e) {
     // 若获取摄像头失败，触发错误事件
-    console.error('[FaceDetector] Error:', e)
+    emitDebug('video-setup', '启动检测失败', { error: (e as Error).message, stack: (e as Error).stack }, 'error')
     isDetecting.value = false
     emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.STREAM_ACQUISITION_FAILED, message: (e as Error).message })
   }
@@ -581,7 +587,6 @@ function handleSingleFace(faceRatio: number, frontal: number, gestures: any): vo
     size: faceRatio, 
     frontal: frontal
   }
-  console.log('[FaceDetector] Emitting face-detected event with:', faceInfo)
   // 触发 face-detected 事件
   emit(FACE_DETECTOR_EVENTS.FACE_DETECTED, faceInfo)
   // 更新边框颜色
@@ -589,7 +594,7 @@ function handleSingleFace(faceRatio: number, frontal: number, gestures: any): vo
   
   // 判断人脸是否符合条件：大小在范围内，且正对度符合要求
   if (faceRatio > props.minFaceRatio && faceRatio < props.maxFaceRatio && frontal >= props.minFrontal) {
-    console.log('[FaceDetector] Valid face detected - ratio:', faceRatio.toFixed(4), 'frontal:', frontal.toFixed(4), 'mode:', props.mode)
+    emitDebug('detection', '检测到符合条件的人脸', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4), mode: props.mode })
     
     // 根据检测模式处理
     if (props.mode === DetectionMode.COLLECTION) {
@@ -601,7 +606,7 @@ function handleSingleFace(faceRatio: number, frontal: number, gestures: any): vo
     }
   } else {
     // 人脸不符合条件，继续检测
-    console.log('[FaceDetector] Face not valid, ratio:', faceRatio.toFixed(4), 'frontal:', frontal.toFixed(4), 'minFaceRatio:', props.minFaceRatio, 'maxFaceRatio:', props.maxFaceRatio, 'minFrontal:', props.minFrontal)
+    emitDebug('detection', '人脸不符合条件', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4), minRatio: props.minFaceRatio, maxRatio: props.maxFaceRatio, minFrontal: props.minFrontal }, 'info')
     scheduleNextDetection()
   }
 }
@@ -614,13 +619,13 @@ function handleSingleFace(faceRatio: number, frontal: number, gestures: any): vo
 function shouldStopLivenessOnFaceCountChange(faceCount: number): boolean {
   // 在 LIVENESS 模式下，已开始检测但人脸数量不为 1 时应中止
   if (props.mode === DetectionMode.LIVENESS && detectionState.isLivenessStarted && faceCount !== 1) {
-    console.error('[FaceDetector] Face count changed during liveness detection, expected 1 but got', faceCount)
+    emitDebug('liveness', '活体检测期间人脸数量变化', { expected: 1, actual: faceCount }, 'error')
     return true
   }
   
   // 在 SILENT_LIVENESS 模式下，已开始检测但人脸数量不为 1 时应中止
   if (props.mode === DetectionMode.SILENT_LIVENESS && detectionState.isSilentLivenessStarted && faceCount !== 1) {
-    console.error('[FaceDetector] Face count changed during silent liveness detection, expected 1 but got', faceCount)
+    emitDebug('liveness', '静默活体检测期间人脸数量变化', { expected: 1, actual: faceCount }, 'error')
     return true
   }
   
@@ -669,7 +674,7 @@ function handleCollectionMode(): void {
  */
 function handleSilentLivenessMode(): void {
   if (!detectionState.isSilentLivenessStarted) {
-    console.log('[FaceDetector] Valid face detected, entering silent liveness detection')
+    emitDebug('liveness', '静默活体检测开始')
     detectionState.baselineImage = captureFrame()  // 捕获完整摄像头照片
     detectionState.isSilentLivenessStarted = true
 
@@ -677,7 +682,7 @@ function handleSilentLivenessMode(): void {
     performSilentLivenessDetection()
   } else {
     // 已经开始了静默活体检测，继续捕获新的图片进行检测
-    console.log('[FaceDetector] Silent liveness already started, capturing new frame for re-detection')
+    emitDebug('liveness', '继续静默活体检测，捕获新帧')
     detectionState.baselineImage = captureFrame()  // 捕获新的图片
     
     // 异步执行活体检测
@@ -702,14 +707,14 @@ async function detect(): Promise<void> {
   try {
     // 快速检查必需的对象
     if (!videoRef.value || !human) {
-      console.warn('[FaceDetector] Missing required objects, retrying...', { hasVideoRef: !!videoRef.value, hasHuman: !!human })
+      emitDebug('detection', '缺少必需对象，稍后重试', { hasVideoRef: !!videoRef.value, hasHuman: !!human }, 'warn')
       scheduleNextDetection(CONFIG.DETECTION.DETECTION_FRAME_DELAY)
       return
     }
     
     // Safari 兼容性检查：确保视频已加载且可绘制
     if (videoRef.value.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-      console.warn('[FaceDetector] Video not ready, readyState:', videoRef.value.readyState, 'videoWidth:', videoRef.value.videoWidth, 'videoHeight:', videoRef.value.videoHeight)
+      emitDebug('detection', '视频未就绪', { readyState: videoRef.value.readyState, videoWidth: videoRef.value.videoWidth, videoHeight: videoRef.value.videoHeight }, 'warn')
       scheduleNextDetection(CONFIG.DETECTION.ERROR_RETRY_DELAY)
       return
     }
@@ -717,7 +722,7 @@ async function detect(): Promise<void> {
     // 检测超时控制：如果长时间没有检测到人脸，主动退出
     const elapsedTime = performance.now() - detectionStartTime
     if (elapsedTime > CONFIG.TIMEOUT.DETECTION_TIMEOUT) {
-      console.error('[FaceDetector] Detection timeout: no valid face detected for', Math.round(CONFIG.TIMEOUT.DETECTION_TIMEOUT / 1000), 'seconds')
+      emitDebug('detection', '检测超时', { elapsedSeconds: Math.round(CONFIG.TIMEOUT.DETECTION_TIMEOUT / 1000) }, 'error')
       videoBorderColor.value = BORDER_COLOR_STATES.ERROR
       emit(FACE_DETECTOR_EVENTS.ERROR, { 
         code: ErrorCode.DETECTION_ERROR, 
@@ -753,7 +758,7 @@ async function detect(): Promise<void> {
     if (!faces || faces.length === 0) {
       faces = (result as any).faces || (result as any).detections || []
       if (faces.length > 0) {
-        emitDebug('detection', '使用备选属性名获取人脸数据', { propertyUsed: 'faces/detections' }, 'info')
+        emitDebug('detection', '使用备选属性名获取人脸数据', { propertyUsed: 'faces/detections' })
       }
     }
     
@@ -783,16 +788,16 @@ async function detect(): Promise<void> {
       // 检查人脸是否正对摄像头 (0-1 评分)
       const frontal = checkFaceFrontal(face, result.gesture)
       
-      console.log('[FaceDetector] Single face detected - ratio:', faceRatio.toFixed(4), 'frontal:', frontal.toFixed(4))
+      emitDebug('detection', '检测到单个人脸', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4) })
       
       handleSingleFace(faceRatio, frontal, result.gesture)
     } else {
       // 处理多人脸或无人脸的情况
-      console.log('[FaceDetector] handleMultipleFaces with count:', faces.length)
+      emitDebug('detection', '多人脸/无人脸', { count: faces.length })
       handleMultipleFaces(faces.length)
     }
   } catch (error) {
-    console.error('[FaceDetector] Detection error:', error, 'error stack:', (error as Error).stack)
+    emitDebug('detection', '检测异常', { error: (error as Error).message, stack: (error as Error).stack }, 'error')
     // 发生错误时继续检测，但增加重试延迟
     scheduleNextDetection(CONFIG.DETECTION.ERROR_RETRY_DELAY)
   }
@@ -811,7 +816,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
     
     // 如果识别到 "facing center"，则判定为正脸，返回 1.0
     if (isFacingCenter) {
-      console.log('[FaceDetector] Face is frontal (from gesture: facing center)')
+      emitDebug('detection', '检测到正脸', { method: 'gesture: facing center' })
       return 1.0
     }
     
@@ -820,7 +825,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
     const isFacingRight = gestures.some((g: any) => g.gesture?.includes('facing right'))
     
     if (isFacingLeft || isFacingRight) {
-      console.log('[FaceDetector] Face is not fully frontal (from gesture: facing', isFacingLeft ? 'left' : 'right', ')')
+      emitDebug('detection', '检测到非正脸', { method: 'gesture', direction: isFacingLeft ? 'left' : 'right' })
       return 0.5 // 返回 0.5，表示偏转
     }
   }
@@ -873,7 +878,7 @@ function checkFaceFrontal(face: any, gestures: any): number {
 function verifyLiveness(gestures: any): void {
   // 如果是第一次检测到符合条件的人脸，先捕获并暂存（不立即emit）
   if (detectionState.completedActions.size === 0 && !detectionState.baselineImage) {
-    console.log('[FaceDetector] First valid face detected in liveness mode, capturing baseline')
+    emitDebug('liveness', '首次检测到符合条件的人脸')
     detectionState.baselineImage = captureFrame()  // 捕获完整摄像头照片
     // 标记活体检测已开始，后续 detect 方法需要检查人脸数量
     detectionState.isLivenessStarted = true
@@ -884,7 +889,7 @@ function verifyLiveness(gestures: any): void {
   
   // 检查是否全部动作完成
   if (detectionState.completedActions.size >= normalizedLivenessActionCount.value) {
-    console.log('[FaceDetector] All liveness checks completed')
+    emitDebug('liveness', '所有活体动作已完成')
     // 设置成功颜色
     videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
     // 抛出 liveness-completed 事件
@@ -896,7 +901,7 @@ function verifyLiveness(gestures: any): void {
     return
   }  // 获取当前需要检测的随机动作
   if (!detectionState.currentAction) {
-    console.warn('[FaceDetector] No current action selected')
+    emitDebug('liveness', '未选择任何动作', {}, 'warn')
     scheduleNextDetection()
     return
   }
@@ -906,7 +911,7 @@ function verifyLiveness(gestures: any): void {
   
   // 如果检测到动作
   if (detected) {
-    console.log('[FaceDetector] Action detected:', detectionState.currentAction)
+    emitDebug('liveness', '检测到动作', { action: detectionState.currentAction })
     
     // 标记该动作已完成
     detectionState.completedActions.add(detectionState.currentAction)
@@ -933,7 +938,7 @@ function selectNextRandomAction(): void {
   const availableActions = props.livenessChecks.filter(action => !detectionState.completedActions.has(action))
   
   if (availableActions.length === 0) {
-    console.log('[FaceDetector] All actions have been completed')
+    emitDebug('liveness', '所有动作已完成')
     return
   }
   
@@ -944,14 +949,14 @@ function selectNextRandomAction(): void {
   updateActionPrompt(detectionState.currentAction)
   emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: detectionState.currentAction, description: getActionDescription(detectionState.currentAction), status: LivenessActionStatus.STARTED })
   
-  console.log('[FaceDetector] Selected action:', detectionState.currentAction)
+  emitDebug('liveness', '选择动作', { action: detectionState.currentAction })
   
   // 设置超时定时器
   if (actionTimeoutId) clearTimeout(actionTimeoutId)
   actionTimeoutId = setTimeout(() => {
     if (detectionState.currentAction) {
       emit(FACE_DETECTOR_EVENTS.LIVENESS_ACTION, { action: detectionState.currentAction, description: getActionDescription(detectionState.currentAction), status: LivenessActionStatus.TIMEOUT })
-      console.error('[FaceDetector] Action timeout:', detectionState.currentAction)
+      emitDebug('liveness', '动作检测超时', { action: detectionState.currentAction }, 'error')
       // 设置错误颜色
       videoBorderColor.value = BORDER_COLOR_STATES.ERROR
       emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.ACTION_TIMEOUT, message: `动作检测超时（${props.livenessActionTimeout}秒）：未在规定时间内检测到${getActionDescription(detectionState.currentAction)}，请重试` })
@@ -1002,7 +1007,7 @@ function getActionDescription(action: string): string {
 function updateActionPrompt(action: LivenessAction): void {
   const prompt = `请${getActionDescription(action)}`
   actionPromptText.value = prompt
-  console.log('[FaceDetector] Prompt updated:', prompt)
+  emitDebug('liveness', '更新动作提示', { prompt })
 }
 
 /**
@@ -1082,7 +1087,7 @@ function captureFrame(): string | null {
   try {
     if (!videoRef.value) return null
     
-    // Safari 兼容性修复：
+      // Safari 兼容性修复：
     // 某些情况下 videoWidth/videoHeight 可能为 0 或 undefined
     // 优先使用实际设置的宽高值，而不仅依赖于 video 元素的 videoWidth/videoHeight 属性
     let videoWidth_actual = videoRef.value.videoWidth
@@ -1090,14 +1095,14 @@ function captureFrame(): string | null {
     
     // 如果获取不到视频实际尺寸，使用 canvas 尺寸作为后备
     if (!videoWidth_actual || !videoHeight_actual) {
-      console.warn('[FaceDetector] video.videoWidth/videoHeight is 0, using fallback:', videoWidth.value, 'x', videoHeight.value)
+      emitDebug('capture', '视频尺寸获取失败，使用备用值', { fallback: `${videoWidth.value}x${videoHeight.value}` }, 'warn')
       videoWidth_actual = videoWidth.value
       videoHeight_actual = videoHeight.value
     }
     
     // 再次检查是否为有效值
     if (!videoWidth_actual || !videoHeight_actual) {
-      console.error('[FaceDetector] Unable to get valid video dimensions')
+      emitDebug('capture', '无法获取有效视频尺寸', {}, 'error')
       return null
     }
     
@@ -1107,25 +1112,23 @@ function captureFrame(): string | null {
       captureCanvas.width = videoWidth_actual
       captureCanvas.height = videoHeight_actual
       captureCtx = captureCanvas.getContext('2d')
-      console.log('[FaceDetector] Canvas created/resized:', videoWidth_actual, 'x', videoHeight_actual)
-    }
-    
-    if (!captureCtx) return null
+      emitDebug('capture', 'Canvas 创建/调整大小', { width: videoWidth_actual, height: videoHeight_actual })
+    }    if (!captureCtx) return null
     
     // 在尝试绘制前，再次验证视频的可绘制性（Safari 特定修复）
     if (videoRef.value.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA && 
         videoRef.value.readyState !== HTMLMediaElement.HAVE_CURRENT_DATA) {
-      console.warn('[FaceDetector] Video not ready for drawing, readyState:', videoRef.value.readyState)
+      emitDebug('capture', '视频不可绘制', { readyState: videoRef.value.readyState }, 'warn')
       return null
     }
     
     captureCtx.drawImage(videoRef.value, 0, 0, videoWidth_actual, videoHeight_actual)
     
     const imageData = captureCanvas.toDataURL('image/jpeg', 0.9)
-    console.log('[FaceDetector] Frame captured, size:', imageData.length, 'bytes')
+    emitDebug('capture', '帧已捕获', { size: imageData.length })
     return imageData
   } catch (e) {
-    console.error('[FaceDetector] Failed to capture frame:', e)
+    emitDebug('capture', '捕获帧失败', { error: (e as Error).message }, 'error')
     return null
   }
 }
@@ -1136,7 +1139,7 @@ function captureFrame(): string | null {
  */
 async function performSilentLivenessDetection(): Promise<void> {
   if (!detectionState.baselineImage) {
-    console.error('[FaceDetector] No captured image for silent liveness detection')
+    emitDebug('liveness', '没有捕获图片用于活体检测', {}, 'error')
     // 设置错误颜色
     videoBorderColor.value = BORDER_COLOR_STATES.ERROR
     emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.CAPTURE_FAILED, message: '未能捕获图片，请重试' })
@@ -1145,7 +1148,7 @@ async function performSilentLivenessDetection(): Promise<void> {
   }
 
   if (!human) {
-    console.error('[FaceDetector] Human.js not initialized')
+    emitDebug('liveness', 'Human.js 未初始化', {}, 'error')
     // 设置错误颜色
     videoBorderColor.value = BORDER_COLOR_STATES.ERROR
     emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.ENGINE_NOT_INITIALIZED, message: 'AI 检测引擎未初始化，请稍后重试' })
@@ -1154,7 +1157,7 @@ async function performSilentLivenessDetection(): Promise<void> {
   }
 
   try {
-    console.log('[FaceDetector] Starting silent liveness detection on captured image')
+    emitDebug('liveness', '开始静默活体检测')
     
     // 创建临时图片对象用于 Human.js 检测
     const tempImg = new Image()
@@ -1167,7 +1170,7 @@ async function performSilentLivenessDetection(): Promise<void> {
         const result = await human!.detect(tempImg, runtimeConfig)
         
         if (!result) {
-          console.warn('[FaceDetector] Human.js detection returned no result')
+          emitDebug('liveness', 'Human.js 检测返回无结果', {}, 'warn')
           // 设置错误颜色
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
           emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.LIVENESS_ANALYSIS_FAILED, message: '活体检测失败，无法分析图片，请重试' })
@@ -1175,12 +1178,12 @@ async function performSilentLivenessDetection(): Promise<void> {
           return
         }
 
-        console.log('[FaceDetector] Detection complete, face count:', result.face?.length || 0)
+        emitDebug('liveness', '检测完成', { faceCount: result.face?.length || 0 })
 
         // 提取 liveness 检测结果
         const faces = result.face || []
         if (faces.length === 0) {
-          console.warn('[FaceDetector] No face detected in captured image for liveness check')
+          emitDebug('liveness', '图片中未检测到人脸', {}, 'warn')
           // 设置错误颜色
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
           emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_FACE_IN_IMAGE, message: '未在图片中检测到人脸，请确保采集了清晰的人脸照片' })
@@ -1191,8 +1194,7 @@ async function performSilentLivenessDetection(): Promise<void> {
         // 获取第一张脸的数据
         const faceData = faces[0] as any
         
-        console.log('[FaceDetector] Full face data keys:', Object.keys(faceData))
-        console.log('[FaceDetector] Live value:', faceData.live, 'Real value:', faceData.real)
+        emitDebug('liveness', '人脸数据提取', { keys: Object.keys(faceData).slice(0, 10), live: faceData.live, real: faceData.real })
         
         // 根据 Human.js 的 FaceResult 类型定义：
         // - real?: number  - face anti-spoofing result confidence [0-1] （反欺骗检测：真实人脸置信度）
@@ -1213,42 +1215,36 @@ async function performSilentLivenessDetection(): Promise<void> {
         
         // 策略 1: 优先使用 real 属性进行反欺骗检测（排除欺诈）
         if (faceData.real !== undefined && typeof faceData.real === 'number') {
-          console.log('[FaceDetector] Antispoof (real) property found:', faceData.real, 'threshold:', CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD)
+          emitDebug('liveness', '反欺骗检测结果', { real: faceData.real, threshold: CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD })
           
           // 如果 real 分数低于反欺骗阈值，说明检测到欺诈
           if (faceData.real < CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD) {
             isFraudDetected = true
             realScore = faceData.real
-            console.warn('[FaceDetector] ⚠️ FRAUD DETECTED! Antispoof score too low:', faceData.real, '< threshold:', CONFIG.LIVENESS.ANTI_SPOOFING_THRESHOLD)
+            emitDebug('liveness', '检测到欺诈行为', { score: faceData.real }, 'error')
           } else {
             // real 分数充分，继续检查 live
-            console.log('[FaceDetector] ✓ Antispoof check passed, real score:', faceData.real)
+            emitDebug('liveness', '反欺骗检测通过')
             
             // 策略 2: 如果反欺骗检测通过，再用 live 属性进行活体检测
             if (faceData.live !== undefined && typeof faceData.live === 'number') {
               realScore = faceData.live
-              console.log('[FaceDetector] ✓ Using live property for final score:', realScore)
+              emitDebug('liveness', '使用 live 属性作为最终分数', { score: realScore })
             } else {
               // 如果没有 live，就用 real 作为最终分数
               realScore = faceData.real
-              console.log('[FaceDetector] ℹ No live property, using real as final score:', realScore)
+              emitDebug('liveness', '无 live 属性，使用 real 作为最终分数', { score: realScore })
             }
           }
         }
         // 备选方案: 如果没有 real，尝试使用 live
         else if (faceData.live !== undefined && typeof faceData.live === 'number') {
           realScore = faceData.live
-          console.log('[FaceDetector] Using live property (no antispoof available):', realScore)
+          emitDebug('liveness', '使用 live 属性（无反欺骗检测）', { score: realScore })
         }
         // 都没有
         else {
-          console.warn('[FaceDetector] Neither live nor real property found')
-          console.log('[FaceDetector] Face data contents:', {
-            keys: Object.keys(faceData),
-            liveValue: faceData.live,
-            realValue: faceData.real,
-            livenessValue: faceData.liveness
-          })
+          emitDebug('liveness', '无活体检测结果', { keys: Object.keys(faceData) }, 'warn')
           // 设置错误颜色
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
           emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.NO_LIVENESS_RESULT, message: '无法获取活体检测结果，请确保 liveness 或 antispoof 模型已正确加载' })
@@ -1256,12 +1252,12 @@ async function performSilentLivenessDetection(): Promise<void> {
           return
         }
         
-        console.log('[FaceDetector] Extracted liveness score:', realScore, 'Fraud detected:', isFraudDetected)
+        emitDebug('liveness', '活体分数提取', { score: realScore, isFraud: isFraudDetected })
 
         // 判断是否通过活体检测
         if (isFraudDetected) {
           // 检测到欺诈，直接失败，不再继续检测
-          console.error('[FaceDetector] ❌ LIVENESS CHECK FAILED - Fraud detected! Score:', realScore)
+          emitDebug('liveness', '活体检测失败 - 检测到欺诈', { score: realScore }, 'error')
           videoBorderColor.value = BORDER_COLOR_STATES.ERROR
           emit(FACE_DETECTOR_EVENTS.ERROR, { 
             code: ErrorCode.FRAUD_DETECTED, 
@@ -1269,7 +1265,7 @@ async function performSilentLivenessDetection(): Promise<void> {
           })
           stopDetection()
         } else if (realScore >= props.silentLivenessThreshold) {
-          console.log('[FaceDetector] ✓ Liveness detection PASSED - Score:', realScore)
+          emitDebug('liveness', '活体检测成功', { score: realScore })
           
           // 设置成功颜色
           videoBorderColor.value = BORDER_COLOR_STATES.SUCCESS
@@ -1282,13 +1278,13 @@ async function performSilentLivenessDetection(): Promise<void> {
           
           stopDetection(true)
         } else {
-          console.warn('[FaceDetector] Liveness detection score insufficient:', realScore, '< threshold:', props.silentLivenessThreshold, 'continuing detection...')
+          emitDebug('liveness', '活体分数不足，继续检测', { score: realScore, threshold: props.silentLivenessThreshold })
           // 分数不足时，继续检测，而不是报错
           // 继续检测下一帧
           scheduleNextDetection()
         }
       } catch (e) {
-        console.error('[FaceDetector] Error during liveness analysis:', e)
+        emitDebug('liveness', '活体分析出错', { error: (e as Error).message }, 'error')
         // 设置错误颜色
         videoBorderColor.value = BORDER_COLOR_STATES.ERROR
         emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.LIVENESS_DETECTION_FAILED, message: `活体检测出错: ${e instanceof Error ? e.message : '未知错误'}` })
@@ -1297,7 +1293,7 @@ async function performSilentLivenessDetection(): Promise<void> {
     }
 
     tempImg.onerror = () => {
-      console.error('[FaceDetector] Failed to load captured image for liveness detection')
+      emitDebug('liveness', '采集图片加载失败', {}, 'error')
       // 设置错误颜色
       videoBorderColor.value = BORDER_COLOR_STATES.ERROR
       emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.IMAGE_LOAD_FAILED, message: '无法加载采集的图片进行活体检测' })
@@ -1307,7 +1303,7 @@ async function performSilentLivenessDetection(): Promise<void> {
     // 加载采集的图片
     tempImg.src = detectionState.baselineImage
   } catch (e) {
-    console.error('[FaceDetector] Error in performSilentLivenessDetection:', e)
+    emitDebug('liveness', '静默活体检测异常', { error: (e as Error).message }, 'error')
     // 设置错误颜色
     videoBorderColor.value = BORDER_COLOR_STATES.ERROR
     emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.DETECTION_ERROR, message: `活体检测异常: ${e instanceof Error ? e.message : '未知错误'}` })

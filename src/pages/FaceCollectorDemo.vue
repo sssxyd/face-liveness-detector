@@ -156,15 +156,12 @@ function handleFaceDetected(data: FaceDetectedData): void {
 }
 
 function handleFaceCollected(data: FaceCollectedData): void {
-  console.log('[FaceCollector] Face collected, imageData length:', data.imageData?.length || 0)
   if (data.imageData) {
     collectedImage.value = data.imageData
-    console.log('[FaceCollector] Image set, collectedImage:', collectedImage.value ? 'has data' : 'null')
   } else {
     console.error('[FaceCollector] No image data received')
   }
   isDetecting.value = false
-  console.log('Face collected successfully!')
 }
 
 function handleError(error: { message: string }): void {
@@ -180,16 +177,6 @@ function handleDebug(debugData: DebugData): void {
   if (debugLogs.value.length > maxDebugLogs) {
     debugLogs.value = debugLogs.value.slice(0, maxDebugLogs)
   }
-  
-  // 同时输出到浏览器控制台方便查看
-  const prefix = `[${debugData.stage}]`
-  if (debugData.level === 'error') {
-    console.error(prefix, debugData.message, debugData.details)
-  } else if (debugData.level === 'warn') {
-    console.warn(prefix, debugData.message, debugData.details)
-  } else {
-    console.log(prefix, debugData.message, debugData.details)
-  }
 }
 
 async function startDetection(): Promise<void> {
@@ -198,7 +185,6 @@ async function startDetection(): Promise<void> {
   try {
     await faceDetectorRef.value?.startDetection()
   } catch (err) {
-    console.error('Failed to start detection:', err)
     errorMessage.value = '启动检测失败: ' + (err as Error).message
     isDetecting.value = false
   }
@@ -216,8 +202,7 @@ function resetCollection(): void {
   isDetecting.value = false
 }
 
-function handleImageError(error: Event): void {
-  console.error('[FaceCollector] Image loading error:', error)
+function handleImageError(): void {
   errorMessage.value = '图片加载失败'
 }
 </script>
