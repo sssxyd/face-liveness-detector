@@ -815,6 +815,7 @@ function handleCollectionMode(): void {
     const qualityCheck = checkImageQuality(currentFace)
     
     if (qualityCheck.passed) {
+      emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
       emitDebug('quality', '图像质量符合要求，采集完成', { score: qualityCheck.score.toFixed(2) })
       emit(FACE_DETECTOR_EVENTS.FACE_COLLECTED, { 
         imageData: detectionState.baselineImage 

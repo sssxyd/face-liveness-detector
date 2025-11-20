@@ -160,6 +160,7 @@ export enum PromptCode {
   FACE_TOO_LARGE = 'FACE_TOO_LARGE',
   FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',
   POOR_IMAGE_QUALITY = 'POOR_IMAGE_QUALITY',
+  GOOD_IMAGE_QUALITY = 'GOOD_IMAGE_QUALITY',
   PLEASE_PERFORM_ACTION = 'PLEASE_PERFORM_ACTION',
 }
 
@@ -170,6 +171,7 @@ export const PROMPT_CODE_DESCRIPTIONS: Record<PromptCode, string> = {
   [PromptCode.FACE_TOO_SMALL]: '请靠近摄像头',
   [PromptCode.FACE_TOO_LARGE]: '请远离摄像头',
   [PromptCode.FACE_NOT_FRONTAL]: '请正对摄像头',
+  [PromptCode.GOOD_IMAGE_QUALITY]: '图像清晰',
   [PromptCode.POOR_IMAGE_QUALITY]: '图像模糊请调整',
   [PromptCode.PLEASE_PERFORM_ACTION]: '请完成指定动作',
 }
@@ -316,7 +318,7 @@ export const CONFIG = Object.freeze({
     // 最小人脸网格分数（0-1）- 网格置信度低于此值表示图像模糊或质量差
     MIN_FACE_SCORE: 0.8,
     // 最小综合分数（0-1）- 综合评分低于此值表示图像质量不足
-    MIN_OVERALL_SCORE: 0.7
+    MIN_OVERALL_SCORE: 0.8
   },
   // 检测超时相关配置
   TIMEOUT: {
