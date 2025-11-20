@@ -336,12 +336,20 @@ export const CONFIG = Object.freeze({
     // 人脸完整性检测相关配置
     FACE_COMPLETENESS: {
       // 最小可见的关键点数量比例（0-1）- 至少要检测到多少比例的关键点
-      MIN_KEYPOINT_RATIO: 0.8,
+      // 原值 0.8 太严格，降至 0.65 以适应真实场景
+      MIN_KEYPOINT_RATIO: 0.65,
       // 脸部边界安全边距（像素）- 人脸框距离图片边界的最小距离
-      BOUNDARY_MARGIN: 20,
+      // 原值 20 太严格导致几乎所有正常人脸都被判定为"接近边界"，改为 10
+      BOUNDARY_MARGIN: 10,
       // 关键点信心阈值（0-1）- 关键点置信度低于此值认为未可靠检测
       // 推荐范围：0.5-0.7（0.3太低会导致质量不足，0.8太高会导致通过率过低）
       KEYPOINT_CONFIDENCE_THRESHOLD: 0.5,
+      // 最少需要检测的眼睛关键点数（降低从 4 → 2）
+      MIN_EYE_KEYPOINTS: 2,
+      // 最少需要检测的鼻子关键点数（降低从 2 → 1）
+      MIN_NOSE_KEYPOINTS: 1,
+      // 最少需要检测的嘴巴关键点数（降低从 2 → 1）
+      MIN_MOUTH_KEYPOINTS: 1,
       // 眼睛检测的最小分数（0-1）
       MIN_EYE_SCORE: 0.5,
       // 鼻子检测的最小分数（0-1）
