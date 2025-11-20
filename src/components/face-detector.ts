@@ -332,7 +332,21 @@ export const CONFIG = Object.freeze({
     // 最小人脸网格分数（0-1）- 网格置信度低于此值表示图像模糊或质量差
     MIN_FACE_SCORE: 0.9,
     // 最小综合分数（0-1）- 综合评分低于此值表示图像质量不足
-    MIN_OVERALL_SCORE: 0.9
+    MIN_OVERALL_SCORE: 0.9,
+    // 人脸完整性检测相关配置
+    FACE_COMPLETENESS: {
+      // 最小可见的关键点数量比例（0-1）- 至少要检测到多少比例的关键点
+      MIN_KEYPOINT_RATIO: 0.8,
+      // 脸部边界安全边距（像素）- 人脸框距离图片边界的最小距离
+      BOUNDARY_MARGIN: 20,
+      // 关键点信心阈值（0-1）- 关键点置信度低于此值认为未可靠检测
+      // 推荐范围：0.5-0.7（0.3太低会导致质量不足，0.8太高会导致通过率过低）
+      KEYPOINT_CONFIDENCE_THRESHOLD: 0.5,
+      // 眼睛检测的最小分数（0-1）
+      MIN_EYE_SCORE: 0.5,
+      // 鼻子检测的最小分数（0-1）
+      MIN_NOSE_SCORE: 0.5
+    }
   },
   // 检测超时相关配置
   TIMEOUT: {

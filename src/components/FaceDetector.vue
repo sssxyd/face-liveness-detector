@@ -810,7 +810,7 @@ function handleCollectionMode(): void {
   // 但由于 detect 中的 result 是局部变量，我们通过 human.result 获取最新检测结果
   if (human && human.result && human.result.face && human.result.face.length > 0) {
     const currentFace = human.result.face[0]
-    const qualityCheck = checkImageQuality(currentFace)
+    const qualityCheck = checkImageQuality(currentFace, videoWidth.value, videoHeight.value)
     
     if (qualityCheck.passed) {
       emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
@@ -861,7 +861,7 @@ function handleSilentLivenessMode(): void {
     // 进行图像质量检查
     if (human && human.result && human.result.face && human.result.face.length > 0) {
       const currentFace = human.result.face[0]
-      const qualityCheck = checkImageQuality(currentFace)
+      const qualityCheck = checkImageQuality(currentFace, videoWidth.value, videoHeight.value)
       
       if (!qualityCheck.passed) {
         emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
@@ -1019,49 +1019,192 @@ function checkQualityMetric(value: any, threshold: number, metricName: string): 
 }
 
 /**
- * 检查图像质量是否符合要求
- * @param {Object} face - 人脸检测结果，包含 boxScore、faceScore、score 等字段
- * @returns {Object} 包含质量评估结果的对象 { passed: boolean, score: number, reasons: string[] }
+ * 检查人脸的完整性（五官齐全、未被裁剪）
+ * @param {Object} face - 人脸检测结果
+ * @param {number} imageWidth - 图片宽度（用于边界检测）
+ * @param {number} imageHeight - 图片高度（用于边界检测）
+ * @returns {Object} { passed: boolean, score: number, reasons: string[] }
  */
-function checkImageQuality(face: any): { passed: boolean, score: number, reasons: string[] } {
+function checkFaceCompleteness(face: any, imageWidth: number, imageHeight: number): { passed: boolean, score: number, reasons: string[] } {
   const reasons: string[] = []
-  const config = CONFIG.IMAGE_QUALITY
-
-  emitDebug('quality-check', '开始图像质量检测', { 
-    boxScore: face.boxScore,
-    faceScore: face.faceScore,
-    overallScore: face.score
+  const config = CONFIG.IMAGE_QUALITY.FACE_COMPLETENESS
+  let score = 1.0
+  
+  emitDebug('completeness-check', '开始人脸完整性检测', {
+    faceBox: face.box || face.boxRaw,
+    hasLandmarks: !!face.landmarks,
+    hasKeypoints: !!face.keypoints,
+    imageSize: `${imageWidth}x${imageHeight}`
   })
-  
-  // 使用函数式方法检查各个指标
-  const metrics = [
-    { value: face.boxScore, threshold: config.MIN_BOX_SCORE, name: '人脸检测框得分' },
-    { value: face.faceScore, threshold: config.MIN_FACE_SCORE, name: '人脸网格得分' },
-    { value: face.score, threshold: config.MIN_OVERALL_SCORE, name: '综合得分' }
-  ]
-  
-  const scores = metrics
-    .map(({ value, threshold, name }) => {
-      const result = checkQualityMetric(value, threshold, name)
-      if (!result.passed && result.reason) {
-        reasons.push(result.reason)
-      }
-      return value ?? 0
-    })
 
+  // 1. 检查人脸框的边界完整性
+  const faceBox = face.box || face.boxRaw
+  if (faceBox) {
+    const [x, y, width, height] = faceBox
+    const margin = config.BOUNDARY_MARGIN
+    
+    // 检查人脸是否被图片边界裁剪
+    if (x < margin || y < margin || 
+        (x + width) > (imageWidth - margin) || 
+        (y + height) > (imageHeight - margin)) {
+      const reason = '人脸被裁剪或过于接近图片边界'
+      reasons.push(reason)
+      score -= 0.3  // 扣30分
+      emitDebug('completeness-check', reason, { x, y, width, height, margin })
+    }
+  }
+
+  // 2. 检查面部关键点/地标（五官）的完整性
+  const landmarks = face.landmarks || face.keypoints
+  if (landmarks && landmarks.length > 0) {
+    // 计算检测到的关键点数量比例
+    const totalLandmarks = landmarks.length
+    const validLandmarks = landmarks.filter((lm: any) => {
+      // 检查关键点是否有有效的置信度
+      return (lm.confidence || lm.score || 1) >= config.KEYPOINT_CONFIDENCE_THRESHOLD
+    }).length
+    
+    const keypointRatio = validLandmarks / totalLandmarks
+    
+    if (keypointRatio < config.MIN_KEYPOINT_RATIO) {
+      const reason = `检测到的关键点不足：${(keypointRatio * 100).toFixed(0)}% < ${(config.MIN_KEYPOINT_RATIO * 100).toFixed(0)}%`
+      reasons.push(reason)
+      score -= 0.25  // 扣25分
+      emitDebug('completeness-check', reason, { validLandmarks, totalLandmarks, keypointRatio })
+    }
+    
+    // 3. 检查特定五官（眼睛、鼻子、嘴巴）是否都检测到了
+    const eyeLandmarks = landmarks.filter((lm: any, idx: number) => 
+      // 眼睛通常在关键点索引的早期（0-10 范围内）
+      idx < 10 && ((lm.confidence || lm.score || 1) >= config.KEYPOINT_CONFIDENCE_THRESHOLD)
+    )
+    
+    const noseLandmarks = landmarks.filter((lm: any, idx: number) => 
+      // 鼻子通常在关键点索引的中间（10-20 范围内）
+      idx >= 10 && idx < 20 && ((lm.confidence || lm.score || 1) >= config.KEYPOINT_CONFIDENCE_THRESHOLD)
+    )
+    
+    const mouthLandmarks = landmarks.filter((lm: any, idx: number) => 
+      // 嘴巴通常在关键点索引的后期（20+ 范围内）
+      idx >= 20 && ((lm.confidence || lm.score || 1) >= config.KEYPOINT_CONFIDENCE_THRESHOLD)
+    )
+    
+    // 检查眼睛是否检测充分（两只眼睛都应该检测到）
+    if (eyeLandmarks.length < 4) {
+      const reason = '眼睛检测不充分，请确保两只眼睛都清晰可见'
+      reasons.push(reason)
+      score -= 0.15  // 扣15分
+      emitDebug('completeness-check', reason, { eyeLandmarks: eyeLandmarks.length })
+    }
+    
+    // 检查鼻子是否检测到
+    if (noseLandmarks.length < 2) {
+      const reason = '鼻子检测不充分，请调整角度'
+      reasons.push(reason)
+      score -= 0.1  // 扣10分
+      emitDebug('completeness-check', reason, { noseLandmarks: noseLandmarks.length })
+    }
+    
+    // 检查嘴巴是否检测到
+    if (mouthLandmarks.length < 2) {
+      const reason = '嘴巴检测不充分，请调整角度'
+      reasons.push(reason)
+      score -= 0.1  // 扣10分
+      emitDebug('completeness-check', reason, { mouthLandmarks: mouthLandmarks.length })
+    }
+  } else {
+    // 如果没有检测到任何关键点/地标，这是严重问题
+    reasons.push('未检测到人脸关键点/地标，可能是图像质量过差')
+    score -= 0.5  // 扣50分
+    emitDebug('completeness-check', '无关键点检测', {})
+  }
+  
+  // 确保分数在 0-1 之间
+  score = Math.max(0, Math.min(1, score))
   const passed = reasons.length === 0
-  const score = Math.max(...scores)
   
   if (!passed) {
-    emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { score: score })
-    emitDebug('quality-check', '图像质量检测未通过', { 
-      passed, 
+    emitDebug('completeness-check', '人脸完整性检测未通过', {
       score: score.toFixed(2),
       reasons
     }, 'warn')
   }
   
   return { passed, score, reasons }
+}
+
+/**
+ * 检查图像质量是否符合要求（包括质量和人脸完整性）
+ * @param {Object} face - 人脸检测结果，包含 boxScore、faceScore、score 等字段
+ * @param {number} imageWidth - 图片宽度（可选，默认为视频宽度）
+ * @param {number} imageHeight - 图片高度（可选，默认为视频高度）
+ * @returns {Object} 包含质量评估结果的对象 { passed: boolean, score: number, reasons: string[] }
+ */
+function checkImageQuality(face: any, imageWidth?: number, imageHeight?: number): { passed: boolean, score: number, reasons: string[] } {
+  const reasons: string[] = []
+  const config = CONFIG.IMAGE_QUALITY
+  
+  // 如果未提供图片尺寸，使用视频尺寸
+  const imgWidth = imageWidth || videoWidth.value
+  const imgHeight = imageHeight || videoHeight.value
+
+  emitDebug('quality-check', '开始图像质量检测', { 
+    boxScore: face.boxScore,
+    faceScore: face.faceScore,
+    overallScore: face.score,
+    imageSize: `${imgWidth}x${imgHeight}`
+  })
+  
+  // ===== 第一步：检查图像质量指标 =====
+  const metrics = [
+    { value: face.boxScore, threshold: config.MIN_BOX_SCORE, name: '人脸检测框得分' },
+    { value: face.faceScore, threshold: config.MIN_FACE_SCORE, name: '人脸网格得分' },
+    { value: face.score, threshold: config.MIN_OVERALL_SCORE, name: '综合得分' }
+  ]
+  
+  let qualityScore = 1.0
+  const qualityReasons: string[] = []
+  
+  metrics.forEach(({ value, threshold, name }) => {
+    const result = checkQualityMetric(value, threshold, name)
+    if (!result.passed && result.reason) {
+      qualityReasons.push(result.reason)
+    }
+  })
+  
+  if (qualityReasons.length > 0) {
+    reasons.push(...qualityReasons)
+    qualityScore = Math.max(...metrics.map(m => m.value ?? 0))
+  }
+
+  // ===== 第二步：检查人脸完整性 =====
+  const completenessCheck = checkFaceCompleteness(face, imgWidth, imgHeight)
+  if (!completenessCheck.passed) {
+    reasons.push(...completenessCheck.reasons)
+  }
+  
+  // 综合两个检测的分数（质量占50%，完整性占50%）
+  const finalScore = (qualityScore * 0.5) + (completenessCheck.score * 0.5)
+  const passed = reasons.length === 0
+  
+  if (!passed) {
+    emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { score: finalScore })
+    emitDebug('quality-check', '图像质量检测未通过', { 
+      passed, 
+      score: finalScore.toFixed(2),
+      qualityScore: qualityScore.toFixed(2),
+      completenessScore: completenessCheck.score.toFixed(2),
+      reasons
+    }, 'warn')
+  } else {
+    emitDebug('quality-check', '图像质量检测通过', {
+      score: finalScore.toFixed(2),
+      qualityScore: qualityScore.toFixed(2),
+      completenessScore: completenessCheck.score.toFixed(2)
+    })
+  }
+  
+  return { passed, score: finalScore, reasons }
 }
 
 /**
@@ -1449,7 +1592,7 @@ async function performSilentLivenessDetection(): Promise<void> {
         const faceData = faces[0] as any
         
         // 检查图像质量 - 在进行活体检测前先验证采集图片的质量
-        const qualityCheck = checkImageQuality(faceData)
+        const qualityCheck = checkImageQuality(faceData, tempImg.width, tempImg.height)
         if (!qualityCheck.passed) {
           emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
           emitDebug('quality', '采集图片质量不足，重新采集', { 
