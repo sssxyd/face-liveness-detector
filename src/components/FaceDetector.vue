@@ -866,6 +866,7 @@ function handleSilentLivenessMode(): void {
       const qualityCheck = checkImageQuality(currentFace)
       
       if (!qualityCheck.passed) {
+        emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
         emitDebug('quality', '采集的图像质量不足，继续采集', { 
           score: qualityCheck.score.toFixed(2),
           reasons: qualityCheck.reasons
@@ -876,6 +877,7 @@ function handleSilentLivenessMode(): void {
         return
       }
       
+      emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
       emitDebug('quality', '采集的图像质量符合要求', { score: qualityCheck.score.toFixed(2) })
     }
     
