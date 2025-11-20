@@ -65,6 +65,7 @@ interface CollectionModeProps {
   minFaceRatio?: number        // 最小人脸占比 (0-1)，默认 0.5
   maxFaceRatio?: number        // 最大人脸占比 (0-1)，默认 0.9
   minFrontal?: number          // 最小正脸置信度 (0-1)，默认 0.9
+  showStatusPrompt?: boolean   // 是否显示状态提示文本，默认 true
 }
 ```
 
@@ -115,6 +116,7 @@ interface LivenessModeProps {
   liveness-action-count?: number         // 需要完成的动作数量，默认 1
   liveness-action-timeout?: number       // 每个动作的超时时间（秒），默认 60
   show-action-prompt?: boolean           // 是否显示动作提示文本，默认 true
+  show-status-prompt?: boolean           // 是否显示状态提示文本，默认 true
   minFaceRatio?: number
   maxFaceRatio?: number
   minFrontal?: number
@@ -152,6 +154,7 @@ interface LivenessModeProps {
   :liveness-action-count="2"
   :liveness-action-timeout="60"
   :show-action-prompt="true"
+  :show-status-prompt="true"
   @liveness-action="handleLivenessAction"
   @liveness-completed="handleLivenessCompleted"
   @error="handleError"
@@ -171,6 +174,8 @@ interface SilentLivenessModeProps {
   minFaceRatio?: number
   maxFaceRatio?: number
   minFrontal?: number
+  showActionPrompt?: boolean             // 是否显示动作提示文本，默认 true
+  showStatusPrompt?: boolean             // 是否显示状态提示文本，默认 true
 }
 ```
 
@@ -197,6 +202,8 @@ interface SilentLivenessModeProps {
 <FaceDetector
   mode="silent_liveness"
   :silent-liveness-threshold="0.85"
+  :show-action-prompt="true"
+  :show-status-prompt="true"
   @liveness-detected="handleLivenessDetected"
   @liveness-completed="handleLivenessCompleted"
   @error="handleError"
@@ -511,7 +518,8 @@ interface FaceDetectorProps {
   livenessChecks?: LivenessAction[]      // 支持的动作列表
   livenessActionCount?: number           // 需要完成的动作数，默认 1
   livenessActionTimeout?: number         // 每个动作超时（秒），默认 60
-  showActionPrompt?: boolean             // 是否显示提示文本，默认 true
+  showActionPrompt?: boolean             // 是否显示动作提示文本，默认 true
+  showStatusPrompt?: boolean             // 是否显示状态提示文本，默认 true
   
   // 静默活体检测（仅 SILENT_LIVENESS 模式）
   silentLivenessThreshold?: number       // 活体置信度阈值，默认 0.85
@@ -742,7 +750,156 @@ function detectOptimalBackend(): string {
 
 ---
 
-## 组件初始化与 READY 事件
+### 提示文本控制
+
+组件支持通过 `showActionPrompt` 和 `showStatusPrompt` 两个属性分别控制动作提示和状态提示的显示。
+
+#### 提示文本类型
+
+| 属性 | 显示内容 | 示例 | 默认值 |
+|------|--------|------|--------|
+| **showActionPrompt** | 动作提示文本 | "请眨眼" | `true` |
+| **showStatusPrompt** | 状态提示文本 | "图像模糊请调整"、"未检测到人脸" | `true` |
+
+#### 使用示例
+
+**隐藏所有提示文本：**
+```vue
+<FaceDetector
+  mode="liveness"
+  :show-action-prompt="false"
+  :show-status-prompt="false"
+/>
+```
+
+**只显示动作提示，隐藏状态提示：**
+```vue
+<FaceDetector
+  mode="collection"
+  :show-action-prompt="true"
+  :show-status-prompt="false"
+/>
+```
+
+**动态控制提示文本显示：**
+```vue
+<template>
+  <div>
+    <div class="controls">
+      <label>
+        <input v-model="showAction" type="checkbox" />
+        显示动作提示
+      </label>
+      <label>
+        <input v-model="showStatus" type="checkbox" />
+        显示状态提示
+      </label>
+    </div>
+    
+    <FaceDetector
+      mode="collection"
+      :show-action-prompt="showAction"
+      :show-status-prompt="showStatus"
+    />
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+import FaceDetector from './components/FaceDetector.vue'
+
+const showAction = ref(true)
+const showStatus = ref(true)
+</script>
+
+<style scoped>
+.controls {
+  margin-bottom: 20px;
+}
+
+label {
+  display: block;
+  margin: 10px 0;
+  cursor: pointer;
+}
+</style>
+```
+
+#### 状态提示文本类型
+
+| 提示文本 | 触发条件 | 对应代码 |
+|--------|--------|--------|
+| **"检测正常"** | 人脸符合条件 | `NORMAL_STATE` |
+| **"未检测到人脸"** | 画面中没有人脸 | `NO_FACE_DETECTED` |
+| **"检测到多人"** | 画面中多个人脸 | `MULTIPLE_FACES_DETECTED` |
+| **"请靠近摄像头"** | 人脸过小 | `FACE_TOO_SMALL` |
+| **"请远离摄像头"** | 人脸过大 | `FACE_TOO_LARGE` |
+| **"请正对摄像头"** | 人脸不正对 | `FACE_NOT_FRONTAL` |
+| **"图像清晰"** | 图像质量符合要求 | `GOOD_IMAGE_QUALITY` |
+| **"图像模糊请调整"** | 图像质量不足 | `POOR_IMAGE_QUALITY` |
+| **"请完成指定动作"** | 等待用户执行动作 | `PLEASE_PERFORM_ACTION` |
+
+#### 自定义提示文本 (通过 debug 事件)
+
+如果需要自定义提示文本内容或位置，可以监听 `debug` 事件并在应用层显示：
+
+```vue
+<template>
+  <div>
+    <FaceDetector
+      :show-action-prompt="false"
+      :show-status-prompt="false"
+      @debug="handleDebug"
+    />
+    
+    <!-- 自定义提示区域 -->
+    <div class="custom-prompt" v-if="promptMessage">
+      {{ promptMessage }}
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref } from 'vue'
+
+const promptMessage = ref('')
+
+const handleDebug = (debug) => {
+  if (debug.stage === 'detection' && debug.details?.ratio < 0.5) {
+    promptMessage.value = '🔍 请靠近摄像头'
+  }
+}
+</script>
+
+<style scoped>
+.custom-prompt {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  padding: 15px 30px;
+  border-radius: 8px;
+  font-size: 16px;
+  z-index: 1000;
+  animation: slideDown 0.3s ease-in;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateX(-50%) translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+</style>
+```
+
+---
 
 FaceDetector 组件在 Human.js 库完全加载后会发送 `ready` 事件。建议在组件就绪后再启动检测，以确保最佳的用户体验。
 
