@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "publish": "node publish.js",
-    "publish:build": "yarn run build && yarn run publish",
+    "publish:build": "npm run build && npm run publish",
     "type-check": "vue-tsc --noEmit"
   },
   "dependencies": {
