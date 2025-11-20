@@ -436,13 +436,6 @@ async function startDetection(): Promise<void> {
   }
 
   try {
-    // 检查 Human 库是否已初始化
-    if (!human) {
-      emitDebug('video-setup', 'Human 库未初始化', {}, 'error')
-      emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.DETECTOR_NOT_INITIALIZED, message: '检测库未初始化' })
-      return
-    }
-    
     emitDebug('video-setup', '开始启动检测')
     
     // 重置检测状态和画布

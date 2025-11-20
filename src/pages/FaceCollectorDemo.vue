@@ -151,7 +151,7 @@ const isComponentReady: Ref<boolean> = ref(false)  // 组件是否就绪（Human
 
 // Debug 相关数据
 const debugLogs: Ref<DebugData[]> = ref([])
-const showDebugPanel: Ref<boolean> = ref(true)
+const showDebugPanel: Ref<boolean> = ref(false)
 const maxDebugLogs: number = 50  // 最多保存 50 条日志
 
 function handleFaceDetected(data: FaceDetectedData): void {
