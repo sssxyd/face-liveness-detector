@@ -236,7 +236,9 @@ onMounted(async () => {
   emitDebug('initialization', '开始初始化 Human.js 库', {
     userAgent: userAgent.substring(0, 100),
     browser: { isSafari, isWeChat, isAlipay, isQQ, isWebView },
-    modelBasePath: mergedConfig.modelBasePath
+    modelBasePath: mergedConfig.modelBasePath,
+    backend: mergedConfig.backend,
+    selectedReason: `${isMobileDevice.value ? '移动设备' : '桌面设备'} - ${mergedConfig.backend} 后端`
   })
   
   // 检查 WebGL 支持
@@ -323,10 +325,54 @@ onUnmounted(() => {
 
 // ===== 配置合并辅助函数 =====
 /**
+ * 检测最优的推理后端
+ * 策略: 桌面优先 WebGL, 移动优先 WASM, 特殊浏览器强制 WASM
+ */
+function detectOptimalBackend(): string {
+  const userAgent = navigator.userAgent.toLowerCase()
+  
+  // 特殊浏览器：优先使用 WASM（更稳定可靠）
+  const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent)
+  const isWeChat = /micromessenger/i.test(userAgent)
+  const isAlipay = /alipay/.test(userAgent)
+  const isQQ = /qq/.test(userAgent)
+  const isWebView = /(wechat|alipay|qq)webview/i.test(userAgent)
+  
+  if (isSafari || isWeChat || isAlipay || isQQ || isWebView) {
+    return 'wasm'
+  }
+  
+  // 移动设备：检测 WebGL 可用性
+  const isMobile = /android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768
+  
+  if (isMobile) {
+    // 移动设备先检测 WebGL，如果不可用则用 WASM
+    try {
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('webgl') || canvas.getContext('webgl2')
+      return context ? 'webgl' : 'wasm'
+    } catch (e) {
+      return 'wasm'
+    }
+  }
+  
+  // 桌面设备：优先 WebGL（性能更好）
+  try {
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('webgl') || canvas.getContext('webgl2')
+    return context ? 'webgl' : 'wasm'
+  } catch (e) {
+    return 'wasm'
+  }
+}
+
+/**
  * 合并 Human.js 配置，用户配置优先级更高
  */
 function mergeHumanConfig(): Record<string, any> {
   const defaultConfig = {
+    // 自动检测最优后端
+    backend: detectOptimalBackend(),
     // 模型文件本地路径
     modelBasePath: '/models',
     // 人脸检测配置

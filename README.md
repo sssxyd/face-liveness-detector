@@ -1,6 +1,8 @@
 # js-face-detector
 
-Vue 3 人脸检测组件库，基于 [Human.js](https://github.com/vladmandic/human) 实现，提供三种完整的人脸检测模式。
+Vue 3 人脸检测组件库，基于 [Human.js](https://github.com/vladmandic/human) 实现，提供三种完整的人脸检测模式.
+
+> 📖 **想了解更多？** 查看详细的[项目宣传介绍文章](./PROMOTION_ARTICLE.md)与[Human.js 技术详解](./HUMAN_JS_TECHNICAL_DETAILS.md)
 
 ## 🚀 快速体验
 
@@ -570,6 +572,150 @@ interface LivenessDetectedData {
 
 ---
 
+## 组件初始化阶段后端选择
+
+FaceDetector 组件在初始化时会**自动检测运行环境并选择最优的推理后端**（WebGL 或 WASM）。这个过程是透明的，用户无需手动配置。
+
+### 后端自动选择策略
+
+| 环境类型 | 设备类型 | WebGL 支持 | 选择的后端 | 性能 | 稳定性 |
+|---------|---------|----------|----------|------|--------|
+| **Safari 浏览器** | 桌面/移动 | - | **WASM** | 中等 | ⭐⭐⭐⭐⭐ |
+| **WeChat 内置浏览器** | 移动 | - | **WASM** | 中等 | ⭐⭐⭐⭐⭐ |
+| **支付宝 内置浏览器** | 移动 | - | **WASM** | 中等 | ⭐⭐⭐⭐⭐ |
+| **QQ 内置浏览器** | 移动 | - | **WASM** | 中等 | ⭐⭐⭐⭐⭐ |
+| **移动设备** | 移动 | ✓ 支持 | **WebGL** | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **移动设备** | 移动 | ✗ 不支持 | **WASM** | 中等 | ⭐⭐⭐⭐ |
+| **Chrome/Firefox/Edge** | 桌面 | ✓ 支持 | **WebGL** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐⭐ |
+| **其他桌面浏览器** | 桌面 | ✗ 不支持 | **WASM** | 中等 | ⭐⭐⭐ |
+
+### 初始化流程
+
+```
+启动 FaceDetector 组件
+    ↓
+--- 自动后端检测开始 ---
+    ↓
+检测浏览器类型
+├─ Safari / WeChat / 支付宝 / QQ / WebView?
+│  └─ YES → 返回 'wasm' ✓
+│  
+├─ NO → 检测设备类型
+│  ├─ 移动设备?
+│  │  ├─ YES → 检测 WebGL 支持
+│  │  │        ├─ 支持 → 返回 'webgl' ✓
+│  │  │        └─ 不支持 → 返回 'wasm' ✓
+│  │  │
+│  │  └─ NO → 桌面设备
+│  │         └─ 检测 WebGL 支持
+│  │            ├─ 支持 → 返回 'webgl' ✓ (优先选择)
+│  │            └─ 不支持 → 返回 'wasm' ✓
+↓
+--- 检测完成 ---
+    ↓
+加载 Human.js 库并使用选定的后端
+    ↓
+发送 ready 事件 (检测完成，可以开始检测)
+```
+
+### 后端选择的代码实现
+
+```typescript
+// 自动检测最优的推理后端
+function detectOptimalBackend(): string {
+  const userAgent = navigator.userAgent.toLowerCase()
+  
+  // 1. 特殊浏览器 → 强制使用 WASM (更稳定可靠)
+  const isSafari = /safari/.test(userAgent) && !/chrome/.test(userAgent)
+  const isWeChat = /micromessenger/i.test(userAgent)
+  const isAlipay = /alipay/.test(userAgent)
+  const isQQ = /qq/.test(userAgent)
+  const isWebView = /(wechat|alipay|qq)webview/i.test(userAgent)
+  
+  if (isSafari || isWeChat || isAlipay || isQQ || isWebView) {
+    return 'wasm'
+  }
+  
+  // 2. 移动设备 → 检测 WebGL 可用性
+  const isMobile = /android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768
+  
+  if (isMobile) {
+    try {
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('webgl') || canvas.getContext('webgl2')
+      return context ? 'webgl' : 'wasm'
+    } catch (e) {
+      return 'wasm'
+    }
+  }
+  
+  // 3. 桌面设备 → 优先 WebGL (性能最优)
+  try {
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('webgl') || canvas.getContext('webgl2')
+    return context ? 'webgl' : 'wasm'
+  } catch (e) {
+    return 'wasm'
+  }
+}
+```
+
+### 查看选择结果
+
+通过 `@debug` 事件可以看到组件选择的后端和选择原因：
+
+```vue
+<template>
+  <FaceDetector
+    @debug="(debug) => {
+      if (debug.stage === 'initialization') {
+        console.log('后端选择:', debug.details?.backend)
+        console.log('选择原因:', debug.details?.selectedReason)
+      }
+    }"
+  />
+</template>
+```
+
+**输出示例：**
+```
+[initialization] 开始初始化 Human.js 库 {
+  backend: "webgl",
+  selectedReason: "桌面设备 - webgl 后端"
+}
+```
+
+### 手动覆盖后端选择
+
+虽然自动选择通常是最优的，但你也可以通过 `humanConfig` prop 强制指定后端：
+
+```vue
+<template>
+  <!-- 强制使用 WASM 后端 -->
+  <FaceDetector
+    :human-config="{
+      backend: 'wasm'
+    }"
+  />
+  
+  <!-- 强制使用 WebGL 后端 -->
+  <FaceDetector
+    :human-config="{
+      backend: 'webgl'
+    }"
+  />
+</template>
+```
+
+### 性能参考
+
+| 后端 | 桌面单帧 | 移动单帧 | 优势 | 劣势 |
+|------|--------|--------|------|------|
+| **WebGL** | 50-80ms | 80-120ms | GPU 加速，性能最好 | 不是所有环境都支持 |
+| **WASM** | 120-180ms | 150-220ms | 兼容性强，通用 | 性能相对较低 |
+
+---
+
 ## 组件初始化与 READY 事件
 
 FaceDetector 组件在 Human.js 库完全加载后会发送 `ready` 事件。建议在组件就绪后再启动检测，以确保最佳的用户体验。
@@ -728,7 +874,7 @@ button:disabled {
 |------|--------|------|
 | **ready** | Human.js 加载完成 | 标记组件初始化完成 |
 | **face-detected** | 检测到人脸 | 实时人脸信息反馈 |
-| **face-collected** | 采集成功 | 获取采集的图片数据 |
+| **face-collected** | 采集成功 | 获取采集的图片数据 |https://github.com/vladmandic/human
 | **liveness-action** | 动作检测状态变化 | 活体动作进度反馈 |
 | **liveness-completed** | 活体检测成功 | 获取活体检测结果 |
 | **debug** | 内部阶段变化 | 诊断和调试 |
