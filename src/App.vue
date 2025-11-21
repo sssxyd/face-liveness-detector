@@ -32,13 +32,6 @@
         >
           静默活体
         </button>
-        <button 
-          class="nav-btn" 
-          :class="{ active: currentPage === 'quality_test' }"
-          @click="currentPage = 'quality_test'"
-        >
-          图像质量
-        </button>
       </div>
     </div>
 
@@ -50,8 +43,6 @@
       <AliveCheckerDemo v-if="currentPage === 'liveness'" />
       <!-- 静默活体检测页面 -->
       <SilentLivenessDemo v-if="currentPage === 'silent_liveness'" />
-      <!-- 图像质量测试页面 -->
-      <ImageQualityTestDemo v-if="currentPage === 'quality_test'" />
     </div>
   </div>
 </template>
@@ -61,7 +52,6 @@ import { ref, onMounted } from 'vue'
 import FaceCollectorDemo from './pages/FaceCollectorDemo.vue'
 import AliveCheckerDemo from './pages/AliveCheckerDemo.vue'
 import SilentLivenessDemo from './pages/SilentLivenessDemo.vue'
-import ImageQualityTestDemo from './pages/ImageQualityTestDemo.vue'
 
 // 当前活动页面
 const currentPage = ref<string>('collector')
