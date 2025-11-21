@@ -1054,15 +1054,22 @@ function checkFaceImageQuality(face: any, imageWidth?: number, imageHeight?: num
   
   // ===== 第二步：检查人脸完整性 =====
   let completenessResult = {
-    isComplete: false,
-    completenessScore: 0,
+    isComplete: true,
+    completenessScore: 1,
     description: '人脸完整性检测通过'
   }
   
-  try {
-    completenessResult = checkFaceCompletenessModule(face, imgWidth, imgHeight)
-  } catch (error) {
-    emitDebug('completeness', '人脸完整性检测出错', { error: (error as Error).message }, 'warn')
+  if(CONFIG.FACE_COMPLETENESS.COMPLETENESS_THRESHOLD > 0) {
+    completenessResult = {
+        isComplete: false,
+        completenessScore: 0.01,
+        description: '人脸完整性检测未通过'
+    }
+    try {
+      completenessResult = checkFaceCompletenessModule(face, imgWidth, imgHeight)
+    } catch (error) {
+      emitDebug('completeness', '人脸完整性检测出错', { error: (error as Error).message }, 'warn')
+    }    
   }
   
   if (!completenessResult.isComplete) {

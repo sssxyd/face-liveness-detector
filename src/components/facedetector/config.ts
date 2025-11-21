@@ -67,8 +67,8 @@ export const CONFIG = Object.freeze({
     REQUIRE_FULL_FACE_IN_BOUNDS: true,
     // 是否严格模式（要求检测到所有五官）
     STRICT_MODE: false,
-    // 完整度评分阈值 (0-1) - 评分达到此值认为人脸是完整的
-    COMPLETENESS_THRESHOLD: 0.5,
+    // 完整度评分阈值 (0-1) - 评分达到此值认为人脸是完整的, 0表示禁用
+    COMPLETENESS_THRESHOLD: 0,
     // 眼睛缺失的扣分值
     PENALTY_MISSING_EYES: 0.25,
     // 鼻子缺失的扣分值
