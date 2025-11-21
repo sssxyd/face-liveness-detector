@@ -58,6 +58,7 @@ export const PROMPT_CODE_DESCRIPTIONS: Record<PromptCode, string> = {
   [PromptCode.GOOD_IMAGE_QUALITY]: '图像清晰',
   [PromptCode.POOR_IMAGE_QUALITY]: '图像模糊请调整',
   [PromptCode.PLEASE_PERFORM_ACTION]: '请完成指定动作',
+  [PromptCode.ACTION_TIMEOUT]: '动作检测超时'
 }
 
 /**

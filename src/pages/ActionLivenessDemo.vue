@@ -25,7 +25,7 @@
 
     <FaceDetector
       ref="faceDetectorRef"
-      mode="liveness"
+      mode="action_liveness"
       :liveness-checks="livenessChecks"
       :min-face-ratio="minFaceRatio"
       :max-face-ratio="maxFaceRatio"

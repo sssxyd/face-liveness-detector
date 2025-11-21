@@ -10,7 +10,7 @@ export enum DetectionMode {
   // 采集模式：检测到合格人脸后自动停止并返回图片
   COLLECTION = 'collection',
   // 活体检测模式：需要用户执行指定的活体动作
-  LIVENESS = 'liveness',
+  LIVENESS = 'action_liveness',
   // 静默活体检测模式：采集后自动进行活体检测，无需用户执行动作
   SILENT_LIVENESS = 'silent_liveness'
 }
@@ -49,6 +49,7 @@ export enum PromptCode {
   POOR_IMAGE_QUALITY = 'POOR_IMAGE_QUALITY',
   GOOD_IMAGE_QUALITY = 'GOOD_IMAGE_QUALITY',
   PLEASE_PERFORM_ACTION = 'PLEASE_PERFORM_ACTION',
+  ACTION_TIMEOUT = 'ACTION_TIMEOUT'
 }
 
 /**
