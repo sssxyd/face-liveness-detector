@@ -22,8 +22,17 @@ import { ref, computed, onMounted, onUnmounted, Ref, reactive } from 'vue'
 // 导入人脸检测库
 import Human from '@vladmandic/human'
 // 导入类型定义
-import type { FaceCollectedData, LivenessCompletedData, ErrorData, FaceDetectorProps, LivenessDetectedData, DebugData, StatusPromptData } from './face-detector'
-import { DetectionMode, LivenessAction, FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, CONFIG, ErrorCode, PromptCode, PROMPT_CODE_DESCRIPTIONS, ACTION_DESCRIPTIONS, detectBrowserInfo, isWebGLAvailable, getWebGLInfo } from './face-detector'
+import type { FaceCollectedData, LivenessCompletedData, ErrorData, FaceDetectorProps, LivenessDetectedData, DebugData, StatusPromptData } from './types'
+import { CONFIG } from './config'
+import { DetectionMode, LivenessAction, ErrorCode, PromptCode} from './enums'
+import { FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, PROMPT_CODE_DESCRIPTIONS, ACTION_DESCRIPTIONS } from './constants'
+import { detectBrowserInfo, isWebGLAvailable, getWebGLInfo } from './utils'
+// 导入人脸正对度检测模块 (Phase 1)
+import { checkFaceFrontal as checkFaceFrontalModule } from './face-frontal-detection'
+// 导入图像质量检测模块 (Phase 1)
+import { checkImageQualityOnly as checkImageQualityOnlyModule, getQualityLevel } from './image-quality-checker'
+// 导入人脸完整性检测模块
+import { checkFaceCompleteness as checkFaceCompletenessModule } from './face-completeness'
 
 // 定义组件 props
 const props = withDefaults(defineProps<FaceDetectorProps>(), {
@@ -810,7 +819,7 @@ function handleCollectionMode(): void {
   // 但由于 detect 中的 result 是局部变量，我们通过 human.result 获取最新检测结果
   if (human && human.result && human.result.face && human.result.face.length > 0) {
     const currentFace = human.result.face[0]
-    const qualityCheck = checkImageQuality(currentFace, videoWidth.value, videoHeight.value)
+    const qualityCheck = checkFaceImageQuality(currentFace, videoWidth.value, videoHeight.value)
     
     if (qualityCheck.passed) {
       emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
@@ -861,7 +870,7 @@ function handleSilentLivenessMode(): void {
     // 进行图像质量检查
     if (human && human.result && human.result.face && human.result.face.length > 0) {
       const currentFace = human.result.face[0]
-      const qualityCheck = checkImageQuality(currentFace, videoWidth.value, videoHeight.value)
+      const qualityCheck = checkFaceImageQuality(currentFace, videoWidth.value, videoHeight.value)
       
       if (!qualityCheck.passed) {
         emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
@@ -1006,328 +1015,97 @@ async function detect(): Promise<void> {
 }
 
 /**
- * 检查单个质量指标
- */
-function checkQualityMetric(value: any, threshold: number, metricName: string): { passed: boolean, reason?: string } {
-  if (value === undefined || value === null) {
-    return { passed: false, reason: `${metricName} 属性缺失` }
-  }
-  if (value < threshold) {
-    return { passed: false, reason: `${metricName}: ${value.toFixed(2)} < ${threshold}` }
-  }
-  return { passed: true }
-}
-
-/**
- * 获取人脸关键点，处理多种可能的属性名（兼容不同版本的 Human.js）
- */
-function getValidLandmarks(face: any): any[] {
-  // 尝试多种可能的属性名和结构
-  const landmarks = 
-    face.landmarks || 
-    face.keypoints ||
-    face.points ||
-    face.mesh ||
-    face.faceKeypoints ||
-    []
-  
-  // 如果是有效的数组
-  if (Array.isArray(landmarks) && landmarks.length > 0) {
-    // 如果是二维数组（嵌套），则拍平
-    if (Array.isArray(landmarks[0]) && landmarks[0].length === 2) {
-      return landmarks.flat().map((v, i) => {
-        if (i % 2 === 0) return { x: v, y: landmarks[i + 1] }
-      }).filter(Boolean)
-    }
-    return landmarks
-  }
-  
-  return []
-}
-
-/**
- * 获取关键点的置信度，处理多种可能的属性名
- */
-function getKeypointConfidence(lm: any): number {
-  // 优先级顺序检查各种可能的属性
-  if (typeof lm?.confidence === 'number' && lm.confidence >= 0 && lm.confidence <= 1) {
-    return lm.confidence
-  }
-  if (typeof lm?.score === 'number' && lm.score >= 0 && lm.score <= 1) {
-    return lm.score
-  }
-  if (typeof lm?.z === 'number' && lm.z >= 0 && lm.z <= 1) {
-    return lm.z
-  }
-  
-  // 如果只有坐标信息但没有置信度，返回中等置信度
-  if (typeof lm?.x === 'number' && typeof lm?.y === 'number') {
-    return 0.6  // 中等置信度
-  }
-  
-  return 0  // 完全无效数据
-}
-
-/**
- * 检查人脸的完整性（只需确保耳朵、嘴巴、眼睛存在，且人脸在图片中）
+ * 检查图像质量是否符合要求（严格两步检测）
+ * 
+ * 在此方法内进行两步独立检测：
+ * 1. 检测图像质量（boxScore, faceScore）- 必须达到质量系数
+ *    - 如果不达标，触发 status-prompt 并返回 false
+ * 2. 检测人脸完整性（eyes, nose, mouth, ears等）- 必须达到完整度系数
+ *    - 如果不达标，触发 status-prompt 并返回 false
+ * 
+ * 两者都必须达标才返回 true
+ * 
  * @param {Object} face - 人脸检测结果
- * @param {number} imageWidth - 图片宽度
- * @param {number} imageHeight - 图片高度
- * @returns {Object} { passed: boolean, score: number, reasons: string[] }
- */
-function checkFaceCompleteness(face: any, imageWidth: number, imageHeight: number): { passed: boolean, score: number, reasons: string[] } {
-  const reasons: string[] = []
-  const config = CONFIG.IMAGE_QUALITY.FACE_COMPLETENESS
-  let score = 1.0
-  
-  emitDebug('completeness-check', '开始人脸完整性检测', {
-    faceBox: face.box || face.boxRaw,
-    imageSize: `${imageWidth}x${imageHeight}`
-  })
-
-  // 1. 检查人脸是否在图片中（基本边界检测）
-  const faceBox = face.box || face.boxRaw
-  if (faceBox && faceBox.length >= 4) {
-    const [x, y, width, height] = faceBox
-    
-    // 检查人脸框是否完全在图片范围内
-    if (x < 0 || y < 0 || (x + width) > imageWidth || (y + height) > imageHeight) {
-      reasons.push('人脸超出图片边界，请调整位置')
-      score -= config.PENALTY_OUT_OF_BOUNDARY
-      emitDebug('completeness-check', '人脸超出边界', { x, y, width, height, imageWidth, imageHeight })
-    }
-  } else {
-    reasons.push('无法获取人脸框信息')
-    score = 0
-  }
-
-  // 2. 检查关键五官（眼睛、嘴巴、耳朵）是否存在
-  const landmarks = getValidLandmarks(face)
-  
-  if (landmarks && landmarks.length > 0) {
-    emitDebug('completeness-check', '关键点信息', { totalLandmarks: landmarks.length })
-    
-    // 使用配置中的索引范围检测各部位
-    // 眼睛：检测左右两只眼睛
-    const leftEyeLandmarks = landmarks.filter((lm: any, idx: number) => 
-      idx >= config.EYES.START && idx < Math.floor((config.EYES.START + config.EYES.END) / 2) && 
-      getKeypointConfidence(lm) > 0
-    )
-    
-    const rightEyeLandmarks = landmarks.filter((lm: any, idx: number) => 
-      idx >= Math.floor((config.EYES.START + config.EYES.END) / 2) && idx < config.EYES.END && 
-      getKeypointConfidence(lm) > 0
-    )
-    
-    // 嘴巴：直接检测
-    const mouthLandmarks = landmarks.filter((lm: any, idx: number) => 
-      idx >= config.MOUTH.START && idx < config.MOUTH.END && getKeypointConfidence(lm) > 0
-    )
-    
-    // 耳朵：检测左右两只耳朵
-    const leftEarLandmarks = landmarks.filter((lm: any, idx: number) => 
-      idx >= config.EARS.LEFT_START && idx <= config.EARS.LEFT_END && 
-      getKeypointConfidence(lm) > 0
-    )
-    
-    const rightEarLandmarks = landmarks.filter((lm: any, idx: number) => 
-      idx >= config.EARS.RIGHT_START && idx <= config.EARS.RIGHT_END && 
-      getKeypointConfidence(lm) > 0
-    )
-    
-    // 检查眼睛：只需检测到一只眼睛就通过
-    const hasEyes = leftEyeLandmarks.length > 0 || rightEyeLandmarks.length > 0
-    if (!hasEyes) {
-      reasons.push('未检测到眼睛')
-      score -= config.PENALTY_MISSING_EYES
-    }
-    
-    // 检查嘴巴：必须检测到
-    if (mouthLandmarks.length === 0) {
-      reasons.push('未检测到嘴巴')
-      score -= config.PENALTY_MISSING_MOUTH
-    }
-    
-    // 检查耳朵：只需检测到一只耳朵就通过
-    const hasEars = leftEarLandmarks.length > 0 || rightEarLandmarks.length > 0
-    if (!hasEars) {
-      reasons.push('未检测到耳朵')
-      score -= config.PENALTY_MISSING_EARS
-    }
-    
-    emitDebug('completeness-check', '五官检测结果', {
-      leftEyes: leftEyeLandmarks.length,
-      rightEyes: rightEyeLandmarks.length,
-      mouth: mouthLandmarks.length,
-      leftEars: leftEarLandmarks.length,
-      rightEars: rightEarLandmarks.length,
-      hasEyes,
-      hasEars
-    })
-  } else {
-    // 无关键点数据
-    reasons.push('未检测到人脸关键点')
-    score -= config.PENALTY_NO_LANDMARKS
-  }
-  
-  // 确保分数在 0-1 之间
-  score = Math.max(0, Math.min(1, score))
-  const passed = reasons.length === 0
-  
-  if (!passed) {
-    emitDebug('completeness-check', '人脸完整性检测未通过', {
-      score: score.toFixed(2),
-      reasons
-    }, 'warn')
-  } else {
-    emitDebug('completeness-check', '人脸完整性检测通过', {
-      score: score.toFixed(2)
-    })
-  }
-  
-  return { passed, score, reasons }
-}
-
-/**
- * 检查图像质量是否符合要求（包括质量和人脸完整性）
- * @param {Object} face - 人脸检测结果，包含 boxScore、faceScore、score 等字段
  * @param {number} imageWidth - 图片宽度（可选，默认为视频宽度）
  * @param {number} imageHeight - 图片高度（可选，默认为视频高度）
  * @returns {Object} 包含质量评估结果的对象 { passed: boolean, score: number, reasons: string[] }
  */
-function checkImageQuality(face: any, imageWidth?: number, imageHeight?: number): { passed: boolean, score: number, reasons: string[] } {
-  const reasons: string[] = []
-  const config = CONFIG.IMAGE_QUALITY
-  
+function checkFaceImageQuality(face: any, imageWidth?: number, imageHeight?: number): { passed: boolean, score: number, reasons: string[] } {
   // 如果未提供图片尺寸，使用视频尺寸
   const imgWidth = imageWidth || videoWidth.value
   const imgHeight = imageHeight || videoHeight.value
-
-  emitDebug('quality-check', '开始图像质量检测', { 
-    boxScore: face.boxScore,
-    faceScore: face.faceScore,
-    overallScore: face.score,
-    imageSize: `${imgWidth}x${imgHeight}`
-  })
   
-  // ===== 第一步：检查图像质量指标 =====
-  const metrics = [
-    { value: face.boxScore, threshold: config.MIN_BOX_SCORE, name: '人脸检测框得分' },
-    { value: face.faceScore, threshold: config.MIN_FACE_SCORE, name: '人脸网格得分' },
-    { value: face.score, threshold: config.MIN_OVERALL_SCORE, name: '综合得分' }
-  ]
+  const reasons: string[] = []
   
-  let qualityScore = 1.0
-  const qualityReasons: string[] = []
+  // ===== 第一步：检查图像质量 =====
+  const qualityOnlyResult = checkImageQualityOnlyModule(face)
   
-  metrics.forEach(({ value, threshold, name }) => {
-    const result = checkQualityMetric(value, threshold, name)
-    if (!result.passed && result.reason) {
-      qualityReasons.push(result.reason)
-    }
-  })
-  
-  if (qualityReasons.length > 0) {
-    reasons.push(...qualityReasons)
-    qualityScore = Math.max(...metrics.map(m => m.value ?? 0))
-  }
-
-  // ===== 第二步：检查人脸完整性 =====
-  const completenessCheck = checkFaceCompleteness(face, imgWidth, imgHeight)
-  if (!completenessCheck.passed) {
-    reasons.push(...completenessCheck.reasons)
-  }
-  
-  // 综合两个检测的分数（取最小值，确保两者都达到标准）
-  const finalScore = Math.min(qualityScore, completenessCheck.score)
-  const passed = reasons.length === 0
-  
-  if (!passed) {
-    emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { score: finalScore })
-    emitDebug('quality-check', '图像质量检测未通过', { 
-      passed, 
-      score: finalScore.toFixed(2),
-      qualityScore: qualityScore.toFixed(2),
-      completenessScore: completenessCheck.score.toFixed(2),
-      reasons
+  if (!qualityOnlyResult.passed) {
+    // 图像质量不达标，直接返回
+    reasons.push(...qualityOnlyResult.reasons)
+    emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { quality: qualityOnlyResult.score.toFixed(2) })
+    emitDebug('quality', '图像质量检测未通过', {
+      score: qualityOnlyResult.score.toFixed(2),
+      level: getQualityLevel(qualityOnlyResult.score),
+      reasons: qualityOnlyResult.reasons
     }, 'warn')
-  } else {
-    emitDebug('quality-check', '图像质量检测通过', {
-      score: finalScore.toFixed(2),
-      qualityScore: qualityScore.toFixed(2),
-      completenessScore: completenessCheck.score.toFixed(2)
-    })
+    return { passed: false, score: qualityOnlyResult.score, reasons }
   }
   
-  return { passed, score: finalScore, reasons }
+  // ===== 第二步：检查人脸完整性 =====
+  let completenessResult = {
+    isComplete: false,
+    completenessScore: 0,
+    description: '人脸完整性检测通过'
+  }
+  
+  try {
+    completenessResult = checkFaceCompletenessModule(face, imgWidth, imgHeight)
+  } catch (error) {
+    emitDebug('completeness', '人脸完整性检测出错', { error: (error as Error).message }, 'warn')
+  }
+  
+  if (!completenessResult.isComplete) {
+    // 人脸完整性不达标，直接返回
+    reasons.push(completenessResult.description)
+    emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { quality: completenessResult.completenessScore.toFixed(2) })
+    emitDebug('quality', '人脸完整性检测未通过', {
+      completenessScore: completenessResult.completenessScore.toFixed(2),
+      description: completenessResult.description
+    }, 'warn')
+    return { passed: false, score: completenessResult.completenessScore, reasons }
+  }
+  
+  // ===== 两步都通过 =====
+  const overallScore = (qualityOnlyResult.score + completenessResult.completenessScore) / 2
+  
+  emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, { quality: overallScore.toFixed(2) })
+  emitDebug('quality', '图像质量与完整性检测通过', {
+    overallScore: overallScore.toFixed(2),
+    imageQualityScore: qualityOnlyResult.score.toFixed(2),
+    completenessScore: completenessResult.completenessScore.toFixed(2),
+    level: getQualityLevel(overallScore)
+  })
+  
+  return { passed: true, score: overallScore, reasons }
 }
 
 /**
- * 检查人脸是否正对摄像头
+ * 检查人脸是否正对摄像头（使用独立模块）
  * @param {Object} face - 人脸检测结果
  * @param {Array} gestures - 检测到的手势/表情
  * @returns {number} 正对度评分 (0-1)
  */
 function checkFaceFrontal(face: any, gestures: any): number {
-  // 优先使用 gestures 中的 facing center 判定
-  if (gestures && gestures.length > 0) {
-    const isFacingCenter = gestures.some((g: any) => g.gesture?.includes('facing center'))
-    
-    // 如果识别到 "facing center"，则判定为正脸，返回 1.0
-    if (isFacingCenter) {
-      emitDebug('detection', '检测到正脸', { method: 'gesture: facing center' })
-      return 1.0
-    }
-    
-    // 如果识别到 facing left 或 facing right，返回较低分数
-    const isFacingLeft = gestures.some((g: any) => g.gesture?.includes('facing left'))
-    const isFacingRight = gestures.some((g: any) => g.gesture?.includes('facing right'))
-    
-    if (isFacingLeft || isFacingRight) {
-      emitDebug('detection', '检测到非正脸', { method: 'gesture', direction: isFacingLeft ? 'left' : 'right' })
-      return 0.5 // 返回 0.5，表示偏转
-    }
-  }
+  // 使用专用的人脸正对度检测模块
+  const score = checkFaceFrontalModule(face, gestures)
   
-  // 备用方案：使用角度算法计算正对度评分（更严格的精确判定）
-  // 获取人脸的 yaw (左右摇晃)、pitch (上下俯仰)、roll (旋转) 角度
-  const ang = face.rotation?.angle || { yaw: 0, pitch: 0, roll: 0 }
+  emitDebug('detection', '人脸正对度检测', {
+    score: score.toFixed(3),
+    level: score >= 0.9 ? '优秀' : score >= 0.75 ? '良好' : score >= 0.6 ? '一般' : '较差'
+  })
   
-  // 更严格的角度阈值判定
-  // 要求：yaw < 5°、pitch < 5°、roll < 3°，才能达到较高的正脸评分
-  
-  // 基础评分，从 1.0 开始
-  let score = 1.0
-  
-  // Yaw 角度惩罚（左右摇晃）- 权重最高 (60%)
-  // 目标：yaw 应该在 ±3° 以内
-  const yawThreshold = CONFIG.LIVENESS.FRONTAL_YAW_THRESHOLD
-  const yawPenalty = Math.abs(ang.yaw) > yawThreshold 
-    ? Math.abs(ang.yaw) - yawThreshold  // 超出部分作为惩罚
-    : 0
-  // yaw 每超过 1° 扣 0.15
-  score -= yawPenalty * 0.15
-  
-  // Pitch 角度惩罚（上下俯仰）- 权重中等 (25%)
-  // 目标：pitch 应该在 ±4° 以内
-  const pitchThreshold = CONFIG.LIVENESS.FRONTAL_PITCH_THRESHOLD
-  const pitchPenalty = Math.abs(ang.pitch) > pitchThreshold 
-    ? Math.abs(ang.pitch) - pitchThreshold
-    : 0
-  // pitch 每超过 1° 扣 0.1
-  score -= pitchPenalty * 0.1
-  
-  // Roll 角度惩罚（旋转）- 权重最低 (15%)
-  // 目标：roll 应该在 ±2° 以内
-  const rollThreshold = CONFIG.LIVENESS.FRONTAL_ROLL_THRESHOLD
-  const rollPenalty = Math.abs(ang.roll) > rollThreshold 
-    ? Math.abs(ang.roll) - rollThreshold
-    : 0
-  // roll 每超过 1° 扣 0.12
-  score -= rollPenalty * 0.12
-  
-  // 确保评分在 0-1 之间
-  return Math.max(0, Math.min(1, score))
+  return score
 }
 
 /**
@@ -1647,7 +1425,7 @@ async function performSilentLivenessDetection(): Promise<void> {
         const faceData = faces[0] as any
         
         // 检查图像质量 - 在进行活体检测前先验证采集图片的质量
-        const qualityCheck = checkImageQuality(faceData, tempImg.width, tempImg.height)
+        const qualityCheck = checkFaceImageQuality(faceData, tempImg.width, tempImg.height)
         if (!qualityCheck.passed) {
           emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, {quality: qualityCheck.score.toFixed(2) })
           emitDebug('quality', '采集图片质量不足，重新采集', { 

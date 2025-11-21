@@ -163,8 +163,8 @@
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
-import FaceDetector from '@/components/FaceDetector.vue'
-import { DetectionMode, LivenessAction } from '../components/face-detector'
+import FaceDetector from '../components/facedetector/FaceDetector.vue'
+import { DetectionMode, LivenessAction } from '../components/facedetector/enums'
 
 const faceDetectorRef = ref()
 const isDetecting = ref(false)

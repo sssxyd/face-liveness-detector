@@ -108,8 +108,9 @@
 
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
-import FaceDetector from '../components/FaceDetector.vue'
-import { FaceCollectedData, PromptCode, DebugData, StatusPromptData } from '../components/face-detector'
+import FaceDetector from '../components/facedetector/FaceDetector.vue'
+import { PromptCode } from '../components/facedetector/enums'
+import { FaceCollectedData, DebugData, StatusPromptData } from '../components/facedetector/types'
 
 // 人脸检测参数
 const minFaceRatio: Ref<number> = ref(0.5)  // 最小人脸占比(0-1)

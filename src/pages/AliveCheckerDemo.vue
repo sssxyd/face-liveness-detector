@@ -71,8 +71,9 @@
 
 <script setup lang="ts">
 import { ref, Ref } from 'vue'
-import FaceDetector from '../components/FaceDetector.vue'
-import { LivenessAction, LivenessCompletedData, StatusPromptData } from '../components/face-detector'
+import FaceDetector from '../components/facedetector/FaceDetector.vue'
+import { LivenessAction } from '../components/facedetector/enums'
+import { LivenessCompletedData, StatusPromptData } from '../components/facedetector/types'
 
 // Configurable liveness checks
 const livenessChecks: Ref<LivenessAction[]> = ref([LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD])
