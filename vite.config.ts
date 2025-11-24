@@ -23,11 +23,6 @@ export default defineConfig({
           // 将 Vue 框架单独分块
           'vue': ['vue']
         }
-      },
-      // 将这些 Node.js 模块标记为外部依赖
-      external: (id: string) => {
-        const nodeModules = ['fs', 'path', 'crypto', 'stream', 'buffer']
-        return nodeModules.some(mod => id === mod || (id as any).includes(mod + '/'))
       }
     },
     // 使用 esbuild 进行压缩（Vite 默认压缩器）
@@ -36,7 +31,12 @@ export default defineConfig({
   // 配置优化选项
   optimizeDeps: {
     // 排除 Human 库的预构建（很大）
-    exclude: ['@vladmandic/human']
+    exclude: ['@vladmandic/human'],
+    esbuildOptions: {
+      define: {
+        global: 'globalThis'
+      }
+    }
   },
   server: {
     port: 3000

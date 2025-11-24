@@ -1,8 +1,6 @@
 /**
  * OpenCV.js 加载器
- * 
- * @techstark/opencv-js 需要异步初始化
- * 可能是 Promise，也可能需要等待 onRuntimeInitialized 回调
+ * 基于官方示例: https://github.com/TechStark/opencv-js-examples
  */
 
 import cvModule from '@techstark/opencv-js'
@@ -12,52 +10,55 @@ let cvLoadingPromise: Promise<any> | null = null
 
 /**
  * 获取 OpenCV 实例（单例 + 异步）
- * 正确处理 Promise 和 onRuntimeInitialized 两种初始化方式
+ * 官方实现，处理三种情况：
+ * 1. cvModule 是 Promise - await 等待
+ * 2. cvModule 已初始化（有 Mat）- 直接使用
+ * 3. cvModule 需要等待 onRuntimeInitialized 回调
  */
 export async function getCv(): Promise<any> {
   if (cvInstance) {
+    console.log('[CVLoader] 返回已缓存实例')
     return cvInstance
   }
 
-  // 如果正在加载，等待现有的加载完成
   if (cvLoadingPromise) {
+    console.log('[CVLoader] 等待加载中...')
     return cvLoadingPromise
   }
 
   cvLoadingPromise = (async () => {
     try {
+      console.log('[CVLoader] 开始加载 OpenCV')
+      
       let cv: any
-
-      // 检查是否是 Promise
+      
       if (cvModule instanceof Promise) {
+        console.log('[CVLoader] cvModule 是 Promise，等待...')
         cv = await cvModule
       } else {
-        // 检查是否已经初始化
+        console.log('[CVLoader] cvModule 已加载为对象')
         if (cvModule.Mat) {
+          console.log('[CVLoader] Mat 已存在，库已初始化')
           cv = cvModule
         } else {
-          // 等待 onRuntimeInitialized 回调
+          console.log('[CVLoader] 等待 onRuntimeInitialized 回调...')
           await new Promise((resolve) => {
-            cvModule.onRuntimeInitialized = () => resolve(null)
+            cvModule.onRuntimeInitialized = () => {
+              console.log('[CVLoader] onRuntimeInitialized 完成')
+              resolve(null)
+            }
           })
           cv = cvModule
         }
       }
-
+      
       cvInstance = cv
-      console.log('[CVLoader] OpenCV 加载成功')
+      console.log('[CVLoader] 加载成功，cv.Mat =', !!cv.Mat)
       return cv
     } catch (error) {
-      console.error('[CVLoader] OpenCV 加载失败:', error)
-      // 返回一个空代理对象，防止后续代码崩溃
-      return new Proxy({}, {
-        get: () => {
-          console.warn('[CVLoader] OpenCV 未加载')
-          return undefined
-        }
-      })
-    } finally {
+      console.error('[CVLoader] 加载失败:', error)
       cvLoadingPromise = null
+      throw error
     }
   })()
 

@@ -308,23 +308,36 @@ onMounted(async () => {
   // 先异步加载 OpenCV.js
   emitDebug('initialization', '正在加载 OpenCV.js 库...')
   try {
+    console.log('[FaceDetector] [1-1] 开始 getCv()')
     await getCv()
+    console.log('[FaceDetector] [1-2] getCv() 完成')
     emitDebug('initialization', 'OpenCV.js 库加载成功')
   } catch (e) {
     const errorMsg = e instanceof Error ? e.message : '未知错误'
     emitDebug('initialization', 'OpenCV.js 加载失败', { error: errorMsg }, 'warn')
-    // 不中断初始化，继续加载 Human.js
   }
   
-  // 配置 Human 检测库
+  console.log('[FaceDetector] [2-1] 设置 isInitializing')
   isInitializing.value = true
+  console.log('[FaceDetector] [2-2] isInitializing 设置完成')
   
-  // 合并并应用 Human 配置
+  console.log('[FaceDetector] [3-1] 调用 detectOptimalBackend()')
+  const backend = detectOptimalBackend()
+  console.log('[FaceDetector] [3-2] detectOptimalBackend() 返回:', backend)
+  
+  console.log('[FaceDetector] [4-1] 调用 mergeHumanConfig()')
   const mergedConfig = mergeHumanConfig()
+  console.log('[FaceDetector] [4-2] mergeHumanConfig() 返回')
   
-  // 检查浏览器环境和能力
+  console.log('[FaceDetector] [5-1] 调用 detectBrowserInfo()')
   const browserInfo = detectBrowserInfo()
+  console.log('[FaceDetector] [5-2] detectBrowserInfo() 返回:', browserInfo)
   
+  console.log('[FaceDetector] [6-1] 调用 getWebGLInfo()')
+  const webglInfo = getWebGLInfo()
+  console.log('[FaceDetector] [6-2] getWebGLInfo() 返回:', webglInfo)
+  
+  console.log('[FaceDetector] [7-1] 发送 initialization debug 事件')
   emitDebug('initialization', '开始初始化 Human.js 库', {
     userAgent: navigator.userAgent.substring(0, 100),
     browser: browserInfo,
@@ -332,17 +345,20 @@ onMounted(async () => {
     backend: mergedConfig.backend,
     selectedReason: `${isMobileDevice.value ? '移动设备' : '桌面设备'} - ${mergedConfig.backend} 后端`
   })
+  console.log('[FaceDetector] [7-2] debug 事件发送完成')
   
-  // 检查 WebGL 支持
-  const webglInfo = getWebGLInfo()
-  emitDebug('initialization', webglInfo.available ? 'WebGL 可用' : 'WebGL 不可用', webglInfo)
-  
+  console.log('[FaceDetector] [8-1] 创建 Human 实例，backend:', mergedConfig.backend)
   human = new Human(mergedConfig as any)
+  console.log('[FaceDetector] [8-2] Human 实例创建完成')
+  
+  console.log('[FaceDetector] [9-1] 开始调用 human.load()')
   try {
     emitDebug('initialization', '正在加载 Human.js 库...', { config: Object.keys(mergedConfig) })
     
     const loadStartTime = performance.now()
+    console.log('[FaceDetector] [9-2] 等待 human.load()...')
     await human.load()
+    console.log('[FaceDetector] [9-3] human.load() 完成')
     const loadTime = performance.now() - loadStartTime
     
     emitDebug('initialization', 'Human.js 库加载成功', {
