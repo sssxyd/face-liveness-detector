@@ -309,7 +309,7 @@ onMounted(async () => {
   emitDebug('initialization', '正在加载 OpenCV.js 库...')
   try {
     console.log('[FaceDetector] [1-1] 开始 getCv()')
-    await getCv()
+    getCv()
     console.log('[FaceDetector] [1-2] getCv() 完成')
     emitDebug('initialization', 'OpenCV.js 库加载成功')
   } catch (e) {
@@ -357,7 +357,7 @@ onMounted(async () => {
     
     const loadStartTime = performance.now()
     console.log('[FaceDetector] [9-2] 等待 human.load()...')
-    await human.load()
+    human.load()
     console.log('[FaceDetector] [9-3] human.load() 完成')
     const loadTime = performance.now() - loadStartTime
     
