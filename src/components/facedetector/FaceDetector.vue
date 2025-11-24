@@ -424,7 +424,7 @@ function mergeHumanConfig(): Record<string, any> {
       enabled: true,
       detector: { rotation: false, return: true },
       mesh: { enabled: true },        // 面部网格点
-      iris: { enabled: true },        // 虹膜检测
+      iris: { enabled: false },       // 禁用虹膜检测（普通摄像头无法准确检测）
       antispoof: { enabled: true },   // 启用反欺骗检测（active liveness）
       liveness: { enabled: true }     // 启用活体检测（passive liveness）
     },

@@ -30,16 +30,6 @@
   </head>
   <body>
     <div id="app"></div>
-    <!-- Fix for CORS issues with file:// protocol -->
-    <script>
-      // 拦截动态导入错误
-      window.addEventListener('error', (event) => {
-        if (event.message && event.message.includes('CORS')) {
-          console.warn('CORS error caught:', event.message)
-          event.preventDefault()
-        }
-      }, true)
-    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

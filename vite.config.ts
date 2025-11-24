@@ -1,23 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import type { Plugin } from 'vite'
-
-// 自定义插件：移除 crossorigin 属性和 modulepreload 以支持 file:// 协议
-function removeCrossoriginPlugin(): Plugin {
-  return {
-    name: 'remove-crossorigin',
-    transformIndexHtml(html: string) {
-      // 移除所有 crossorigin 属性
-      html = html.replace(/\s+crossorigin/g, '')
-      // 移除所有 modulepreload 链接（避免 CORS 问题）
-      html = html.replace(/<link\s+rel="modulepreload"[^>]*>/g, '')
-      return html
-    }
-  }
-}
 
 export default defineConfig({
-  plugins: [vue(), removeCrossoriginPlugin()],
+  plugins: [vue()],
   base: './',
   resolve: {
     alias: {
@@ -37,21 +22,18 @@ export default defineConfig({
           'opencv': ['@dalongrong/opencv-wasm'],
           // 将 Vue 框架单独分块
           'vue': ['vue']
-        },
-        // 不生成 modulepreload 链接
-        minifyInternalExports: false
+        }
+      },
+      // 将这些 Node.js 模块标记为外部依赖
+      external: (id: string) => {
+        const nodeModules = ['fs', 'path', 'crypto', 'stream', 'buffer']
+        return nodeModules.some(mod => id === mod || (id as any).includes(mod + '/'))
       }
     },
-    // 完全禁用 modulePreload 以避免 CORS 问题
-    modulePreload: false
+    // 使用 esbuild 进行压缩（Vite 默认压缩器）
+    minify: 'esbuild'
   },
   server: {
-    port: 3000,
-    middlewareMode: false,
-    // CORS 设置
-    cors: {
-      origin: '*',
-      credentials: true
-    }
+    port: 3000
   }
 })
