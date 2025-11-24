@@ -12,7 +12,7 @@
 
 import { FaceResult, GestureResult } from '@vladmandic/human'
 import { CONFIG } from './config'
-import { getCvSync } from '../../utils/cv-loader'
+import { getCvSync } from './detector-lib-loader'
 
 /**
  * 人脸正对度检测配置接口（已废弃）

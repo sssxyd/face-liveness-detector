@@ -26,14 +26,13 @@ import type { FaceCollectedData, LivenessCompletedData, ErrorData, FaceDetectorP
 import { CONFIG } from './config'
 import { DetectionMode, LivenessAction, ErrorCode, PromptCode} from './enums'
 import { FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, PROMPT_CODE_DESCRIPTIONS, ACTION_DESCRIPTIONS } from './constants'
-import { detectBrowserInfo, isWebGLAvailable, getWebGLInfo } from './utils'
 import { ScoredList } from './types'
 // 导入人脸正对度检测模块
 import { checkFaceFrontal } from './face-frontal-checker'
 // 导入图像质量检测模块（合并了完整度和清晰度）
 import { checkImageQuality } from './image-quality-checker'
-// 导入 OpenCV.js 加载器
-import { getCv } from '../../utils/cv-loader'
+// 导入人脸检测库加载器
+import { libLoader } from './detector-lib-loader'
 
 // 定义组件 props
 const props = withDefaults(defineProps<FaceDetectorProps>(), {
@@ -305,74 +304,29 @@ onMounted(async () => {
   }
   document.addEventListener('visibilitychange', handleVisibilityChange)
   
-  // 先异步加载 OpenCV.js
-  emitDebug('initialization', '正在加载 OpenCV.js 库...')
-  try {
-    console.log('[FaceDetector] [1-1] 开始 getCv()')
-    getCv()
-    console.log('[FaceDetector] [1-2] getCv() 完成')
-    emitDebug('initialization', 'OpenCV.js 库加载成功')
-  } catch (e) {
-    const errorMsg = e instanceof Error ? e.message : '未知错误'
-    emitDebug('initialization', 'OpenCV.js 加载失败', { error: errorMsg }, 'warn')
-  }
-  
-  console.log('[FaceDetector] [2-1] 设置 isInitializing')
+  // 标记正在初始化
   isInitializing.value = true
-  console.log('[FaceDetector] [2-2] isInitializing 设置完成')
   
-  console.log('[FaceDetector] [3-1] 调用 detectOptimalBackend()')
-  const backend = detectOptimalBackend()
-  console.log('[FaceDetector] [3-2] detectOptimalBackend() 返回:', backend)
-  
-  console.log('[FaceDetector] [4-1] 调用 mergeHumanConfig()')
-  const mergedConfig = mergeHumanConfig()
-  console.log('[FaceDetector] [4-2] mergeHumanConfig() 返回')
-  
-  console.log('[FaceDetector] [5-1] 调用 detectBrowserInfo()')
-  const browserInfo = detectBrowserInfo()
-  console.log('[FaceDetector] [5-2] detectBrowserInfo() 返回:', browserInfo)
-  
-  console.log('[FaceDetector] [6-1] 调用 getWebGLInfo()')
-  const webglInfo = getWebGLInfo()
-  console.log('[FaceDetector] [6-2] getWebGLInfo() 返回:', webglInfo)
-  
-  console.log('[FaceDetector] [7-1] 发送 initialization debug 事件')
-  emitDebug('initialization', '开始初始化 Human.js 库', {
-    userAgent: navigator.userAgent.substring(0, 100),
-    browser: browserInfo,
-    modelBasePath: mergedConfig.modelBasePath,
-    backend: mergedConfig.backend,
-    selectedReason: `${isMobileDevice.value ? '移动设备' : '桌面设备'} - ${mergedConfig.backend} 后端`
-  })
-  console.log('[FaceDetector] [7-2] debug 事件发送完成')
-  
-  console.log('[FaceDetector] [8-1] 创建 Human 实例，backend:', mergedConfig.backend)
-  human = new Human(mergedConfig as any)
-  console.log('[FaceDetector] [8-2] Human 实例创建完成')
-  
-  console.log('[FaceDetector] [9-1] 开始调用 human.load()')
   try {
-    emitDebug('initialization', '正在加载 Human.js 库...', { config: Object.keys(mergedConfig) })
+    // 使用加载器异步加载 OpenCV 和 Human.js
+    emitDebug('initialization', '开始加载人脸检测库...')
+    console.log('[FaceDetector] 开始加载 OpenCV 和 Human.js...')
     
-    const loadStartTime = performance.now()
-    console.log('[FaceDetector] [9-2] 等待 human.load()...')
-    human.load()
-    console.log('[FaceDetector] [9-3] human.load() 完成')
-    const loadTime = performance.now() - loadStartTime
-    
-    emitDebug('initialization', 'Human.js 库加载成功', {
-      loadTime: `${loadTime.toFixed(2)}ms`,
-      modelsAvailable: human.models ? Object.keys(human.models).length : 0,
-      modelsStatus: human.models ? Object.entries(human.models).reduce((acc, [key, model]: any) => {
-        acc[key] = {
-          enabled: model?.enabled,
-          loaded: model?.['loaded'] || model?.state,
-          type: typeof model
-        }
-        return acc
-      }, {} as Record<string, any>) : {}
+    const result = await libLoader.load({
+      humanConfig: props.humanConfig
     })
+    
+    human = result.human
+    
+    emitDebug('initialization', '人脸检测库加载成功', {
+      hasOpenCV: !!result.cv,
+      hasHuman: !!result.human
+    })
+    
+    if (!human) {
+      throw new Error('Human.js 加载失败，实例为空')
+    }
+    console.log('[FaceDetector] 库加载完成，Human.js 版本:', human.version)
     
     // 标记组件已就绪，发送 ready 事件
     isReady.value = true
@@ -380,14 +334,15 @@ onMounted(async () => {
     emitDebug('initialization', '组件已就绪', {})
   } catch (e) {
     const errorMsg = e instanceof Error ? e.message : '未知错误'
-    emitDebug('initialization', 'Human.js 加载失败', {
+    emitDebug('initialization', '人脸检测库加载失败', {
       error: errorMsg,
       errorStack: e instanceof Error ? e.stack : 'N/A'
     }, 'error')
-    console.error('[FaceDetector] Failed to load Human library:', e)
+    console.error('[FaceDetector] Failed to load detection libraries:', e)
     emit(FACE_DETECTOR_EVENTS.ERROR, { code: ErrorCode.ENGINE_NOT_INITIALIZED, message: '检测库加载失败: ' + errorMsg })
+  } finally {
+    isInitializing.value = false
   }
-  isInitializing.value = false
 })
 
 // 组件卸载时清理资源
@@ -416,68 +371,7 @@ onUnmounted(() => {
 // 使用 CONFIG 替代本地常量定义（已从 face-detector.ts 导入）
 
 // ===== 配置合并辅助函数 =====
-/**
- * 检测最优的推理后端
- * 策略: 桌面优先 WebGL, 移动优先 WASM, 特殊浏览器强制 WASM
- */
-function detectOptimalBackend(): string {
-  const browserInfo = detectBrowserInfo()
-  
-  // 特殊浏览器：优先使用 WASM（更稳定可靠）
-  if (browserInfo.isSafari || browserInfo.isWeChat || browserInfo.isAlipay || browserInfo.isQQ || browserInfo.isWebView) {
-    return 'wasm'
-  }
-  
-  // 移动设备：检测 WebGL 可用性
-  if (browserInfo.isMobile) {
-    return isWebGLAvailable() ? 'webgl' : 'wasm'
-  }
-  
-  // 桌面设备：优先 WebGL（性能更好）
-  return isWebGLAvailable() ? 'webgl' : 'wasm'
-}
-
-/**
- * 合并 Human.js 配置，用户配置优先级更高
- */
-function mergeHumanConfig(): Record<string, any> {
-  const defaultConfig = {
-    // 自动检测最优后端
-    backend: detectOptimalBackend(),
-    // 模型文件本地路径
-    modelBasePath: './models',
-    // WASM 文件本地路径
-    wasmPath: './wasm',
-    // 人脸检测配置
-    face: {
-      enabled: true,
-      detector: { rotation: false, return: true },
-      mesh: { enabled: true },        // 面部网格点
-      iris: { enabled: false },       // 禁用虹膜检测（普通摄像头无法准确检测）
-      antispoof: { enabled: true },   // 启用反欺骗检测（active liveness）
-      liveness: { enabled: true }     // 启用活体检测（passive liveness）
-    },
-    body: { enabled: false },      // 禁用身体检测
-    hand: { enabled: false },      // 禁用手部检测
-    object: { enabled: false },    // 禁用物体检测
-    gesture: { enabled: true }     // 启用手势检测(包含眨眼)
-  }
-  
-  // 如果用户没有提供自定义配置，直接返回默认配置
-  if (Object.keys(props.humanConfig).length === 0) {
-    return defaultConfig
-  }
-  
-  // 深度合并用户配置和默认配置
-  return {
-    ...defaultConfig,
-    ...props.humanConfig,
-    face: {
-      ...defaultConfig.face,
-      ...(props.humanConfig?.face || {})
-    }
-  }
-}
+// 注：配置合并逻辑已移至 face-detector-loader.ts
 
 // ===== 设备检测与方向处理 =====
 /**

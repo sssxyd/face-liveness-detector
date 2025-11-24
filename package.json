@@ -4,7 +4,6 @@
   "description": "Vue 3 face detector component using human.js & openCV.js",
   "type": "module",
   "scripts": {
-    "setup": "npm run copy:human-models && npm run download:tensorflow-wasm",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
