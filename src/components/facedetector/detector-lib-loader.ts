@@ -55,11 +55,14 @@ export class DetectorLibLoader {
     try {
       console.log('[DetectorLibLoader] 开始加载 OpenCV 和 Human.js')
 
-      // 并行加载两个库
-      const [cv, human] = await Promise.all([
-        this._loadOpenCV(),
-        this._loadHuman(config.humanConfig)
-      ])
+      // 顺序加载两个库，避免 WASM 竞争
+      // 先加载 OpenCV（包含 WASM 初始化）
+      console.log('[DetectorLibLoader] 先加载 OpenCV.js...')
+      const cv = await this._loadOpenCV()
+
+      // 然后加载 Human.js
+      console.log('[DetectorLibLoader] 再加载 Human.js...')
+      const human = await this._loadHuman(config.humanConfig)
 
       this.cv = cv
       this.human = human
@@ -136,7 +139,10 @@ export class DetectorLibLoader {
                 if (typeof originalCallback === 'function') {
                   originalCallback()
                 }
-                resolve(cvModule)
+                // 等待一小段时间确保 Mat 真正初始化完成
+                setTimeout(() => {
+                  resolve(cvModule)
+                }, 100)
               }
             }),
             new Promise<any>((_, reject) => {
