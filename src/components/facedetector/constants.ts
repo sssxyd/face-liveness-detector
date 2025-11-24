@@ -55,6 +55,7 @@ export const PROMPT_CODE_DESCRIPTIONS: Record<PromptCode, string> = {
   [PromptCode.FACE_TOO_SMALL]: '请靠近摄像头',
   [PromptCode.FACE_TOO_LARGE]: '请远离摄像头',
   [PromptCode.FACE_NOT_FRONTAL]: '请正对摄像头',
+  [PromptCode.BLURRY_IMAGE]: '图像模糊',
   [PromptCode.GOOD_IMAGE_QUALITY]: '图像清晰',
   [PromptCode.POOR_IMAGE_QUALITY]: '图像模糊请调整',
   [PromptCode.PLEASE_PERFORM_ACTION]: '请完成指定动作',

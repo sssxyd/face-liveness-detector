@@ -17,6 +17,8 @@ export default defineConfig({
         manualChunks: {
           // 将 Human.js 单独分块
           'human': ['@vladmandic/human'],
+          // 将 OpenCV.js 单独分块
+          'opencv': ['@techstark/opencv-js'],
           // 将 Vue 框架单独分块
           'vue': ['vue']
         }

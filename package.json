@@ -1,5 +1,5 @@
 {
-  "name": "js-face-detector",
+  "name": "face-liveness-detector",
   "version": "1.0.1",
   "description": "Vue 3 face detector component using human.js",
   "type": "module",
@@ -14,6 +14,7 @@
     "download:wasm": "node download-wasm.js"
   },
   "dependencies": {
+    "@techstark/opencv-js": "^4.12.0-release.1",
     "@vladmandic/human": "^3.3.0",
     "vue": "^3.4.0"
   },

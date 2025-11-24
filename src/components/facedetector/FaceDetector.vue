@@ -30,7 +30,7 @@ import { detectBrowserInfo, isWebGLAvailable, getWebGLInfo } from './utils'
 import { ScoredList } from './types'
 // 导入人脸正对度检测模块
 import { checkFaceFrontal } from './face-frontal-detection'
-// 导入图像质量检测模块
+// 导入图像质量检测模块（合并了完整度和清晰度）
 import { checkImageQuality } from './image-quality-checker'
 
 // 定义组件 props
@@ -913,13 +913,22 @@ async function detect(): Promise<void> {
         emitDebug('detection', '人脸太大', { ratio: faceRatio.toFixed(4), minRatio: props.minFaceRatio, maxRatio: props.maxFaceRatio }, 'info')
         scheduleNextDetection()
         return
-      } 
+      }
 
       // 检查人脸是否正对摄像头 (0-1 评分)
       let frontal = 1
+      
+      // 一次性绘制视频帧到 canvas，后续多次使用
+      const frameCanvas = drawVideoToCanvas()
+      if (!frameCanvas) {
+        emitDebug('detection', '绘制视频帧到 canvas 失败', {}, 'warn')
+        scheduleNextDetection()
+        return
+      }
+
       // 仅在采集阶段检查正对度，校验阶段不检查
       if (detectionState.collectedImages.size() < CONFIG.IMAGE_QUALITY.COLLECTION_COUNT) {
-        frontal = checkFaceFrontal(face, result.gesture)
+        frontal = checkFaceFrontal(face, result.gesture, frameCanvas)
         updateBorderColor(faceRatio, frontal)
         if (frontal < props.minFrontal) {
           emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal: frontal })
@@ -927,27 +936,31 @@ async function detect(): Promise<void> {
           scheduleNextDetection()
           return
         }        
-      }
-      
-      const imageQuality = checkImageQuality(face, videoWidth.value, videoHeight.value)
-      updateBorderColor(faceRatio, frontal, imageQuality.passed)
-      if (!imageQuality.passed) {
-        emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { quality: imageQuality.score.toFixed(2) })
-        emitDebug('detection', '人脸图像质量不符合要求', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4), qualityScore: imageQuality.score.toFixed(2), reasons: imageQuality.reasons }, 'info')
+      }      
+      // 使用同一个 canvas 进行图片质量检查
+      const qualityResult = checkImageQuality(frameCanvas, face, videoWidth.value, videoHeight.value)
+      if (!qualityResult.passed) {
+        if(qualityResult.blurReasons.length > 0){
+          emitStatusPrompt(PromptCode.BLURRY_IMAGE, { score: qualityResult.score })
+        } else {
+          emitStatusPrompt(PromptCode.POOR_IMAGE_QUALITY, { score: qualityResult.score })
+        }
         scheduleNextDetection()
         return
       }
-
-      const frameImage = captureFrame()
+      
+      // 将 canvas 转换为 Base64
+      const frameImage = canvasToBase64(frameCanvas)
       if (!frameImage) {
         emitDebug('detection', '捕获人脸图像失败', {}, 'warn')
         scheduleNextDetection()
         return
       }
 
-      detectionState.collectedImages.add(frameImage, imageQuality.score)
+      detectionState.collectedImages.add(frameImage, qualityResult.score)
 
-      emitDebug('detection', '检测到单个人脸', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4), quality: imageQuality.score.toFixed(4) })
+      emitStatusPrompt(PromptCode.GOOD_IMAGE_QUALITY, { score: qualityResult.score })
+      emitDebug('detection', '检测到单个人脸', { ratio: faceRatio.toFixed(4), frontal: frontal.toFixed(4), quality: qualityResult.score.toFixed(4) })
       handleSingleFace(face, result.gesture)
     } else {
       // 处理多人脸或无人脸的情况
@@ -1130,14 +1143,14 @@ function displayResultImage(resultImageBase64: string): void {
 }
 
 /**
- * 捕获当前视频帧并转换为 JPEG 图片
- * @returns {string} Base64 格式的 JPEG 图片数据
+ * 从视频帧绘制到 canvas（内部使用，不转 Base64）
+ * @returns {HTMLCanvasElement | null} 绘制后的 canvas，如果失败返回 null
  */
-function captureFrame(): string | null {
+function drawVideoToCanvas(): HTMLCanvasElement | null {
   try {
     if (!videoRef.value) return null
     
-      // Safari 兼容性修复：
+    // Safari 兼容性修复：
     // 某些情况下 videoWidth/videoHeight 可能为 0 或 undefined
     // 优先使用实际设置的宽高值，而不仅依赖于 video 元素的 videoWidth/videoHeight 属性
     let videoWidth_actual = videoRef.value.videoWidth
@@ -1163,7 +1176,9 @@ function captureFrame(): string | null {
       captureCanvas.height = videoHeight_actual
       captureCtx = captureCanvas.getContext('2d')
       emitDebug('capture', 'Canvas 创建/调整大小', { width: videoWidth_actual, height: videoHeight_actual })
-    }    if (!captureCtx) return null
+    }
+    
+    if (!captureCtx) return null
     
     // 在尝试绘制前，再次验证视频的可绘制性（Safari 特定修复）
     if (videoRef.value.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA && 
@@ -1173,14 +1188,39 @@ function captureFrame(): string | null {
     }
     
     captureCtx.drawImage(videoRef.value, 0, 0, videoWidth_actual, videoHeight_actual)
+    emitDebug('capture', '帧已绘制到 canvas')
     
-    const imageData = captureCanvas.toDataURL('image/jpeg', 0.9)
-    emitDebug('capture', '帧已捕获', { size: imageData.length })
-    return imageData
+    return captureCanvas
   } catch (e) {
-    emitDebug('capture', '捕获帧失败', { error: (e as Error).message }, 'error')
+    emitDebug('capture', '绘制帧到 canvas 失败', { error: (e as Error).message }, 'error')
     return null
   }
+}
+
+/**
+ * 将 canvas 转换为 Base64 JPEG 图片数据
+ * @param {HTMLCanvasElement} canvas - 输入的 canvas
+ * @returns {string | null} Base64 格式的 JPEG 图片数据
+ */
+function canvasToBase64(canvas: HTMLCanvasElement): string | null {
+  try {
+    const imageData = canvas.toDataURL('image/jpeg', 0.9)
+    emitDebug('capture', '图片已转换为 Base64', { size: imageData.length })
+    return imageData
+  } catch (e) {
+    emitDebug('capture', '转换为 Base64 失败', { error: (e as Error).message }, 'error')
+    return null
+  }
+}
+
+/**
+ * 捕获当前视频帧（返回 Base64）
+ * @returns {string | null} Base64 格式的 JPEG 图片数据
+ */
+function captureFrame(): string | null {
+  const canvas = drawVideoToCanvas()
+  if (!canvas) return null
+  return canvasToBase64(canvas)
 }
 
 /**
