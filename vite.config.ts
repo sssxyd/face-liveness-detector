@@ -19,7 +19,7 @@ export default defineConfig({
           // 将 Human.js 单独分块
           'human': ['@vladmandic/human'],
           // 将 OpenCV.js 单独分块
-          'opencv': ['@dalongrong/opencv-wasm'],
+          'opencv': ['@techstark/opencv-js'],
           // 将 Vue 框架单独分块
           'vue': ['vue']
         }
@@ -32,6 +32,11 @@ export default defineConfig({
     },
     // 使用 esbuild 进行压缩（Vite 默认压缩器）
     minify: 'esbuild'
+  },
+  // 配置优化选项
+  optimizeDeps: {
+    // 排除 Human 库的预构建（很大）
+    exclude: ['@vladmandic/human']
   },
   server: {
     port: 3000

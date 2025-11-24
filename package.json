@@ -1,10 +1,10 @@
 {
   "name": "face-liveness-detector",
   "version": "1.0.1",
-  "description": "Vue 3 face detector component using human.js",
+  "description": "Vue 3 face detector component using human.js & openCV.js",
   "type": "module",
   "scripts": {
-    "setup": "npm run copy:human-models && npm run download:tensorflow-wasm && npm run copy:opencv-wasm",
+    "setup": "npm run copy:human-models && npm run download:tensorflow-wasm",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -12,11 +12,10 @@
     "publish:build": "npm run build && npm run publish",
     "type-check": "vue-tsc --noEmit",
     "copy:human-models": "node copy-human-models.js",
-    "download:tensorflow-wasm": "node download-tensorflow-wasm.js",
-    "copy:opencv-wasm": "node copy-opencv-wasm.js"
+    "download:tensorflow-wasm": "node download-tensorflow-wasm.js"
   },
   "dependencies": {
-    "@dalongrong/opencv-wasm": "^4.8.1-1",
+    "@techstark/opencv-js": "4.12.0-release.1",
     "@vladmandic/human": "^3.3.0",
     "vue": "^3.4.0"
   },

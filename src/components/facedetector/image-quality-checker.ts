@@ -6,11 +6,11 @@
  * 2. 模糊度检测 - 图像是否清晰
  * 3. 轮廓清晰度 - 轮廓的连通性和完整度
  * 
- * 使用混合检测策略，结合 Human.js 和 OpenCV WASM 优势
+ * 使用混合检测策略，结合 Human.js 和 OpenCV.js 优势
  */
 
 import { FaceResult } from '@vladmandic/human'
-import { cv } from '@dalongrong/opencv-wasm'
+import { getCvSync } from '../../utils/cv-loader'
 
 // ==================== 接口定义 ====================
 
@@ -267,6 +267,7 @@ function detectFaceCompletenessOpenCVContour(
   faceBox: [number, number, number, number]
 ): number {
   try {
+    const cv = getCvSync()
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available')
       return 1.0
@@ -329,6 +330,7 @@ function detectFaceCompletenessOpenCVSharpness(
   faceBox: [number, number, number, number]
 ): number {
   try {
+    const cv = getCvSync()
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available')
       return 1.0
@@ -405,6 +407,7 @@ function checkImageSharpness(
   overallScore: number
 } {
   try {
+    const cv = getCvSync()
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available for sharpness check')
       return {
@@ -445,10 +448,10 @@ function checkImageSharpness(
 
       try {
         // 方法 1：拉普拉斯方差
-        const laplacianResult = calculateLaplacianVariance(roi, cv, config.minLaplacianVariance)
+        const laplacianResult = calculateLaplacianVariance(roi, config.minLaplacianVariance)
 
         // 方法 2：梯度清晰度
-        const gradientResult = calculateGradientSharpness(roi, cv, config.minGradientSharpness)
+        const gradientResult = calculateGradientSharpness(roi, config.minGradientSharpness)
 
         // 综合评分
         const laplacianScore = Math.min(1, laplacianResult.value / 200)
@@ -495,10 +498,20 @@ function checkImageSharpness(
  */
 function calculateLaplacianVariance(
   roi: any,
-  cv: any,
   minThreshold: number
 ): QualityMetricResult {
   try {
+    const cv = getCvSync()
+    if (!cv) {
+      return {
+        name: '拉普拉斯方差',
+        value: 1,
+        threshold: minThreshold,
+        passed: true,
+        description: 'OpenCV 不可用'
+      }
+    }
+
     let gray = roi
     if (roi.channels() !== 1) {
       gray = new cv.Mat()
@@ -550,10 +563,20 @@ function calculateLaplacianVariance(
  */
 function calculateGradientSharpness(
   roi: any,
-  cv: any,
   minThreshold: number
 ): QualityMetricResult {
   try {
+    const cv = getCvSync()
+    if (!cv) {
+      return {
+        name: '梯度清晰度',
+        value: 1,
+        threshold: minThreshold,
+        passed: true,
+        description: 'OpenCV 不可用'
+      }
+    }
+
     let gray = roi
     if (roi.channels() !== 1) {
       gray = new cv.Mat()

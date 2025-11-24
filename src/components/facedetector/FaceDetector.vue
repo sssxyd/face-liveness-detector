@@ -32,6 +32,8 @@ import { ScoredList } from './types'
 import { checkFaceFrontal } from './face-frontal-checker'
 // 导入图像质量检测模块（合并了完整度和清晰度）
 import { checkImageQuality } from './image-quality-checker'
+// 导入 OpenCV.js 加载器
+import { getCv } from '../../utils/cv-loader'
 
 // 定义组件 props
 const props = withDefaults(defineProps<FaceDetectorProps>(), {
@@ -302,6 +304,17 @@ onMounted(async () => {
     }
   }
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  
+  // 先异步加载 OpenCV.js
+  emitDebug('initialization', '正在加载 OpenCV.js 库...')
+  try {
+    await getCv()
+    emitDebug('initialization', 'OpenCV.js 库加载成功')
+  } catch (e) {
+    const errorMsg = e instanceof Error ? e.message : '未知错误'
+    emitDebug('initialization', 'OpenCV.js 加载失败', { error: errorMsg }, 'warn')
+    // 不中断初始化，继续加载 Human.js
+  }
   
   // 配置 Human 检测库
   isInitializing.value = true

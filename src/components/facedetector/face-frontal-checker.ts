@@ -11,8 +11,8 @@
  */
 
 import { FaceResult, GestureResult } from '@vladmandic/human'
-import { cv } from '@dalongrong/opencv-wasm'
 import { CONFIG } from './config'
+import { getCvSync } from '../../utils/cv-loader'
 
 /**
  * 人脸正对度检测配置接口（已废弃）
@@ -459,6 +459,7 @@ function detectFeatureSymmetry(
   face: FaceResult
 ): { score: number; landmarks: any } {
   try {
+    const cv = getCvSync()
     if (!cv) {
       return { score: 1.0, landmarks: undefined }
     }
@@ -614,6 +615,7 @@ function detectContourSymmetry(
   canvas: HTMLCanvasElement
 ): { score: number; contour: any } {
   try {
+    const cv = getCvSync()
     if (!cv) {
       return { score: 1.0, contour: undefined }
     }
