@@ -29,7 +29,7 @@ import { FACE_DETECTOR_EVENTS, BORDER_COLOR_STATES, PROMPT_CODE_DESCRIPTIONS, AC
 import { detectBrowserInfo, isWebGLAvailable, getWebGLInfo } from './utils'
 import { ScoredList } from './types'
 // 导入人脸正对度检测模块
-import { checkFaceFrontal } from './face-frontal-detection'
+import { checkFaceFrontal } from './face-frontal-checker'
 // 导入图像质量检测模块（合并了完整度和清晰度）
 import { checkImageQuality } from './image-quality-checker'
 
