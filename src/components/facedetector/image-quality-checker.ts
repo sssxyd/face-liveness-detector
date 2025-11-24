@@ -6,10 +6,11 @@
  * 2. 模糊度检测 - 图像是否清晰
  * 3. 轮廓清晰度 - 轮廓的连通性和完整度
  * 
- * 使用混合检测策略，结合 Human.js 和 OpenCV.js 优势
+ * 使用混合检测策略，结合 Human.js 和 OpenCV WASM 优势
  */
 
 import { FaceResult } from '@vladmandic/human'
+import { cv } from '@dalongrong/opencv-wasm'
 
 // ==================== 接口定义 ====================
 
@@ -266,12 +267,11 @@ function detectFaceCompletenessOpenCVContour(
   faceBox: [number, number, number, number]
 ): number {
   try {
-    const cv = (window as any).cv
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available')
       return 1.0
     }
-
+    
     const img = cv.imread(canvas)
     const gray = new cv.Mat()
 
@@ -329,7 +329,6 @@ function detectFaceCompletenessOpenCVSharpness(
   faceBox: [number, number, number, number]
 ): number {
   try {
-    const cv = (window as any).cv
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available')
       return 1.0
@@ -406,7 +405,6 @@ function checkImageSharpness(
   overallScore: number
 } {
   try {
-    const cv = (window as any).cv
     if (!cv) {
       console.warn('[ImageQuality] OpenCV not available for sharpness check')
       return {

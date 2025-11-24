@@ -4,17 +4,19 @@
   "description": "Vue 3 face detector component using human.js",
   "type": "module",
   "scripts": {
+    "setup": "npm run copy:human-models && npm run download:tensorflow-wasm && npm run copy:opencv-wasm",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "publish": "node publish.js",
     "publish:build": "npm run build && npm run publish",
     "type-check": "vue-tsc --noEmit",
-    "copy:models": "node copy-models.js",
-    "download:wasm": "node download-wasm.js"
+    "copy:human-models": "node copy-human-models.js",
+    "download:tensorflow-wasm": "node download-tensorflow-wasm.js",
+    "copy:opencv-wasm": "node copy-opencv-wasm.js"
   },
   "dependencies": {
-    "@techstark/opencv-js": "^4.12.0-release.1",
+    "@dalongrong/opencv-wasm": "^4.8.1-1",
     "@vladmandic/human": "^3.3.0",
     "vue": "^3.4.0"
   },
