@@ -3,53 +3,23 @@
  */
 
 import type { FaceDetectionEngineConfig } from './types'
-import { LivenessAction, PromptCode } from './enums'
-
-/**
- * Prompt code description mapping
- */
-export const PROMPT_CODE_DESCRIPTIONS = Object.freeze({
-  [PromptCode.NO_FACE]: 'No face detected',
-  [PromptCode.MULTIPLE_FACE]: 'Multiple Faces Detected',
-  [PromptCode.FACE_TOO_SMALL]: 'Please move closer',
-  [PromptCode.FACE_TOO_LARGE]: 'Please move farther',
-  [PromptCode.FACE_NOT_FRONTAL]: 'Please face the camera',
-  [PromptCode.BLURRY_IMAGE]: 'Image is blurry',
-  [PromptCode.LOW_QUALITY]: 'Low image quality',
-  [PromptCode.FRAME_DETECTED]: 'Face detected'
-})
-
-/**
- * Action description mapping
- */
-export const ACTION_DESCRIPTIONS = Object.freeze({
-  [LivenessAction.BLINK]: 'Blink',
-  [LivenessAction.MOUTH_OPEN]: 'Open Mouth',
-  [LivenessAction.NOD]: 'Nod'
-})
-
-/**
- * Border color state mapping
- */
-export const BORDER_COLOR_STATES = Object.freeze({
-  IDLE: '#ddd',           // Idle state
-  MULTIPLE_FACES: '#ffc107', // Multiple faces warning
-  PERFECT: '#42b983',     // Perfect state
-  PARTIAL: '#ff9800',     // Partially valid
-  INVALID: '#f5222d',     // Invalid
-  SUCCESS: '#16d355',     // Success
-  ERROR: '#f5222d'        // Error
-})
+import { LivenessAction } from './enums'
 
 /**
  * Default configuration for FaceDetectionEngine
  */
 export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
+  // resource paths
+  human_model_path: undefined,
+  tensorflow_wasm_path: undefined,
+
   // DetectionSettings defaults
-  camera_max_size: 640,
+  video_width: 640,
+  video_height: 640,
+  video_mirror: true,
   video_load_timeout: 5000,
   detection_frame_delay: 100,
-  detection_idle_timeout: 60000,
+  error_retry_delay: 200,
 
   // CollectionSettings defaults
   silent_detect_count: 3,
@@ -77,33 +47,7 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   liveness_action_count: 1,
   liveness_action_random: true,
   min_mouth_open_percent: 0.2,
-  liveness_action_desc: {
-    [LivenessAction.BLINK]: 'Please Blink',
-    [LivenessAction.MOUTH_OPEN]: 'Please Open Mouth',
-    [LivenessAction.NOD]: 'Please Nod'
-  } as Record<LivenessAction, string>,
 
-  // StatusSettings defaults
-  show_status_prompt: true,
-  status_prompt_duration: 3000,
-  prompt_code_desc: {
-    [PromptCode.NO_FACE]: 'No face detected',
-    [PromptCode.MULTIPLE_FACE]: 'Multiple Faces Detected',
-    [PromptCode.FACE_TOO_SMALL]: 'Please move closer',
-    [PromptCode.FACE_TOO_LARGE]: 'Please move farther',
-    [PromptCode.FACE_NOT_FRONTAL]: 'Please face the camera',
-    [PromptCode.BLURRY_IMAGE]: 'Image is blurry',
-    [PromptCode.LOW_QUALITY]: 'Low image quality',
-    [PromptCode.FRAME_DETECTED]: 'Face detected'
-  } as Record<PromptCode, string>,
-
-  // BorderColorsSettings defaults
-  show_border_color: true,
-  border_color_idle: '#ddd',
-  border_color_warning: '#ffc107',
-  border_color_ready: '#42b983',
-  border_color_success: '#16d355',
-  border_color_error: '#f5222d'
 })
 
 /**
@@ -136,20 +80,6 @@ export function mergeConfig(
       ...DEFAULT_CONFIG.image_quality_features,
       ...userConfig.image_quality_features
     }
-  }
-
-  if (userConfig.liveness_action_desc) {
-    merged.liveness_action_desc = {
-      ...DEFAULT_CONFIG.liveness_action_desc,
-      ...userConfig.liveness_action_desc
-    } as Record<LivenessAction, string>
-  }
-
-  if (userConfig.prompt_code_desc) {
-    merged.prompt_code_desc = {
-      ...DEFAULT_CONFIG.prompt_code_desc,
-      ...userConfig.prompt_code_desc
-    } as Record<PromptCode, string>
   }
 
   return merged

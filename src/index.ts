@@ -3,24 +3,25 @@
  * Framework-agnostic face liveness detection engine
  */
 
-import Human, { FaceResult, GestureResult } from '@vladmandic/human'
+import Human, { Box, FaceResult, GestureResult } from '@vladmandic/human'
 import type {
   FaceDetectionEngineConfig,
-  LivenessDetectedData,
-  LivenessCompletedData,
-  ErrorData,
-  DebugData,
-  StatusPromptData,
-  ActionPromptData,
+  LivenessDetectedEventData,
+  LivenessCompletedEventData,
+  DetectorErrorEventData,
+  DetectorDebugEventData,
+  StatusPromptEventData,
+  ActionPromptEventData,
   EventMap,
   ScoredList,
   FaceFrontalFeatures,
   ImageQualityFeatures,
-  EventListener
+  EventListener,
+  DetectorLoadedEventData
 } from './types'
 import { ScoredList as ScoredListClass } from './types'
-import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus, DetectionMode } from './enums'
-import { DEFAULT_CONFIG, mergeConfig, PROMPT_CODE_DESCRIPTIONS, BORDER_COLOR_STATES, ACTION_DESCRIPTIONS } from './config'
+import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus } from './enums'
+import { DEFAULT_CONFIG, mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
@@ -33,6 +34,7 @@ interface DetectionState {
   completedActions: Set<LivenessAction>
   currentAction: LivenessAction | null
   collectedImages: ScoredList<string>
+  collectedFaces: ScoredList<string>
 }
 
 /**
@@ -80,14 +82,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private actionTimeoutId: ReturnType<typeof setTimeout> | null = null
   private detectionStartTime: number = 0
 
-  private detectionState: DetectionState = {
-    completedActions: new Set(),
-    currentAction: null,
-    collectedImages: new ScoredListClass(3) // COLLECTION_COUNT default
-  }
-
   private actualVideoWidth: number = 0
   private actualVideoHeight: number = 0
+
+  private detectionState: DetectionState
 
   /**
    * Constructor
@@ -96,6 +94,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   constructor(config?: Partial<FaceDetectionEngineConfig>) {
     super()
     this.config = mergeConfig(config)
+    this.detectionState = {
+      completedActions: new Set(),
+      currentAction: null,
+      collectedImages: new ScoredListClass(this.config.silent_detect_count ?? 3), 
+      collectedFaces: new ScoredListClass(this.config.silent_detect_count ?? 3) 
+    }
   }
 
   /**
@@ -123,28 +127,35 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       // Load Human.js
       this.emitDebug('initialization', 'Loading Human.js...')
-      this.human = await loadHuman('/models', '/wasm')
+      this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
       if (!this.human) {
-        throw new Error('Failed to load Human.js: instance is null')
+        const errorData: DetectorLoadedEventData = {
+          success: false,
+          error: 'Failed to load Human.js: instance is null'
+        }
+        this.emit('detector-loaded', errorData)
+        return
       }
-      this.emitDebug('initialization', 'Human.js loaded successfully', {
-        version: this.human.version
-      })
 
       this.isReady = true
-      this.emit('detector-loaded' as any, undefined)
-      this.emitDebug('initialization', 'Engine initialized and ready')
+      const loadedData: DetectorLoadedEventData = {
+        success: true,
+        opencv_version: cv?.getBuildInformation?.() || 'unknown',
+        human_version: this.human.version
+      }
+      this.emit('detector-loaded', loadedData)
+      this.emitDebug('initialization', 'Engine initialized and ready', loadedData)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      const errorData: DetectorLoadedEventData = {
+        success: false,
+        error: errorMsg
+      }
+      this.emit('detector-loaded', errorData)
       this.emitDebug('initialization', 'Failed to load libraries', {
         error: errorMsg,
         stack: error instanceof Error ? error.stack : 'N/A'
       }, 'error')
-      this.emit('detector-error' as any, {
-        code: ErrorCode.ENGINE_NOT_INITIALIZED,
-        message: `Failed to load detection libraries: ${errorMsg}`
-      })
-      throw error
     } finally {
       this.isInitializing = false
     }
@@ -177,8 +188,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'user',
-            width: { ideal: this.config.camera_max_size },
-            height: { ideal: this.config.camera_max_size },
+            width: { ideal: this.config.video_width },
+            height: { ideal: this.config.video_height },
             aspectRatio: { ideal: 1.0 }
           },
           audio: false
@@ -202,14 +213,19 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.videoElement.autoplay = true
       this.videoElement.playsInline = true
       this.videoElement.muted = true
+      
+      // Apply mirror effect if configured
+      if (this.config.video_mirror) {
+        this.videoElement.style.transform = 'scaleX(-1)'
+      }
 
       // Get actual video stream resolution
       const videoTrack = this.stream.getVideoTracks()[0]
       if (videoTrack) {
         const settings = videoTrack.getSettings?.()
         if (settings) {
-          this.actualVideoWidth = settings.width || this.config.camera_max_size || 640
-          this.actualVideoHeight = settings.height || this.config.camera_max_size || 640
+          this.actualVideoWidth = settings.width || this.config.video_width || 640
+          this.actualVideoHeight = settings.height || this.config.video_height || 640
           this.emitDebug('video-setup', 'Video stream resolution detected', {
             width: this.actualVideoWidth,
             height: this.actualVideoHeight
@@ -253,7 +269,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       this.emitDebug('video-setup', 'Detection started')
     } catch (error) {
-      this.isDetecting = false
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'
       this.emitDebug('video-setup', 'Failed to start detection', {
         error: errorMsg,
@@ -263,7 +278,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         code: ErrorCode.STREAM_ACQUISITION_FAILED,
         message: errorMsg
       })
-      throw error
+      this.stopDetection(false)
     }
   }
 
@@ -342,7 +357,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Schedule next detection frame
    */
-  private scheduleNextDetection(delayMs: number = 100): void {
+  private scheduleNextDetection(delayMs: number = this.config.detection_frame_delay ?? 100): void {
     if (!this.isDetecting) return
 
     if (this.detectionFrameId !== null) {
@@ -394,21 +409,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // Check video is ready
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        this.scheduleNextDetection(200) // ERROR_RETRY_DELAY
-        return
-      }
-
-      // Check detection timeout
-      const elapsedTime = performance.now() - this.detectionStartTime
-      if (elapsedTime > 60000) { // DETECTION_TIMEOUT
-        this.emitDebug('detection', 'Detection timeout', {
-          elapsedSeconds: Math.round(elapsedTime / 1000)
-        }, 'error')
-        this.emit('detector-error' as any, {
-          code: ErrorCode.DETECTION_ERROR,
-          message: `Detection timeout: Unable to detect qualified face in ${Math.round(elapsedTime / 1000)} seconds`
-        })
-        this.stopDetection()
+        this.scheduleNextDetection(this.config.error_retry_delay ?? 200) // ERROR_RETRY_DELAY
         return
       }
 
@@ -416,7 +417,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const result = await this.human.detect(this.videoElement)
 
       if (!result) {
-        this.scheduleNextDetection(100) // DETECTION_FRAME_DELAY
+        this.scheduleNextDetection(this.config.error_retry_delay ?? 100) // DETECTION_FRAME_DELAY
         return
       }
 
@@ -433,7 +434,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         error: (error as Error).message,
         stack: (error as Error).stack
       }, 'error')
-      this.scheduleNextDetection(200) // ERROR_RETRY_DELAY
+      this.scheduleNextDetection(this.config.error_retry_delay ?? 200) // ERROR_RETRY_DELAY
     }
   }
 
@@ -552,7 +553,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const randomIndex = Math.floor(Math.random() * availableActions.length)
     this.detectionState.currentAction = availableActions[randomIndex]
 
-    const promptData: ActionPromptData = {
+    const promptData: ActionPromptEventData = {
       action: this.detectionState.currentAction,
       status: LivenessActionStatus.STARTED
     }
@@ -606,9 +607,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Emit status prompt event
    */
   private emitStatusPrompt(code: PromptCode, data?: Record<string, any>): void {
-    const promptData: StatusPromptData = {
+    const promptData: StatusPromptEventData = {
       code,
-      message: this.config.prompt_code_desc?.[code] || PROMPT_CODE_DESCRIPTIONS[code] || '',
       ...data
     }
     this.emit('status-prompt' as any, promptData)
@@ -623,7 +623,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     details?: Record<string, any>,
     level: 'info' | 'warn' | 'error' = 'info'
   ): void {
-    const debugData: DebugData = {
+    const debugData: DetectorDebugEventData = {
       level,
       stage,
       message,
@@ -632,6 +632,104 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     this.emit('detector-debug' as any, debugData)
   }
+
+  /**
+   * 从视频帧绘制到 canvas（内部使用，不转 Base64）
+   * @returns {HTMLCanvasElement | null} 绘制后的 canvas，如果失败返回 null
+   */
+  private drawVideoToCanvas(): HTMLCanvasElement | null {
+    try {
+      if (!this.videoElement) return null
+      
+      // 使用缓存的实际视频流分辨率（从 getSettings 获取）
+      // 如果缓存为空，则尝试从 video 元素的 videoWidth/videoHeight 获取
+      let videoWidth_actual = this.actualVideoWidth || this.videoElement.videoWidth 
+      let videoHeight_actual = this.actualVideoHeight || this.videoElement.videoHeight 
+      
+      this.actualVideoWidth = videoWidth_actual
+      this.actualVideoHeight = videoHeight_actual
+      
+      // 再次检查是否为有效值
+      if (!videoWidth_actual || !videoHeight_actual) {
+        this.emitDebug('capture', 'invalid video size', { 
+          videoWidth_actual, 
+          videoHeight_actual, 
+          videoWidth: this.videoElement.videoWidth, 
+          videoHeight: this.videoElement.videoHeight,
+          width: this.videoElement.width,
+          height: this.videoElement.height
+        }, 'error')
+        return null
+      }
+      
+      // 如果缓存的 canvas 尺寸不匹配，重新创建
+      if (!this.canvasElement || this.canvasElement.width !== videoWidth_actual || this.canvasElement.height !== videoHeight_actual) {
+        this.canvasElement = document.createElement('canvas')
+        this.canvasElement.width = videoWidth_actual
+        this.canvasElement.height = videoHeight_actual
+        this.canvasContext = this.canvasElement.getContext('2d')
+        this.emitDebug('capture', 'Canvas 创建/调整大小', { width: videoWidth_actual, height: videoHeight_actual })
+      }
+      
+      if (!this.canvasContext) return null
+      
+      // 在尝试绘制前，验证视频的可绘制性
+      if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        this.emitDebug('capture', 'draw video image failed', { 
+          readyState: this.videoElement.readyState, 
+          HAVE_CURRENT_DATA: HTMLMediaElement.HAVE_CURRENT_DATA 
+        }, 'warn')
+        return null
+      }
+      
+      this.canvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
+      this.emitDebug('capture', '帧已绘制到 canvas')
+      
+      return this.canvasElement
+    } catch (e) {
+      this.emitDebug('capture', '绘制帧到 canvas 失败', { error: (e as Error).message }, 'error')
+      return null
+    }
+  }
+
+  /**
+   * 将 canvas 转换为 Base64 JPEG 图片数据
+   * @param {HTMLCanvasElement} canvas - 输入的 canvas
+   * @returns {string | null} Base64 格式的 JPEG 图片数据
+   */
+  private canvasToBase64(canvas: HTMLCanvasElement): string | null {
+    try {
+      const imageData = canvas.toDataURL('image/jpeg', 0.9)
+      this.emitDebug('capture', '图片已转换为 Base64', { size: imageData.length })
+      return imageData
+    } catch (e) {
+      this.emitDebug('capture', '转换为 Base64 失败', { error: (e as Error).message }, 'error')
+      return null
+    }
+  }
+
+  /**
+   * 捕获当前视频帧（返回 Base64）
+   * @param {Box} box - 人脸框
+   * @returns {string | null} Base64 格式的 JPEG 图片数据
+   */
+  private captureFrame(box?: Box): string | null {
+    if(!this.canvasElement) {
+      return null
+    }
+    if (!box) {
+      return this.canvasToBase64(this.canvasElement)
+    }
+    const tempCanvas = document.createElement('canvas')
+    const tempContext = tempCanvas.getContext('2d')
+    if (!tempContext) {
+      return null
+    }
+    tempCanvas.width = box[2]
+    tempCanvas.height = box[3]
+    tempContext.drawImage(this.canvasElement, box[0], box[1], box[2], box[3], 0, 0, box[2], box[3])
+    return this.canvasToBase64(tempCanvas)
+  }
 }
 
 // Export types
@@ -639,27 +737,15 @@ export type {
   FaceDetectionEngineConfig,
   FaceFrontalFeatures,
   ImageQualityFeatures,
-  StatusPromptData,
-  ActionPromptData,
-  LivenessDetectedData,
-  LivenessCompletedData,
-  ErrorData,
-  DebugData,
+  StatusPromptEventData as StatusPromptData,
+  ActionPromptEventData as ActionPromptData,
+  LivenessDetectedEventData as LivenessDetectedData,
+  LivenessCompletedEventData as LivenessCompletedData,
+  DetectorErrorEventData as ErrorData,
+  DetectorDebugEventData as DebugData,
   EventListener,
   EventMap,
   ScoredList
 }
-
-// Export enums
-export { DetectionMode, LivenessAction, LivenessActionStatus, PromptCode, ErrorCode }
-
-// Export config and utilities
-export { DEFAULT_CONFIG, mergeConfig, PROMPT_CODE_DESCRIPTIONS, ACTION_DESCRIPTIONS, BORDER_COLOR_STATES }
-
-// Export event emitter
-export { SimpleEventEmitter }
-
-// Export helpers
-export { checkFaceFrontal, checkImageQuality, loadOpenCV, loadHuman, getCvSync }
 
 export default FaceDetectionEngine

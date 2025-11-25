@@ -1,20 +1,4 @@
 /**
- * Face Detection Engine - Enumerations
- */
-
-/**
- * Detection mode enumeration
- */
-export enum DetectionMode {
-  // Face collection mode
-  COLLECTION = 'collection',
-  // Action liveness detection mode
-  LIVENESS = 'liveness',
-  // Silent liveness detection mode
-  SILENT_LIVENESS = 'silent_liveness'
-}
-
-/**
  * Liveness action enumeration
  */
 export enum LivenessAction {

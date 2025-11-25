@@ -8,7 +8,7 @@ import cvModule from '@techstark/opencv-js'
 
 let webglAvailableCache: boolean | null = null
 
-function isWebGLAvailable(): boolean {
+function _isWebGLAvailable(): boolean {
   if (webglAvailableCache !== null) {
     return webglAvailableCache
   }
@@ -24,7 +24,7 @@ function isWebGLAvailable(): boolean {
   }
 }
 
-function detectOptimalBackend(): string {
+function _detectOptimalBackend(): string {
   const userAgent = navigator.userAgent.toLowerCase()
 
   // Special browsers: prefer WASM
@@ -38,15 +38,8 @@ function detectOptimalBackend(): string {
     return 'wasm'
   }
 
-  // Mobile devices
-  const isMobile = /android|iphone|ipad|ipod/.test(userAgent) || window.innerWidth < 768
-
-  if (isMobile) {
-    return isWebGLAvailable() ? 'webgl' : 'wasm'
-  }
-
   // Desktop: prefer WebGL
-  return isWebGLAvailable() ? 'webgl' : 'wasm'
+  return _isWebGLAvailable() ? 'webgl' : 'wasm'
 }
 
 /**
@@ -98,7 +91,7 @@ export function getCvSync() {
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<Human> {
   const config = {
-    backend: detectOptimalBackend(),
+    backend: _detectOptimalBackend(),
     modelBasePath: modelPath,
     wasmPath: wasmPath,
     face: {

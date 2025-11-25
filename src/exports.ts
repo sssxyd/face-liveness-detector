@@ -8,45 +8,24 @@
 // Export main class
 export { FaceDetectionEngine, FaceDetectionEngine as default } from './index'
 
-// Export types
+// Export configuration type
+export type { FaceDetectionEngineConfig } from './types'
+
+// Export event-related types for listening
 export type {
-  FaceDetectionEngineConfig,
-  FaceFrontalFeatures,
-  ImageQualityFeatures,
-  StatusPromptData,
-  ActionPromptData,
-  LivenessDetectedData,
-  LivenessCompletedData,
-  ErrorData,
-  DebugData,
-  EventListener,
-  EventEmitter,
-  EventMap,
-  ScoredList
+  StatusPromptEventData as StatusPromptData,
+  ActionPromptEventData as ActionPromptData,
+  LivenessDetectedEventData as LivenessDetectedData,
+  LivenessCompletedEventData as LivenessCompletedData,
+  DetectorErrorEventData as ErrorData,
+  DetectorDebugEventData as DebugData,
+  EventMap
 } from './types'
 
-// Export enums
+// Export enums for event data
 export {
-  DetectionMode,
   LivenessAction,
   LivenessActionStatus,
   PromptCode,
   ErrorCode
 } from './enums'
-
-// Export config and utilities
-export {
-  DEFAULT_CONFIG,
-  mergeConfig,
-  PROMPT_CODE_DESCRIPTIONS,
-  ACTION_DESCRIPTIONS,
-  BORDER_COLOR_STATES
-} from './config'
-
-// Export event emitter
-export { SimpleEventEmitter } from './event-emitter'
-
-// Export detection utilities
-export { checkFaceFrontal } from './face-frontal-checker'
-export { checkImageQuality, type ImageQualityResult } from './image-quality-checker'
-export { loadOpenCV, loadHuman, getCvSync } from './library-loader'

@@ -3,7 +3,6 @@
  * Framework-agnostic type definitions for face liveness detection
  */
 
-import type { FaceResult, GestureResult } from '@vladmandic/human'
 import type { LivenessAction, LivenessActionStatus, PromptCode, ErrorCode } from './enums'
 
 // ==================== Configuration Interfaces ====================
@@ -31,11 +30,17 @@ export interface ImageQualityFeatures {
  * All settings are flattened as individual properties
  */
 export interface FaceDetectionEngineConfig {
+  // resource paths
+  human_model_path?: string
+  tensorflow_wasm_path?: string
+
   // ========== Detection Settings ==========
-  camera_max_size?: number
+  video_width?: number
+  video_height?: number
+  video_mirror?: boolean // Mirror video horizontally (like a mirror)
   video_load_timeout?: number
   detection_frame_delay?: number
-  detection_idle_timeout?: number
+  error_retry_delay?: number
 
   // ========== Collection Settings ==========
   silent_detect_count?: number
@@ -52,31 +57,23 @@ export interface FaceDetectionEngineConfig {
   show_action_prompt?: boolean
   liveness_action_timeout?: number
   liveness_action_list?: LivenessAction[]
-  liveness_action_desc?: Record<LivenessAction, string>
   liveness_action_count?: number
   liveness_action_random?: boolean
   min_mouth_open_percent?: number
 
-  // ========== Status Settings ==========
-  show_status_prompt?: boolean
-  status_prompt_duration?: number
-  prompt_code_desc?: Record<PromptCode, string>
-
-  // ========== Border Colors Settings ==========
-  show_border_color?: boolean
-  border_color_idle?: string
-  border_color_warning?: string
-  border_color_ready?: string
-  border_color_success?: string
-  border_color_error?: string
 }
 
 // ==================== Event Data Interfaces ====================
 
-export interface StatusPromptData {
+export interface DetectorLoadedEventData {
+  success: boolean  // Whether the detector loaded successfully
+  error?: string    // Error message if any
+  opencv_version?: string  // OpenCV.js version
+  human_version?: string  // Human.js version
+}
+
+export interface StatusPromptEventData {
   code: PromptCode    // Prompt code
-  message: string     // Prompt message
-  count?: number      // Face count
   size?: number       // Face size percentage
   frontal?: number    // Face frontality percentage
   real?: number       // Anti-spoofing score
@@ -84,7 +81,7 @@ export interface StatusPromptData {
   quality?: number    // Image quality score
 }
 
-export interface ActionPromptData {
+export interface ActionPromptEventData {
   action: LivenessAction
   status: LivenessActionStatus
 }
@@ -92,7 +89,7 @@ export interface ActionPromptData {
 /**
  * Silent liveness detection data
  */
-export interface LivenessDetectedData {
+export interface LivenessDetectedEventData {
   passed: boolean  // Whether silent liveness detection passed
   size: number     // Face size percentage (0-1)
   frontal: number  // Face frontality percentage (0-1)
@@ -104,7 +101,7 @@ export interface LivenessDetectedData {
 /**
  * Action/silent liveness detection completion data
  */
-export interface LivenessCompletedData {
+export interface LivenessCompletedEventData {
   qualityScore: number  // Image quality score (0-1)
   imageData: string | null  // Base64 encoded image
   liveness: number      // Liveness score (0-1)
@@ -113,7 +110,7 @@ export interface LivenessCompletedData {
 /**
  * Error data
  */
-export interface ErrorData {
+export interface DetectorErrorEventData {
   code: ErrorCode
   message: string
 }
@@ -121,7 +118,7 @@ export interface ErrorData {
 /**
  * Debug information data
  */
-export interface DebugData {
+export interface DetectorDebugEventData {
   level: 'info' | 'warn' | 'error'  // Debug level
   stage: string                      // Current stage
   message: string                    // Main message
@@ -141,14 +138,13 @@ export interface EventEmitter {
 }
 
 export interface EventMap {
-  'detector-loaded': void
-  'status-prompt': StatusPromptData
-  'liveness-detected': LivenessDetectedData
-  'action-prompt': ActionPromptData
-  'liveness-action': any
-  'liveness-completed': LivenessCompletedData
-  'detector-error': ErrorData
-  'detector-debug': DebugData
+  'detector-loaded': DetectorLoadedEventData
+  'status-prompt': StatusPromptEventData
+  'liveness-detected': LivenessDetectedEventData
+  'action-prompt': ActionPromptEventData
+  'liveness-completed': LivenessCompletedEventData
+  'detector-error': DetectorErrorEventData
+  'detector-debug': DetectorDebugEventData
 }
 
 // ==================== Utility Classes ====================
