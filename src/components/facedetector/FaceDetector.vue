@@ -85,6 +85,9 @@ let captureCtx: CanvasRenderingContext2D | null = null
 let videoWidth: Ref<number> = ref(CONFIG.DETECTION.DEFAULT_VIDEO_WIDTH)
 // 视频高度
 let videoHeight: Ref<number> = ref(CONFIG.DETECTION.DEFAULT_VIDEO_HEIGHT)
+// 缓存的实际视频流分辨率（从 getSettings 或 videoWidth 获取）
+let actualVideoWidth: number = 0
+let actualVideoHeight: number = 0
 // Human 检测库实例
 let human: Human | null = null
 // 摄像头流对象
@@ -423,6 +426,10 @@ function resetDetectionState(): void {
   
   // 重置检测超时计数器
   detectionStartTime = performance.now()
+  
+  // 清除缓存的视频尺寸，下次检测时重新获取
+  actualVideoWidth = 0
+  actualVideoHeight = 0
 }
 
 /**
@@ -475,6 +482,8 @@ async function startDetection(): Promise<void> {
         const minSize = Math.min(settings.width || videoWidth.value, settings.height || videoHeight.value)
         videoWidth.value = minSize
         videoHeight.value = minSize
+        actualVideoWidth = minSize
+        actualVideoHeight = minSize
       }
     }
     
@@ -1056,22 +1065,27 @@ function drawVideoToCanvas(): HTMLCanvasElement | null {
   try {
     if (!videoRef.value) return null
     
-    // Safari 兼容性修复：
-    // 某些情况下 videoWidth/videoHeight 可能为 0 或 undefined
-    // 优先使用实际设置的宽高值，而不仅依赖于 video 元素的 videoWidth/videoHeight 属性
-    let videoWidth_actual = videoRef.value.videoWidth
-    let videoHeight_actual = videoRef.value.videoHeight
+    // 使用缓存的实际视频流分辨率（从 getSettings 获取）
+    // 如果缓存为空，则尝试从 video 元素的 videoWidth/videoHeight 获取
+    let videoWidth_actual = actualVideoWidth || videoRef.value.videoWidth || videoWidth.value
+    let videoHeight_actual = actualVideoHeight || videoRef.value.videoHeight || videoHeight.value
     
-    // 如果获取不到视频实际尺寸，使用 canvas 尺寸作为后备
+    // 最后的备选：使用设置的 width/height 属性
     if (!videoWidth_actual || !videoHeight_actual) {
-      emitDebug('capture', '视频尺寸获取失败，使用备用值', { fallback: `${videoWidth.value}x${videoHeight.value}` }, 'warn')
-      videoWidth_actual = videoWidth.value
-      videoHeight_actual = videoHeight.value
+      videoWidth_actual = videoRef.value.width || videoWidth.value
+      videoHeight_actual = videoRef.value.height || videoHeight.value
     }
     
     // 再次检查是否为有效值
     if (!videoWidth_actual || !videoHeight_actual) {
-      emitDebug('capture', '无法获取有效视频尺寸', {}, 'error')
+      emitDebug('capture', '无法获取有效视频尺寸', { 
+        actualVideoWidth, 
+        actualVideoHeight, 
+        videoWidth: videoRef.value.videoWidth, 
+        videoHeight: videoRef.value.videoHeight,
+        width: videoRef.value.width,
+        height: videoRef.value.height
+      }, 'error')
       return null
     }
     
@@ -1086,10 +1100,13 @@ function drawVideoToCanvas(): HTMLCanvasElement | null {
     
     if (!captureCtx) return null
     
-    // 在尝试绘制前，再次验证视频的可绘制性（Safari 特定修复）
-    if (videoRef.value.readyState !== HTMLMediaElement.HAVE_ENOUGH_DATA && 
-        videoRef.value.readyState !== HTMLMediaElement.HAVE_CURRENT_DATA) {
-      emitDebug('capture', '视频不可绘制', { readyState: videoRef.value.readyState }, 'warn')
+    // 在尝试绘制前，验证视频的可绘制性
+    // readyState >= HAVE_CURRENT_DATA (2) 才能绘制
+    if (videoRef.value.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      emitDebug('capture', '视频不可绘制', { 
+        readyState: videoRef.value.readyState, 
+        HAVE_CURRENT_DATA: HTMLMediaElement.HAVE_CURRENT_DATA 
+      }, 'warn')
       return null
     }
     
