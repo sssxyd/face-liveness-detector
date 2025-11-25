@@ -29,9 +29,6 @@ export interface FaceDetectorProps {
   showActionPrompt?: boolean
   // 是否显示状态提示文本（默认 true）
   showStatusPrompt?: boolean
-  // Human.js 自定义配置（可选）：允许用户自定义模型路径、启用/禁用各个模块等
-  // 详见 Human.js Config 接口：https://github.com/vladmandic/human/blob/main/src/config.ts
-  humanConfig?: Record<string, any>
 }
 
 /**
@@ -109,40 +106,6 @@ export interface DebugData {
   message: string                    // 主要信息
   details?: Record<string, any>      // 详细信息
   timestamp: number                  // 时间戳
-}
-
-/**
- * 浏览器信息接口
- */
-export interface BrowserInfo {
-  isSafari: boolean
-  isWeChat: boolean
-  isAlipay: boolean
-  isQQ: boolean
-  isWebView: boolean
-  isMobile: boolean
-}
-
-/**
- * Human.js 加载状态
- */
-export interface HumanLoadingStatus {
-  loaded: boolean
-  modelsLoaded: boolean
-  modelsStatus: Record<string, any>
-  backend: string
-  error?: string
-}
-
-/**
- * WebGL 状态
- */
-export interface WebGLStatus {
-  available: boolean
-  vendor?: string
-  renderer?: string
-  version?: string
-  error?: string
 }
 
 export class ScoredList<T> {

@@ -32,7 +32,7 @@ import { checkFaceFrontal } from './face-frontal-checker'
 // 导入图像质量检测模块（合并了完整度和清晰度）
 import { checkImageQuality } from './image-quality-checker'
 // 导入人脸检测库加载器
-import { libLoader } from './detector-lib-loader'
+import { loadOpenCV, loadHuman } from './library-loader'
 
 // 定义组件 props
 const props = withDefaults(defineProps<FaceDetectorProps>(), {
@@ -46,12 +46,6 @@ const props = withDefaults(defineProps<FaceDetectorProps>(), {
   livenessActionTimeout: 60,      // 活体检测动作时间限制，默认60秒
   showActionPrompt: true,         // 是否显示活体检测动作提示文本，默认显示
   showStatusPrompt: true,         // 是否显示状态提示文本，默认显示
-  humanConfig: () => ({
-    // 运行时配置默认为空对象
-    // 用户可传入此参数来在检测时覆盖初始化配置
-    // 注意：初始化配置（在 onMounted 中）和运行时配置会合并
-    // 运行时配置优先级更高
-  })
 })
 
 const normalizedLivenessActionCount = computed(() => {
@@ -312,17 +306,9 @@ onMounted(async () => {
     emitDebug('initialization', '开始加载人脸检测库...')
     console.log('[FaceDetector] 开始加载 OpenCV 和 Human.js...')
     
-    const result = await libLoader.load({
-      humanConfig: props.humanConfig
-    })
-    
-    human = result.human
-    
-    emitDebug('initialization', '人脸检测库加载成功', {
-      hasOpenCV: !!result.cv,
-      hasHuman: !!result.human
-    })
-    
+    const { cv } = await loadOpenCV()  // 确保 OpenCV 加载完成
+    console.log('[FaceDetector] OpenCV 加载完成，版本:', cv?.getBuildInformation?.() || '未知')
+    human = await loadHuman("/models", "/wasm")
     if (!human) {
       throw new Error('Human.js 加载失败，实例为空')
     }
@@ -781,12 +767,9 @@ async function detect(): Promise<void> {
     }
     
     // 对当前视频帧进行人脸检测
-    // 如果用户提供了运行时配置，则使用；否则使用实例初始化时的配置
-    const runtimeConfig = Object.keys(props.humanConfig).length > 0 ? props.humanConfig : undefined
-    
     let result
     try {
-      result = await human.detect(videoRef.value, runtimeConfig)
+      result = await human.detect(videoRef.value)
     } catch (detectError) {
       emitDebug('detection', '检测过程出错', { error: (detectError as Error).message }, 'error')
       throw detectError

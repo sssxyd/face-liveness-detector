@@ -10,7 +10,7 @@
  */
 
 import { FaceResult } from '@vladmandic/human'
-import { getCvSync } from './detector-lib-loader'
+import { getCvSync } from './library-loader'
 
 // ==================== 接口定义 ====================
 
