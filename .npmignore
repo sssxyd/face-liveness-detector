@@ -1,0 +1,13 @@
+node_modules/
+src/
+*.ts
+!*.d.ts
+tsconfig.json
+rollup.config.js
+INTEGRATION.md
+PACKAGE_GUIDE.md
+.gitignore
+.DS_Store
+*.map.js
+.vscode/
+.idea/

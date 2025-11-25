@@ -1,31 +1,68 @@
 {
-  "name": "face-liveness-detector",
-  "version": "1.0.1",
-  "description": "Vue 3 face detector component using human.js & openCV.js",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview",
-    "publish": "node publish.js",
-    "publish:build": "npm run build && npm run publish",
-    "type-check": "vue-tsc --noEmit",
-    "copy:human-models": "node copy-human-models.js",
-    "download:tensorflow-wasm": "node download-tensorflow-wasm.js"
+  "name": "@sssxyd/face-liveness-detector",
+  "version": "1.0.0",
+  "description": "Pure JS/TS implementation of liveness face detection based on human.js and opencv.js",
+  "main": "dist/index.js",
+  "module": "dist/index.esm.js",
+  "types": "types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.esm.js",
+      "require": "./dist/index.js",
+      "types": "./types/index.d.ts"
+    },
+    "./config": {
+      "import": "./dist/config.esm.js",
+      "require": "./dist/config.js",
+      "types": "./types/config.d.ts"
+    },
+    "./types": {
+      "import": "./dist/types.esm.js",
+      "require": "./dist/types.js",
+      "types": "./types/types.d.ts"
+    }
   },
-  "dependencies": {
+  "files": [
+    "dist",
+    "types",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rollup -c rollup.config.js",
+    "build:watch": "rollup -c rollup.config.js -w",
+    "dev": "npm run build:watch",
+    "clean": "rm -rf dist types",
+    "type-check": "tsc --noEmit"
+  },
+  "keywords": [
+    "face-detection",
+    "liveness-detection",
+    "face-recognition",
+    "anti-spoofing",
+    "typescript"
+  ],
+  "author": "xuyd <sssxyd@gmail.com>",
+  "license": "MIT",
+  "peerDependencies": {
     "@techstark/opencv-js": "4.12.0-release.1",
-    "@vladmandic/human": "^3.3.0",
-    "vue": "^3.4.0"
+    "@vladmandic/human": "^3.3.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.0.0",
-    "@vue/test-utils": "^2.4.0",
-    "@vue/tsconfig": "^0.5.0",
-    "ssh2-sftp-client": "^12.0.1",
-    "tsx": "^4.7.0",
-    "typescript": "^5.3.0",
-    "vite": "^5.0.0",
-    "vue-tsc": "^1.8.0"
-  }
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^15.1.0",
+    "@rollup/plugin-typescript": "^11.1.5",
+    "@types/node": "^20.8.0",
+    "rollup": "^3.29.4",
+    "tslib": "^2.8.1",
+    "typescript": "^5.2.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sssxyd/face-liveness-detector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sssxyd/face-liveness-detector/issues"
+  },
+  "homepage": "https://github.com/sssxyd/face-liveness-detector#readme"
 }
