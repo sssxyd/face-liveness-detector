@@ -37,7 +37,7 @@ engine.on('detector-loaded', () => {
   console.log('Engine is ready')
 })
 
-engine.on('liveness-detected', (data) => {
+engine.on('face-detected', (data) => {
   console.log('Frame detected:', data)
 })
 
@@ -172,11 +172,11 @@ engine.on('detector-loaded', () => {
 })
 ```
 
-#### `liveness-detected`
+#### `face-detected`
 A valid face frame has been detected during collection phase.
 
 ```typescript
-engine.on('liveness-detected', (data: LivenessDetectedData) => {
+engine.on('face-detected', (data: LivenessDetectedData) => {
   console.log(`Quality: ${data.quality}, Frontal: ${data.frontal}`)
 })
 ```

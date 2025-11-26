@@ -2,7 +2,7 @@
  * Face Detection Engine
  * Framework-agnostic face liveness detection engine
  * 
- * @module @face-liveness/detection-engine
+ * @module @sssxyd/face-liveness-detector
  */
 
 // Export main class
@@ -13,12 +13,12 @@ export type { FaceDetectionEngineConfig } from './types'
 
 // Export event-related types for listening
 export type {
-  StatusPromptEventData as StatusPromptData,
-  ActionPromptEventData as ActionPromptData,
-  LivenessDetectedEventData as LivenessDetectedData,
-  LivenessCompletedEventData as LivenessCompletedData,
-  DetectorErrorEventData as ErrorData,
-  DetectorDebugEventData as DebugData,
+  StatusPromptEventData,
+  ActionPromptEventData,
+  FaceDetectedEventData,
+  DetectorFinishEventData,
+  DetectorErrorEventData,
+  DetectorDebugEventData,
   EventMap
 } from './types'
 

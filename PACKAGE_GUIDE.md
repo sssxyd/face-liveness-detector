@@ -97,7 +97,7 @@ packages/face-detection-engine/
          └─────────────────────┘
 
 emit: status-prompt
-emit: liveness-detected
+emit: face-detected
 emit: action-prompt
 emit: liveness-completed ✓
 emit: detector-error ✗
@@ -230,7 +230,7 @@ const FaceDetectionEngine = require('@face-liveness/detection-engine')
 |-------|------|-------------|
 | `detector-loaded` | void | Libraries loaded, engine ready |
 | `status-prompt` | StatusPromptData | Status update |
-| `liveness-detected` | LivenessDetectedData | Frame accepted |
+| `face-detected` | LivenessDetectedData | Frame accepted |
 | `action-prompt` | ActionPromptData | Action requested |
 | `liveness-completed` | LivenessCompletedData | Detection complete ✓ |
 | `detector-error` | ErrorData | Error occurred ✗ |

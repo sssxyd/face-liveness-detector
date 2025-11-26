@@ -62,7 +62,7 @@ npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-
             statusDiv.textContent = `📍 ${data.message}`
         })
         
-        engine.on('liveness-detected', (data) => {
+        engine.on('face-detected', (data) => {
             statusDiv.textContent = `✓ Frame captured (Quality: ${(data.quality * 100).toFixed(0)}%)`
         })
         
@@ -272,7 +272,7 @@ const engine = new FaceDetectionEngine()
 
 engine.on('detector-loaded', () => console.log('Ready'))
 engine.on('status-prompt', (data) => console.log('Status:', data))
-engine.on('liveness-detected', (data) => console.log('Frame:', data))
+engine.on('face-detected', (data) => console.log('Frame:', data))
 engine.on('action-prompt', (data) => console.log('Action:', data))
 engine.on('liveness-completed', (data) => console.log('Result:', data))
 engine.on('detector-error', (error) => console.error('Error:', error))

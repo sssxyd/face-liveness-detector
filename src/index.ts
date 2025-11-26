@@ -6,7 +6,7 @@
 import Human, { Box, FaceResult, GestureResult } from '@vladmandic/human'
 import type {
   FaceDetectionEngineConfig,
-  LivenessDetectedEventData,
+  FaceDetectedEventData,
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
@@ -61,7 +61,7 @@ interface DetectionState {
  *   engine.startDetection(videoElement, canvasElement)
  * })
  *
- * engine.on('liveness-completed', (data) => {
+ * engine.on('detector-finish', (data) => {
  *   console.log('Liveness detection completed:', data)
  * })
  *
@@ -784,7 +784,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   private emitLivenessDetected(passed: boolean, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
-    this.emit('liveness-detected' as any, {passed, size, frontal, quality, real, live} as LivenessDetectedEventData)
+    this.emit('face-detected' as any, {passed, size, frontal, quality, real, live} as FaceDetectedEventData)
   }
 
   /**
@@ -1042,7 +1042,7 @@ export type {
   ImageQualityFeatures,
   StatusPromptEventData,
   ActionPromptEventData,
-  LivenessDetectedEventData,
+  FaceDetectedEventData,
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,

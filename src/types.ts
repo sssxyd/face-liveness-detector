@@ -127,7 +127,7 @@ export interface ActionPromptEventData {
 /**
  * Silent liveness detection data
  */
-export interface LivenessDetectedEventData {
+export interface FaceDetectedEventData {
   passed: boolean  // Whether silent liveness detection passed
   size: number     // Face size percentage (0-1)
   frontal: number  // Face frontality percentage (0-1)
@@ -182,7 +182,7 @@ export interface EventEmitter {
 export interface EventMap {
   'detector-loaded': DetectorLoadedEventData
   'status-prompt': StatusPromptEventData
-  'liveness-detected': LivenessDetectedEventData
+  'face-detected': FaceDetectedEventData
   'action-prompt': ActionPromptEventData
   'detector-finish': DetectorFinishEventData
   'detector-error': DetectorErrorEventData
