@@ -19,56 +19,72 @@ A framework-agnostic, TypeScript-based npm package for face liveness detection. 
 npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-js
 ```
 
-## Quick Start
+## Quick Start - Using Local Model Files (Recommended)
+
+To improve performance and reduce external dependencies, you can download and use local copies of model files:
+
+### Step 1: Download Model Files
+
+```bash
+# Copy Human.js models locally
+node copy-human-models.js
+
+# Download TensorFlow.js WASM files
+node download-tensorflow-wasm.js
+```
+
+This will create:
+- `public/models/` - Human.js face detection models
+- `public/wasm/` - TensorFlow.js WASM backend files
+
+### Step 2: Initialize Engine with Local Files
 
 ```typescript
 import FaceDetectionEngine from '@face-liveness/detection-engine'
 
-// Initialize engine
+// Configure to use local model files
+const engine = new FaceDetectionEngine({
+  human_model_path: '/models',      // Path to downloaded models
+  tensorflow_wasm_path: '/wasm',    // Path to WASM files
+  min_face_ratio: 0.5,
+  max_face_ratio: 0.9,
+  liveness_action_count: 1,
+  liveness_action_list: ['blink']
+})
+
+// Initialize and start detection
+await engine.initialize()
+const videoElement = document.getElementById('video') as HTMLVideoElement
+await engine.startDetection(videoElement)
+```
+
+### Step 3: Serve Static Files
+
+Make sure your web server serves the `public/` directory:
+
+```typescript
+// Express.js example
+app.use(express.static('public'))
+```
+
+## Quick Start - Using Default CDN Files
+
+If you prefer not to host local files, the engine will automatically use CDN sources:
+
+```typescript
+import FaceDetectionEngine from '@face-liveness/detection-engine'
+
+// No need to specify paths - uses CDN by default
 const engine = new FaceDetectionEngine({
   min_face_ratio: 0.5,
   max_face_ratio: 0.9,
   liveness_action_count: 1,
-  liveness_action_list: ['blink']  // or 'mouth_open', 'nod'
+  liveness_action_list: ['blink']
 })
 
-// Listen for events
-engine.on('detector-loaded', () => {
-  console.log('Engine is ready')
-})
-
-engine.on('face-detected', (data) => {
-  console.log('Frame detected:', data)
-})
-
-engine.on('detector-finish', (data) => {
-  console.log('Liveness verification complete:', {
-    success: data.success,
-    qualityScore: data.bestQualityScore,
-    frameImage: data.bestFrameImage,
-    faceImage: data.bestFaceImage
-  })
-})
-
-engine.on('detector-error', (error) => {
-  console.error('Detection error:', error.message)
-})
-
-engine.on('detector-debug', (debug) => {
-  console.log(`[${debug.stage}] ${debug.message}`, debug.details)
-})
-
-// Initialize
 await engine.initialize()
-
-// Start detection with video element
 const videoElement = document.getElementById('video') as HTMLVideoElement
-const canvasElement = document.getElementById('canvas') as HTMLCanvasElement
-
-await engine.startDetection(videoElement, canvasElement)
-
-// Stop detection
-engine.stopDetection()
+await engine.startDetection(videoElement)
 ```
 
 ## Configuration
@@ -283,10 +299,67 @@ enum ErrorCode {
 
 ## Advanced Usage
 
-### Custom Configuration
+### Complete Integration Example with Events
+
+```typescript
+import FaceDetectionEngine from '@face-liveness/detection-engine'
+
+const engine = new FaceDetectionEngine({
+  human_model_path: '/models',
+  tensorflow_wasm_path: '/wasm',
+  min_face_ratio: 0.5,
+  max_face_ratio: 0.9,
+  liveness_action_count: 1,
+  liveness_action_list: ['blink']
+})
+
+// Listen for events
+engine.on('detector-loaded', () => {
+  console.log('Engine is ready')
+})
+
+engine.on('face-detected', (data) => {
+  console.log('Frame detected:', data)
+})
+
+engine.on('detector-finish', (data) => {
+  console.log('Liveness verification complete:', {
+    success: data.success,
+    qualityScore: data.bestQualityScore,
+    frameImage: data.bestFrameImage,
+    faceImage: data.bestFaceImage
+  })
+})
+
+engine.on('detector-error', (error) => {
+  console.error('Detection error:', error.message)
+})
+
+engine.on('detector-debug', (debug) => {
+  console.log(`[${debug.stage}] ${debug.message}`, debug.details)
+})
+
+// Initialize
+await engine.initialize()
+
+// Start detection with video element
+const videoElement = document.getElementById('video') as HTMLVideoElement
+await engine.startDetection(videoElement)
+
+// Stop detection
+engine.stopDetection()
+```
+
+### Advanced Usage
+
+### Custom Configuration with Local Models
 
 ```typescript
 const engine = new FaceDetectionEngine({
+  // Use local model files
+  human_model_path: '/models',
+  tensorflow_wasm_path: '/wasm',
+  
   // Require higher quality
   min_face_ratio: 0.6,
   max_face_ratio: 0.85,
@@ -296,7 +369,7 @@ const engine = new FaceDetectionEngine({
   // Multiple actions
   liveness_action_count: 3,
   liveness_action_list: ['blink', 'mouth_open', 'nod'],
-  liveness_action_timeout: 120,  // 2 minutes per action
+  liveness_verify_timeout: 120000,  // 2 minutes
 })
 ```
 
@@ -334,6 +407,60 @@ engine.on('liveness-completed', (data) => {
       metadata: resultData
     })
   })
+})
+```
+
+## Downloading and Hosting Model Files
+
+To avoid CDN dependencies and improve performance, you can download model files locally:
+
+### Available Download Scripts
+
+Two scripts are provided in the root directory:
+
+#### 1. Copy Human.js Models
+
+```bash
+node copy-human-models.js
+```
+
+**What it does:**
+- Copies face detection models from `node_modules/@vladmandic/human/models`
+- Saves to `public/models/` directory
+- Downloads both `.json` and `.bin` model files
+- Shows file size and progress
+
+#### 2. Download TensorFlow.js WASM Files
+
+```bash
+node download-tensorflow-wasm.js
+```
+
+**What it does:**
+- Downloads TensorFlow.js WASM backend files
+- Saves to `public/wasm/` directory
+- Downloads 4 critical files:
+  - `tf-backend-wasm.min.js`
+  - `tfjs-backend-wasm.wasm`
+  - `tfjs-backend-wasm-simd.wasm`
+  - `tfjs-backend-wasm-threaded-simd.wasm`
+- **Supports multiple CDN sources** with automatic fallback:
+  1. unpkg.com (primary)
+  2. cdn.jsdelivr.net (backup)
+  3. esm.sh (fallback)
+  4. cdn.esm.sh (last resort)
+
+### Configuration to Use Local Files
+
+Once downloaded, configure the engine to use these local files:
+
+```typescript
+const engine = new FaceDetectionEngine({
+  // Use local files instead of CDN
+  human_model_path: '/models',
+  tensorflow_wasm_path: '/wasm',
+  
+  // ... rest of configuration
 })
 ```
 

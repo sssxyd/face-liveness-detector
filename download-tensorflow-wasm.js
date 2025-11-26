@@ -63,7 +63,16 @@ function getTensorFlowVersion() {
 }
 
 const WASM_VERSION = getTensorFlowVersion();
-const CDN_URL = `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`;
+
+// 多个 CDN 源列表，按优先级排序
+const CDN_SOURCES = [
+  `https://unpkg.com/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
+  `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
+  `https://esm.sh/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
+  `https://cdn.esm.sh/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
+];
+
+let CDN_URL = CDN_SOURCES[0];
 
 // 需要下载的文件列表
 const FILES_TO_DOWNLOAD = [
@@ -84,9 +93,9 @@ function ensureDirectory(dirPath) {
 }
 
 /**
- * 下载文件
+ * 下载文件（带 CDN 回退）
  */
-function downloadFile(url, destPath, retries = 3) {
+function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
   return new Promise((resolve, reject) => {
     const attemptDownload = (retryCount) => {
       const file = fs.createWriteStream(destPath);
@@ -97,7 +106,17 @@ function downloadFile(url, destPath, retries = 3) {
           console.log(`  ⏱️  超时，重试 (${3 - retryCount + 1}/3)...`);
           attemptDownload(retryCount - 1);
         } else {
-          reject(new Error(`超时: ${url}`));
+          // 尝试下一个 CDN
+          if (cdnIndex < CDN_SOURCES.length - 1) {
+            console.log(`  🔄 切换到备用 CDN 源...`);
+            const newCdnIndex = cdnIndex + 1;
+            const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
+            downloadFile(newUrl, destPath, 3, newCdnIndex)
+              .then(resolve)
+              .catch(reject);
+          } else {
+            reject(new Error(`超时: ${url}`));
+          }
         }
       }, 30000); // 30秒超时
       
@@ -108,7 +127,7 @@ function downloadFile(url, destPath, retries = 3) {
         if (response.statusCode === 301 || response.statusCode === 302) {
           file.destroy();
           fs.unlink(destPath, () => {});
-          downloadFile(response.headers.location, destPath, retryCount)
+          downloadFile(response.headers.location, destPath, retryCount, cdnIndex)
             .then(resolve)
             .catch(reject);
           return;
@@ -117,7 +136,18 @@ function downloadFile(url, destPath, retries = 3) {
         if (response.statusCode !== 200) {
           file.destroy();
           fs.unlink(destPath, () => {});
-          reject(new Error(`HTTP ${response.statusCode}: ${url}`));
+          
+          // 如果是 404 或其他错误，尝试下一个 CDN
+          if (response.statusCode === 404 && cdnIndex < CDN_SOURCES.length - 1) {
+            console.log(`  🔄 当前 CDN 无此文件，切换到备用 CDN 源...`);
+            const newCdnIndex = cdnIndex + 1;
+            const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
+            downloadFile(newUrl, destPath, 3, newCdnIndex)
+              .then(resolve)
+              .catch(reject);
+          } else {
+            reject(new Error(`HTTP ${response.statusCode}: ${url}`));
+          }
           return;
         }
 
@@ -151,7 +181,17 @@ function downloadFile(url, destPath, retries = 3) {
           console.log(`  ⚠️  连接错误，重试 (${3 - retryCount + 1}/3)...`);
           attemptDownload(retryCount - 1);
         } else {
-          reject(err);
+          // 尝试下一个 CDN
+          if (cdnIndex < CDN_SOURCES.length - 1) {
+            console.log(`  🔄 CDN 连接失败，切换到备用源...`);
+            const newCdnIndex = cdnIndex + 1;
+            const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
+            downloadFile(newUrl, destPath, 3, newCdnIndex)
+              .then(resolve)
+              .catch(reject);
+          } else {
+            reject(err);
+          }
         }
       });
     };
@@ -178,8 +218,9 @@ async function main() {
   // 自动检测版本
   console.log('\n[0/3] 检测依赖版本...\n');
   
-  console.log(`\n📍 源 CDN: cdn.jsdelivr.net`);
-  console.log(`🔗 CDN URL: ${CDN_URL}`);
+  console.log(`\n📍 源 CDN: 多源回退 (${CDN_SOURCES.length} 个源)`);
+  console.log(`🔗 主 CDN URL: ${CDN_SOURCES[0]}`);
+  console.log(`🔄 备用 CDN: ${CDN_SOURCES.slice(1).join(', ')}`);
   console.log(`📁 目标目录: ${LOCAL_DIR}`);
   console.log(`\n需要下载的文件：`);
   FILES_TO_DOWNLOAD.forEach((file, index) => {
@@ -231,9 +272,8 @@ async function main() {
       console.log('\n📝 现在可以在配置中使用本地 WASM 文件：\n');
       console.log('```typescript');
       console.log('const config = {');
-      console.log('  backend: "wasm",');
-      console.log('  modelBasePath: "/models",');
-      console.log('  wasmPath: "/wasm/"  // ← 使用本地文件');
+      console.log('  human_model_path: "/models",');
+      console.log('  tensorflow_wasm_path: "/wasm"  // ← 使用本地文件');
       console.log('}');
       console.log('```\n');
     } else {

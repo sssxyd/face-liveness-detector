@@ -57,9 +57,11 @@ function getAvailableModels() {
   }
 
   const files = fs.readdirSync(HUMAN_MODELS_DIR);
-  const jsonFiles = files.filter(file => file.endsWith('.json'));
+  const modelFiles = files.filter(file => 
+    file.endsWith('.json') || file.endsWith('.bin')
+  );
   
-  return jsonFiles.sort();
+  return modelFiles.sort();
 }
 
 /**
@@ -166,9 +168,8 @@ async function main() {
     console.log('\n配置示例：\n');
     console.log('```typescript');
     console.log('const config = {');
-    console.log('  modelBasePath: "/models",  // ← 使用本地文件');
-    console.log('  wasmPath: "/wasm/",');
-    console.log('  face: { enabled: true, ... },');
+    console.log('  human_model_path: "/models",  // ← 使用本地文件');
+    console.log('  tensorflow_wasm_path: "/wasm",  // ← 使用本地文件');
     console.log('};');
     console.log('```\n');
 
