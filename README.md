@@ -77,38 +77,46 @@ engine.stopDetection()
 
 ```typescript
 interface FaceDetectionEngineConfig {
-  // Detection Settings
-  video_width?: number                        // Video width (default: 640)
-  video_height?: number                       // Video height (default: 640)
-  video_load_timeout?: number                 // Video load timeout in ms (default: 5000)
-  detection_frame_delay?: number              // Delay between frames in ms (default: 100)
-  detection_idle_timeout?: number             // Idle timeout in ms (default: 60000)
+  // ========== Resource Paths ==========
+  human_model_path?: string        // Path to human.js models (default: undefined)
+  tensorflow_wasm_path?: string    // Path to TensorFlow WASM files (default: undefined)
 
-  // Collection Settings
-  silent_detect_count?: number                // Number of silent detections (default: 3)
-  min_face_ratio?: number                     // Min face size ratio (default: 0.5)
-  max_face_ratio?: number                     // Max face size ratio (default: 0.9)
-  min_face_frontal?: number                   // Min face frontality (default: 0.9)
-  min_image_quality?: number                  // Min image quality (default: 0.8)
-  min_live_score?: number                     // Min liveness score (default: 0.5)
-  min_real_score?: number                     // Min anti-spoofing score (default: 0.85)
+  // ========== Detection Settings ==========
+  video_width?: number             // Width of the video stream (default: 640)
+  video_height?: number            // Height of the video stream (default: 640)
+  video_mirror?: boolean           // Mirror video horizontally (default: true)
+  video_load_timeout?: number      // Timeout for loading video stream in ms (default: 5000)
+  detection_frame_delay?: number   // Delay between detection frames in ms (default: 100)
+  error_retry_delay?: number       // Delay before retrying after an error in ms (default: 200)
 
-  // Liveness Settings
-  show_action_prompt?: boolean                // Show action prompt (default: true)
-  liveness_action_timeout?: number            // Action timeout in seconds (default: 60)
-  liveness_action_list?: LivenessAction[]     // Actions to detect
-  liveness_action_count?: number              // Number of actions required
-  liveness_action_desc?: Record<string, string>  // Action descriptions
+  // ========== Collection Settings ==========
+  silent_detect_count?: number     // Number of silent detections to collect (default: 3)
+  min_face_ratio?: number          // Minimum face size ratio (default: 0.5)
+  max_face_ratio?: number          // Maximum face size ratio (default: 0.9)
+  min_face_frontal?: number        // Minimum face frontality (default: 0.9)
+  min_image_quality?: number       // Minimum image quality (default: 0.8)
+  min_live_score?: number          // Minimum live score (default: 0.5)
+  min_real_score?: number          // Minimum anti-spoofing score (default: 0.85)
+  suspected_frauds_count?: number  // Number of suspected frauds to detect (default: 3)
+  face_frontal_features?: {        // Face frontal features
+    yaw_threshold: number          // Yaw angle threshold in degrees (default: 3)
+    pitch_threshold: number        // Pitch angle threshold in degrees (default: 4)
+    roll_threshold: number         // Roll angle threshold in degrees (default: 2)
+  }
+  image_quality_features?: {       // Image quality features
+    require_full_face_in_bounds: boolean    // Require face completely within bounds (default: true)
+    use_opencv_enhancement: boolean         // Use OpenCV enhancement for quality detection (default: true)
+    min_laplacian_variance: number          // Minimum Laplacian variance for blur detection (default: 100)
+    min_gradient_sharpness: number          // Minimum gradient sharpness for blur detection (default: 0.3)
+    min_blur_score: number                  // Minimum blur score for blur detection (default: 0.6)
+  }
 
-  // Status Settings
-  show_status_prompt?: boolean                // Show status prompts (default: true)
-  status_prompt_duration?: number             // Prompt duration in ms
-
-  // Border Colors
-  show_border_color?: boolean                 // Show border colors (default: true)
-  border_color_idle?: string                  // Color for idle state
-  border_color_success?: string               // Color for success
-  border_color_error?: string                 // Color for error
+  // ========== Liveness Settings ==========
+  liveness_action_list?: LivenessAction[]  // List of liveness actions to detect (default: [BLINK, MOUTH_OPEN, NOD])
+  liveness_action_count?: number           // Number of liveness actions to perform (default: 1)
+  liveness_action_randomize?: boolean      // Whether to randomize liveness actions (default: true)
+  liveness_verify_timeout?: number         // Timeout for liveness verification in ms (default: 60000)
+  min_mouth_open_percent?: number          // Minimum mouth open percentage for detection (default: 0.2)
 }
 ```
 
@@ -176,7 +184,7 @@ engine.on('detector-loaded', () => {
 ```
 
 #### `face-detected`
-A valid face frame has been detected with silent liveness scores.
+A face frame has been detected with silent liveness scores.
 
 ```typescript
 engine.on('face-detected', (data) => {
@@ -289,13 +297,6 @@ const engine = new FaceDetectionEngine({
   liveness_action_count: 3,
   liveness_action_list: ['blink', 'mouth_open', 'nod'],
   liveness_action_timeout: 120,  // 2 minutes per action
-  
-  // Custom labels
-  liveness_action_desc: {
-    blink: 'Please blink your eyes',
-    mouth_open: 'Open your mouth',
-    nod: 'Move your head'
-  }
 })
 ```
 
