@@ -17,7 +17,8 @@ import type {
   FaceFrontalFeatures,
   ImageQualityFeatures,
   EventListener,
-  DetectorLoadedEventData
+  DetectorLoadedEventData,
+  ResolvedEngineConfig
 } from './types'
 import { ScoredList as ScoredListClass } from './types'
 import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus } from './enums'
@@ -26,6 +27,7 @@ import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
 import { loadOpenCV, loadHuman, getCvSync } from './library-loader'
+import { min } from '@techstark/opencv-js'
 
 /**
  * Internal detection state interface
@@ -66,7 +68,7 @@ interface DetectionState {
  * ```
  */
 export class FaceDetectionEngine extends SimpleEventEmitter {
-  private config: FaceDetectionEngineConfig
+  private config: ResolvedEngineConfig
   private human: Human | null = null
   private stream: MediaStream | null = null
   private isDetecting: boolean = false
@@ -74,8 +76,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private isInitializing: boolean = false
 
   private videoElement: HTMLVideoElement | null = null
-  private canvasElement: HTMLCanvasElement | null = null
-  private canvasContext: CanvasRenderingContext2D | null = null
+  private frameCanvasElement: HTMLCanvasElement | null = null
+  private frameCanvasContext: CanvasRenderingContext2D | null = null
+  private faceCanvasElement: HTMLCanvasElement | null = null
+  private faceCanvasContext: CanvasRenderingContext2D | null = null
 
   private detectionFrameId: number | null = null
   private lastDetectionTime: number = 0
@@ -97,8 +101,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.detectionState = {
       completedActions: new Set(),
       currentAction: null,
-      collectedImages: new ScoredListClass(this.config.silent_detect_count ?? 3), 
-      collectedFaces: new ScoredListClass(this.config.silent_detect_count ?? 3) 
+      collectedImages: new ScoredListClass(this.config.silent_detect_count), 
+      collectedFaces: new ScoredListClass(this.config.silent_detect_count) 
     }
   }
 
@@ -166,18 +170,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Requires initialize() to be called first and a video element to be provided
    *
    * @param videoElement - HTMLVideoElement to capture from
-   * @param canvasElement - HTMLCanvasElement for drawing (optional)
    * @returns Promise that resolves when detection starts
    * @throws Error if not initialized or video setup fails
    */
-  async startDetection(videoElement: HTMLVideoElement, canvasElement?: HTMLCanvasElement): Promise<void> {
+  async startDetection(videoElement: HTMLVideoElement): Promise<void> {
     if (!this.isReady) {
       this.emitDebug('detection', 'Engine not ready', { ready: this.isReady }, 'warn')
       throw new Error('Engine not initialized. Call initialize() first.')
     }
 
     this.videoElement = videoElement
-    this.canvasElement = canvasElement ?? null
 
     this.resetDetectionState()
 
@@ -357,7 +359,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Schedule next detection frame
    */
-  private scheduleNextDetection(delayMs: number = this.config.detection_frame_delay ?? 100): void {
+  private scheduleNextDetection(delayMs: number = this.config.detection_frame_delay): void {
     if (!this.isDetecting) return
 
     if (this.detectionFrameId !== null) {
@@ -409,7 +411,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // Check video is ready
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        this.scheduleNextDetection(this.config.error_retry_delay ?? 200) // ERROR_RETRY_DELAY
+        this.scheduleNextDetection(this.config.error_retry_delay) // ERROR_RETRY_DELAY
         return
       }
 
@@ -417,7 +419,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const result = await this.human.detect(this.videoElement)
 
       if (!result) {
-        this.scheduleNextDetection(this.config.error_retry_delay ?? 100) // DETECTION_FRAME_DELAY
+        this.scheduleNextDetection(this.config.error_retry_delay) // DETECTION_FRAME_DELAY
         return
       }
 
@@ -434,64 +436,171 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         error: (error as Error).message,
         stack: (error as Error).stack
       }, 'error')
-      this.scheduleNextDetection(this.config.error_retry_delay ?? 200) // ERROR_RETRY_DELAY
+      this.scheduleNextDetection(this.config.error_retry_delay) // ERROR_RETRY_DELAY
     }
+  }
+
+  private getPerformActionCount(): number{
+    if (this.config.liveness_action_count <= 0){
+      return 0
+    }
+    return Math.min(this.config.liveness_action_count, this.config.liveness_action_list.length)
+  }
+
+  /**
+   * 当前帧是否处于采集照片阶段
+   * @returns 
+   */
+  private isCollectingPhotos(): boolean {
+    return this.detectionState.collectedImages.size() < this.config.silent_detect_count
+  }
+
+  private hasCollectedEnoughImages(): boolean {
+    return this.detectionState.collectedImages.size() >= this.config.silent_detect_count
   }
 
   /**
    * Handle single face detection
    */
   private handleSingleFace(face: FaceResult, gestures: GestureResult[]): void {
-    // Check if enough images collected
-    if (this.detectionState.collectedImages.size() < 3) { // COLLECTION_COUNT
-      this.scheduleNextDetection()
+    const faceBox = face.box || face.boxRaw
+
+    if (!faceBox) {
+      console.warn('[FaceDetector] Face detected but no box/boxRaw property:', Object.keys(face).slice(0, 10))
+      this.scheduleNextDetection(this.config.error_retry_delay)
       return
     }
 
-    // Check if action liveness needed
-    const actionCount = Math.min(
-      this.config.liveness_action_count ?? 0,
-      (this.config.liveness_action_list ?? []).length
-    )
+    // 计算人脸占视频画面的比例 (0-1)
+    const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
+    if (faceRatio <= this.config.min_face_ratio!) {
+      this.emitDebug('detection', '人脸太小', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    } 
+    if (faceRatio >= this.config.max_face_ratio!) {
+      this.emitStatusPrompt(PromptCode.FACE_TOO_LARGE, { size: faceRatio })
+      this.emitDebug('detection', '人脸太大', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
 
-    if (actionCount === 0) {
+    // 一次性绘制视频帧到 canvas，后续多次使用
+    const frameCanvas = this.drawVideoToCanvas()
+    if (!frameCanvas) {
+      this.emitDebug('detection', '绘制视频帧到 canvas 失败', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+
+    // 检查人脸是否正对摄像头 (0-1 评分)
+    let frontal = 1
+    // 非动作检测阶段，需要校验人脸正对度
+    if(this.isCollectingPhotos()){
+        frontal = checkFaceFrontal(face, gestures, frameCanvas, this.config.face_frontal_features)
+        if(frontal < this.config.min_face_frontal){
+            this.emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal })
+            this.emitDebug('detection', '人脸未正对摄像头', { frontal: frontal.toFixed(4), minFrontal: this.config.min_face_frontal! }, 'info')
+            this.scheduleNextDetection(this.config.error_retry_delay)
+            return
+        }
+    }
+
+    // 图片质量检测
+    const qualityResult = checkImageQuality(frameCanvas, face, this.actualVideoWidth, this.actualVideoHeight, this.config.image_quality_features)
+    if (!qualityResult.passed || qualityResult.score < this.config.min_image_quality ) {
+      this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { result: qualityResult, minImageQuality: this.config.min_image_quality })
+      this.emitDebug('detection', '图像质量不符合要求', { result: qualityResult, minImageQuality: this.config.min_image_quality }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+
+    // 静默活体检测
+    if (face.real == undefined || typeof face.real !== 'number') {
+      this.emitDebug('detection', '人脸实度评分缺失，无法进行活体判断', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+
+    if (face.real < this.config.min_real_score) {
+      this.emitDebug('detection', '人脸实度评分不足，疑似非活体', { realScore: face.real.toFixed(4), minRealScore: this.config.min_real_score }, 'info')
+      this.emit('detector-error' as any, { 
+        code: ErrorCode.LIVENESS_DETECTION_FAILED, 
+        message: '活体检测失败：检测到疑似非活体人脸，请重新尝试。' 
+      })
+      this.stopDetection()
+      return
+    }
+    
+    if (face.live == undefined || typeof face.live !== 'number') {
+      this.emitDebug('detection', '人脸活度评分缺失，无法进行活体判断', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+
+    if (face.live < this.config.min_live_score) {
+      this.emitDebug('detection', '人脸活度评分不足，本次不通过', { liveScore: face.live.toFixed(4), minLiveScore: this.config.min_live_score }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+
+    // Capture face image
+    const frameImageData = this.captureFrame()
+    if (!frameImageData) {
+      this.emitDebug('detection', '捕获当前帧图像失败', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+    const faceImageData = this.captureFrame(faceBox)
+    if (!faceImageData) {
+      this.emitDebug('detection', '捕获人脸图像失败', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return
+    }
+    this.detectionState.collectedImages.add(frameImageData, qualityResult.score)
+    this.detectionState.collectedFaces.add(faceImageData, qualityResult.score)
+
+    // 未采集到足够的图片时，继续采集
+    if(!this.hasCollectedEnoughImages()){
+      this.scheduleNextDetection(this.config.detection_frame_delay * 2.5)
+      return
+    }
+
+    // 不需要动作检测时，直接结束
+    if(this.getPerformActionCount() <= 0){
       this.completeLiveness()
       return
     }
 
-    // Check if all actions completed
-    if (this.detectionState.completedActions.size >= actionCount) {
-      this.completeLiveness()
-      return
-    }
-
-    // Get or select next action
+    // 当前还没有设定动作，设定后继续
     if (!this.detectionState.currentAction) {
       this.selectNextAction()
-      this.scheduleNextDetection()
+      this.scheduleNextDetection(this.config.detection_frame_delay * 3)
       return
     }
 
     // Check if action detected
     const detected = this.detectAction(this.detectionState.currentAction, gestures)
-
-    if (detected) {
-      this.detectionState.completedActions.add(this.detectionState.currentAction)
-      this.detectionState.currentAction = null
-
-      if (this.actionTimeoutId) {
-        clearTimeout(this.actionTimeoutId)
-        this.actionTimeoutId = null
-      }
-
-      if (this.detectionState.completedActions.size >= actionCount) {
-        this.completeLiveness()
-        return
-      }
-
-      this.selectNextAction()
+    if (!detected) {
+      this.scheduleNextDetection()
+      return
     }
 
+    this.detectionState.completedActions.add(this.detectionState.currentAction)
+    this.detectionState.currentAction = null
+
+    if (this.actionTimeoutId) {
+      clearTimeout(this.actionTimeoutId)
+      this.actionTimeoutId = null
+    }
+
+    // 已经完成规定次数的动作验证，结束检测
+    if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
+      this.completeLiveness()
+      return
+    }
+
+    this.selectNextAction()
     this.scheduleNextDetection()
   }
 
@@ -516,10 +625,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Complete liveness detection
    */
   private completeLiveness(): void {
-    const bestImage = this.detectionState.collectedImages.getBestItem()
+    const bestFrame = this.detectionState.collectedImages.getBestItem()
+    const bestFace = this.detectionState.collectedFaces.getBestItem()
     const bestScore = this.detectionState.collectedImages.getBestScore()
 
-    if (!bestImage) {
+    if (!bestFrame || !bestFace || bestScore === null) {
       this.emit('detector-error' as any, {
         code: ErrorCode.DETECTION_ERROR,
         message: 'No images collected, unable to select best image'
@@ -530,8 +640,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     this.emit('liveness-completed' as any, {
       qualityScore: bestScore,
-      imageData: bestImage,
-      liveness: 1
+      imageData: bestFrame,
+      faceData: bestFace,
     })
 
     this.stopDetection(true)
@@ -549,9 +659,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    // Random selection
-    const randomIndex = Math.floor(Math.random() * availableActions.length)
-    this.detectionState.currentAction = availableActions[randomIndex]
+    let nextAction = availableActions[0]
+    if (this.config.liveness_action_randomize) {
+        // Random selection
+        const randomIndex = Math.floor(Math.random() * availableActions.length)
+        nextAction = availableActions[randomIndex]
+    }
+
+    this.detectionState.currentAction = nextAction
 
     const promptData: ActionPromptEventData = {
       action: this.detectionState.currentAction,
@@ -574,6 +689,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.resetDetectionState()
       }
     }, (this.config.liveness_action_timeout ?? 60) * 1000)
+
+    return
   }
 
   /**
@@ -663,15 +780,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       
       // 如果缓存的 canvas 尺寸不匹配，重新创建
-      if (!this.canvasElement || this.canvasElement.width !== videoWidth_actual || this.canvasElement.height !== videoHeight_actual) {
-        this.canvasElement = document.createElement('canvas')
-        this.canvasElement.width = videoWidth_actual
-        this.canvasElement.height = videoHeight_actual
-        this.canvasContext = this.canvasElement.getContext('2d')
+      if (!this.frameCanvasElement || this.frameCanvasElement.width !== videoWidth_actual || this.frameCanvasElement.height !== videoHeight_actual) {
+        this.frameCanvasElement = document.createElement('canvas')
+        this.frameCanvasElement.width = videoWidth_actual
+        this.frameCanvasElement.height = videoHeight_actual
+        this.frameCanvasContext = this.frameCanvasElement.getContext('2d')
         this.emitDebug('capture', 'Canvas 创建/调整大小', { width: videoWidth_actual, height: videoHeight_actual })
       }
       
-      if (!this.canvasContext) return null
+      if (!this.frameCanvasContext) return null
       
       // 在尝试绘制前，验证视频的可绘制性
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -682,10 +799,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return null
       }
       
-      this.canvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
+      this.frameCanvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
       this.emitDebug('capture', '帧已绘制到 canvas')
       
-      return this.canvasElement
+      return this.frameCanvasElement
     } catch (e) {
       this.emitDebug('capture', '绘制帧到 canvas 失败', { error: (e as Error).message }, 'error')
       return null
@@ -714,21 +831,25 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @returns {string | null} Base64 格式的 JPEG 图片数据
    */
   private captureFrame(box?: Box): string | null {
-    if(!this.canvasElement) {
+    if(!this.frameCanvasElement) {
       return null
     }
     if (!box) {
-      return this.canvasToBase64(this.canvasElement)
+      return this.canvasToBase64(this.frameCanvasElement)
     }
-    const tempCanvas = document.createElement('canvas')
-    const tempContext = tempCanvas.getContext('2d')
-    if (!tempContext) {
-      return null
+    const x = box[0], y = box[1], width = box[2], height = box[3]
+    // 如果缓存的 canvas 尺寸不匹配，重新创建
+    if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
+      this.faceCanvasElement = document.createElement('canvas')
+      this.faceCanvasElement.width = width
+      this.faceCanvasElement.height = height
+      this.faceCanvasContext = this.faceCanvasElement.getContext('2d')
     }
-    tempCanvas.width = box[2]
-    tempCanvas.height = box[3]
-    tempContext.drawImage(this.canvasElement, box[0], box[1], box[2], box[3], 0, 0, box[2], box[3])
-    return this.canvasToBase64(tempCanvas)
+    if(!this.faceCanvasContext) return null
+    this.faceCanvasElement.width = width
+    this.faceCanvasElement.height = height
+    this.faceCanvasContext.drawImage(this.frameCanvasElement, x, y, width, height, 0, 0, width, height)
+    return this.canvasToBase64(this.faceCanvasElement)
   }
 }
 

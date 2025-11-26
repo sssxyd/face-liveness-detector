@@ -2,7 +2,7 @@
  * Face Detection Engine - Configuration
  */
 
-import type { FaceDetectionEngineConfig } from './types'
+import type { ResolvedEngineConfig, FaceDetectionEngineConfig } from './types'
 import { LivenessAction } from './enums'
 
 /**
@@ -36,8 +36,10 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   }),
   image_quality_features: Object.freeze({
     require_full_face_in_bounds: true,
-    min_box_score: 0.8,
-    min_face_score: 0.8
+    use_opencv_enhancement: true,
+    min_laplacian_variance: 100,
+    min_gradient_sharpness: 0.3,
+    min_blur_score: 0.6
   }),
 
   // LivenessSettings defaults
@@ -45,42 +47,103 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   liveness_action_timeout: 60000,
   liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   liveness_action_count: 1,
-  liveness_action_random: true,
+  liveness_action_randomize: true,
   min_mouth_open_percent: 0.2,
 
 })
 
 /**
  * Merge user configuration with defaults
- * @param userConfig - User provided configuration
- * @returns Merged configuration
+ * @param userConfig - User provided configuration (partial, optional)
+ * @returns Complete resolved configuration with all required fields
  */
 export function mergeConfig(
   userConfig?: Partial<FaceDetectionEngineConfig>
-): FaceDetectionEngineConfig {
+): ResolvedEngineConfig {
   if (!userConfig) {
-    return structuredClone(DEFAULT_CONFIG)
+    return structuredClone(DEFAULT_CONFIG) as ResolvedEngineConfig
   }
 
-  const merged: FaceDetectionEngineConfig = {
-    ...DEFAULT_CONFIG,
-    ...userConfig
+  const merged = structuredClone(DEFAULT_CONFIG)
+
+  // Merge simple scalar properties
+  if (userConfig.human_model_path !== undefined) {
+    merged.human_model_path = userConfig.human_model_path
+  }
+  if (userConfig.tensorflow_wasm_path !== undefined) {
+    merged.tensorflow_wasm_path = userConfig.tensorflow_wasm_path
+  }
+  if (userConfig.video_width !== undefined) {
+    merged.video_width = userConfig.video_width
+  }
+  if (userConfig.video_height !== undefined) {
+    merged.video_height = userConfig.video_height
+  }
+  if (userConfig.video_mirror !== undefined) {
+    merged.video_mirror = userConfig.video_mirror
+  }
+  if (userConfig.video_load_timeout !== undefined) {
+    merged.video_load_timeout = userConfig.video_load_timeout
+  }
+  if (userConfig.detection_frame_delay !== undefined) {
+    merged.detection_frame_delay = userConfig.detection_frame_delay
+  }
+  if (userConfig.error_retry_delay !== undefined) {
+    merged.error_retry_delay = userConfig.error_retry_delay
+  }
+  if (userConfig.silent_detect_count !== undefined) {
+    merged.silent_detect_count = userConfig.silent_detect_count
+  }
+  if (userConfig.min_face_ratio !== undefined) {
+    merged.min_face_ratio = userConfig.min_face_ratio
+  }
+  if (userConfig.max_face_ratio !== undefined) {
+    merged.max_face_ratio = userConfig.max_face_ratio
+  }
+  if (userConfig.min_face_frontal !== undefined) {
+    merged.min_face_frontal = userConfig.min_face_frontal
+  }
+  if (userConfig.min_image_quality !== undefined) {
+    merged.min_image_quality = userConfig.min_image_quality
+  }
+  if (userConfig.min_live_score !== undefined) {
+    merged.min_live_score = userConfig.min_live_score
+  }
+  if (userConfig.min_real_score !== undefined) {
+    merged.min_real_score = userConfig.min_real_score
+  }
+  if (userConfig.show_action_prompt !== undefined) {
+    merged.show_action_prompt = userConfig.show_action_prompt
+  }
+  if (userConfig.liveness_action_timeout !== undefined) {
+    merged.liveness_action_timeout = userConfig.liveness_action_timeout
+  }
+  if (userConfig.liveness_action_count !== undefined) {
+    merged.liveness_action_count = userConfig.liveness_action_count
+  }
+  if (userConfig.liveness_action_randomize !== undefined) {
+    merged.liveness_action_randomize = userConfig.liveness_action_randomize
+  }
+  if (userConfig.min_mouth_open_percent !== undefined) {
+    merged.min_mouth_open_percent = userConfig.min_mouth_open_percent
   }
 
   // Deep merge nested objects
-  if (userConfig.face_frontal_features) {
+  if (userConfig.liveness_action_list !== undefined) {
+    merged.liveness_action_list = userConfig.liveness_action_list
+  }
+  if (userConfig.face_frontal_features !== undefined) {
     merged.face_frontal_features = {
       ...DEFAULT_CONFIG.face_frontal_features,
       ...userConfig.face_frontal_features
     }
   }
-
-  if (userConfig.image_quality_features) {
+  if (userConfig.image_quality_features !== undefined) {
     merged.image_quality_features = {
       ...DEFAULT_CONFIG.image_quality_features,
       ...userConfig.image_quality_features
     }
   }
 
-  return merged
+  return merged as ResolvedEngineConfig
 }

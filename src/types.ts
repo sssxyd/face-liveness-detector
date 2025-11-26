@@ -9,20 +9,24 @@ import type { LivenessAction, LivenessActionStatus, PromptCode, ErrorCode } from
 
 export interface FaceFrontalFeatures {
   // Yaw angle threshold (degrees) - horizontal shake limit
-  yaw_threshold?: number
+  yaw_threshold: number
   // Pitch angle threshold (degrees) - vertical tilt limit
-  pitch_threshold?: number
+  pitch_threshold: number
   // Roll angle threshold (degrees) - rotation limit
-  roll_threshold?: number
+  roll_threshold: number
 }
 
 export interface ImageQualityFeatures {
   // Require face completely within bounds (default true)
-  require_full_face_in_bounds?: boolean
-  // Minimum face detection box score (0-1, default 0.8)
-  min_box_score?: number
-  // Minimum face mesh score (0-1, default 0.8)
-  min_face_score?: number
+  require_full_face_in_bounds: boolean
+  // Use OpenCV enhancement for quality detection (default true)
+  use_opencv_enhancement: boolean
+  // Minimum Laplacian variance for blur detection (default 100)
+  min_laplacian_variance: number
+  // Minimum gradient sharpness for blur detection (default 0.3)
+  min_gradient_sharpness: number
+  // Minimum blur score for blur detection (default 0.6)
+  min_blur_score: number
 }
 
 /**
@@ -58,8 +62,42 @@ export interface FaceDetectionEngineConfig {
   liveness_action_timeout?: number
   liveness_action_list?: LivenessAction[]
   liveness_action_count?: number
-  liveness_action_random?: boolean
+  liveness_action_randomize?: boolean
   min_mouth_open_percent?: number
+
+}
+
+export interface ResolvedEngineConfig {
+  // resource paths
+  human_model_path: string
+  tensorflow_wasm_path: string
+
+  // ========== Detection Settings ==========
+  video_width: number
+  video_height: number
+  video_mirror: boolean // Mirror video horizontally (like a mirror)
+  video_load_timeout: number
+  detection_frame_delay: number
+  error_retry_delay: number
+
+  // ========== Collection Settings ==========
+  silent_detect_count: number
+  min_face_ratio: number
+  max_face_ratio: number
+  min_face_frontal: number
+  min_image_quality: number
+  min_live_score: number
+  min_real_score: number
+  face_frontal_features: FaceFrontalFeatures
+  image_quality_features: ImageQualityFeatures
+
+  // ========== Liveness Settings ==========
+  show_action_prompt: boolean
+  liveness_action_timeout: number
+  liveness_action_list: LivenessAction[]
+  liveness_action_count: number
+  liveness_action_randomize: boolean
+  min_mouth_open_percent: number
 
 }
 
@@ -103,8 +141,8 @@ export interface LivenessDetectedEventData {
  */
 export interface LivenessCompletedEventData {
   qualityScore: number  // Image quality score (0-1)
-  imageData: string | null  // Base64 encoded image
-  liveness: number      // Liveness score (0-1)
+  imageData: string | null  // Base64 encoded frame image
+  faceData: string | null   // Base64 encoded face image
 }
 
 /**
