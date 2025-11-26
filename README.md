@@ -16,7 +16,7 @@ A framework-agnostic, TypeScript-based npm package for face liveness detection. 
 ## Installation
 
 ```bash
-npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-js
+npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 ```
 
 ## Quick Start - Using Local Model Files (Recommended)
@@ -40,7 +40,7 @@ This will create:
 ### Step 2: Initialize Engine with Local Files
 
 ```typescript
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 // Configure to use local model files
 const engine = new FaceDetectionEngine({
@@ -72,7 +72,7 @@ app.use(express.static('public'))
 If you prefer not to host local files, the engine will automatically use CDN sources:
 
 ```typescript
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 // No need to specify paths - uses CDN by default
 const engine = new FaceDetectionEngine({
@@ -302,7 +302,7 @@ enum ErrorCode {
 ### Complete Integration Example with Events
 
 ```typescript
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 const engine = new FaceDetectionEngine({
   human_model_path: '/models',

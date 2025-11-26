@@ -195,7 +195,7 @@ types/
 
 #### As ES Module
 ```typescript
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 const engine = new FaceDetectionEngine({
   liveness_action_list: ['blink'],
@@ -209,7 +209,7 @@ await engine.startDetection(video)
 
 #### As CommonJS
 ```javascript
-const FaceDetectionEngine = require('@face-liveness/detection-engine')
+const FaceDetectionEngine = require('@sssxyd/face-liveness-detector')
 ```
 
 #### In Browser (UMD)
@@ -316,7 +316,7 @@ import FaceDetector from '@/components/facedetector/FaceDetector.vue'
 
 ### After (NPM Package)
 ```typescript
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 const engine = new FaceDetectionEngine({
   min_face_ratio: 0.5,
@@ -353,7 +353,7 @@ npm run build
 npm publish --access public
 
 # Verify
-npm info @face-liveness/detection-engine
+npm info @sssxyd/face-liveness-detector
 ```
 
 ## Performance Considerations

@@ -3,7 +3,7 @@
 ## Installation
 
 ```bash
-npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-js
+npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 ```
 
 ## Basic Usage (Copy & Paste)
@@ -35,7 +35,7 @@ npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-
         // For development, use: import('./path/to/index.esm.js')
         
         // Dynamic import for demo
-        const module = await import('@face-liveness/detection-engine/dist/index.esm.js')
+        const module = await import('@sssxyd/face-liveness-detector/dist/index.esm.js')
         const { default: FaceDetectionEngine, LivenessAction } = module
         
         // Create engine
@@ -116,7 +116,7 @@ npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-
 ```typescript
 // hooks/useFaceDetection.ts
 import { useEffect, useRef, useState } from 'react'
-import FaceDetectionEngine from '@face-liveness/detection-engine'
+import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
 
 export function useFaceDetection(config?: any) {
   const engineRef = useRef<FaceDetectionEngine | null>(null)
@@ -156,7 +156,7 @@ export function useFaceDetection(config?: any) {
 // components/FaceDetection.tsx
 import { useRef } from 'react'
 import { useFaceDetection } from '../hooks/useFaceDetection'
-import { LivenessAction } from '@face-liveness/detection-engine'
+import { LivenessAction } from '@sssxyd/face-liveness-detector'
 
 export function FaceDetection() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -200,7 +200,7 @@ export function FaceDetection() {
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
-import FaceDetectionEngine, { LivenessAction } from '@face-liveness/detection-engine'
+import FaceDetectionEngine, { LivenessAction } from '@sssxyd/face-liveness-detector'
 
 const videoElement = ref<HTMLVideoElement | null>(null)
 const engine = ref<FaceDetectionEngine | null>(null)
@@ -391,7 +391,7 @@ const engine = new FaceDetectionEngine({
 ## Full Example with Error Handling
 
 ```typescript
-import FaceDetectionEngine, { LivenessAction, ErrorCode } from '@face-liveness/detection-engine'
+import FaceDetectionEngine, { LivenessAction, ErrorCode } from '@sssxyd/face-liveness-detector'
 
 async function initializeFaceDetection() {
   try {
