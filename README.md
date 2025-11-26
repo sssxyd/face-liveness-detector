@@ -16,7 +16,7 @@ A framework-agnostic, TypeScript-based npm package for face liveness detection. 
 ## Installation
 
 ```bash
-npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
+npm install @sssxyd/face-liveness-detector
 ```
 
 ## Quick Start - Using Local Model Files (Recommended)

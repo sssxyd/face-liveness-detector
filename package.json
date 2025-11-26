@@ -47,7 +47,7 @@
   ],
   "author": "xuyd <sssxyd@gmail.com>",
   "license": "MIT",
-  "peerDependencies": {
+  "dependencies": {
     "@techstark/opencv-js": "^4.12.0-release.1",
     "@vladmandic/human": "^3.3.0"
   },
