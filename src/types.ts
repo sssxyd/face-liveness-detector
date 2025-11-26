@@ -141,8 +141,8 @@ export interface LivenessDetectedEventData {
  */
 export interface DetectorFinishEventData {
   success: boolean        // Whether liveness detection succeeded
-  silentPassedCount: number   // 静默活体检测通过次数
-  actionPassedCount: number  // 完成的动作的次数
+  silentPassedCount: number   // Silent liveness detection pass count
+  actionPassedCount: number  // Completed action count
   totalTime: number       // Total time taken (ms)
   bestQualityScore: number  // Image quality score (0-1)
   bestFrameImage: string | null  // Base64 encoded frame image

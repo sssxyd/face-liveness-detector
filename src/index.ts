@@ -41,6 +41,7 @@ interface DetectionState {
   completedActions: Set<LivenessAction>
   currentAction: LivenessAction | null
   actionVerifyTimeout: ReturnType<typeof setTimeout> | null
+  lastFrontalScore: number
 }
 
 /**
@@ -110,6 +111,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       completedActions: new Set(),
       currentAction: null,
       actionVerifyTimeout: null,
+      lastFrontalScore: 1,
     }
   }
 
@@ -411,7 +413,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Reset detection state
    */
   private resetDetectionState(): void {
-    this.clearActionVerifyTimeout()
     this.detectionState = {
       period: DetectionPeriod.DETECT,
       startTime: performance.now(),
@@ -423,6 +424,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       completedActions: new Set(),
       currentAction: null,
       actionVerifyTimeout: null,
+      lastFrontalScore: 1,
     }
     this.actualVideoWidth = 0
     this.actualVideoHeight = 0
@@ -511,145 +513,232 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private handleSingleFace(face: FaceResult, gestures: GestureResult[]): void {
     const faceBox = face.box || face.boxRaw
 
-    if (!faceBox) {
-      console.warn('[FaceDetector] Face detected but no box/boxRaw property:', Object.keys(face).slice(0, 10))
-      this.scheduleNextDetection(this.config.error_retry_delay)
+    if (!this.validateFaceBox(faceBox)) {
       return
     }
 
-    // 计算人脸占视频画面的比例 (0-1)
     const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
-    if (faceRatio <= this.config.min_face_ratio!) {
-      this.emitDebug('detection', '人脸太小', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
-      this.scheduleNextDetection(this.config.error_retry_delay)
-      return
-    } 
-    if (faceRatio >= this.config.max_face_ratio!) {
-      this.emitStatusPrompt(PromptCode.FACE_TOO_LARGE, { size: faceRatio })
-      this.emitDebug('detection', '人脸太大', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
-      this.scheduleNextDetection(this.config.error_retry_delay)
+    if (!this.validateFaceSize(faceRatio, faceBox)) {
       return
     }
 
-    // 一次性绘制视频帧到 canvas，后续多次使用
     const frameCanvas = this.drawVideoToCanvas()
     if (!frameCanvas) {
-      this.emitDebug('detection', '绘制视频帧到 canvas 失败', {}, 'warn')
+      this.emitDebug('detection', 'Failed to draw video frame to canvas', {}, 'warn')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return
     }
 
-    // 检查人脸是否正对摄像头 (0-1 评分)
     let frontal = 1
-    // 检测&&采集阶段，都要检验人脸正对度
-    if(this.detectionState.period == DetectionPeriod.DETECT || this.detectionState.period == DetectionPeriod.COLLECT){
-        frontal = checkFaceFrontal(face, gestures, frameCanvas, this.config.face_frontal_features)
-        if(frontal < this.config.min_face_frontal){
-            this.emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal })
-            this.emitDebug('detection', '人脸未正对摄像头', { frontal: frontal.toFixed(4), minFrontal: this.config.min_face_frontal! }, 'info')
-            this.scheduleNextDetection(this.config.error_retry_delay)
-            return
-        }
-    }
-
-    // 图片质量检测
-    const qualityResult = checkImageQuality(frameCanvas, face, this.actualVideoWidth, this.actualVideoHeight, this.config.image_quality_features)
-    if (!qualityResult.passed || qualityResult.score < this.config.min_image_quality ) {
-      this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { result: qualityResult, minImageQuality: this.config.min_image_quality })
-      this.emitDebug('detection', '图像质量不符合要求', { result: qualityResult, minImageQuality: this.config.min_image_quality }, 'info')
-      this.scheduleNextDetection(this.config.error_retry_delay)
-      return
-    }
-
-    // 静默活体检测
-    if (face.real == undefined || typeof face.real !== 'number') {
-      this.emitDebug('detection', '人脸实度评分缺失，无法进行活体判断', {}, 'warn')
-      this.scheduleNextDetection(this.config.error_retry_delay)
-      return
-    }
-
-    // 人脸真实度不够，疑似非活体
-    if (face.real < this.config.min_real_score) {
-      this.detectionState.suspectedFraudsCount++
-      this.emitDebug('detection', '人脸实度评分不足，疑似非活体', { realScore: face.real.toFixed(4), minRealScore: this.config.min_real_score }, 'info')
-      // 尚未达到疑似非活体次数阈值，继续检测
-      if(this.detectionState.suspectedFraudsCount < this.config.suspected_frauds_count){  
-        this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { count: this.detectionState.suspectedFraudsCount, realScore: face.real })
-        this.scheduleNextDetection(this.config.error_retry_delay)
+    if (this.detectionState.period === DetectionPeriod.DETECT || this.detectionState.period === DetectionPeriod.COLLECT) {
+      if (!this.validateFaceFrontal(face, gestures, frameCanvas, faceRatio)) {
         return
       }
-      // 达到疑似非活体次数阈值，判定为非活体，结束检测
-      this.emit('detector-error' as any, { 
-        code: ErrorCode.SUSPECTED_FRAUDS_DETECTED, 
-        message: '活体检测失败：检测到疑似非活体人脸，请重新尝试。' 
-      })
-      this.stopDetection(false)
-      return
+      frontal = this.detectionState.lastFrontalScore
     }
-    
-    if (face.live == undefined || typeof face.live !== 'number') {
-      this.emitDebug('detection', '人脸活度评分缺失，无法进行活体判断', {}, 'warn')
-      this.scheduleNextDetection(this.config.error_retry_delay)
+
+    const qualityResult = checkImageQuality(frameCanvas, face, this.actualVideoWidth, this.actualVideoHeight, this.config.image_quality_features)
+    if (!this.validateImageQuality(qualityResult, faceRatio, frontal)) {
       return
     }
 
-    if (face.live < this.config.min_live_score) {
-      this.emitDebug('detection', '人脸活度评分不足，本次不通过', { liveScore: face.live.toFixed(4), minLiveScore: this.config.min_live_score }, 'info')
-      this.scheduleNextDetection(this.config.error_retry_delay)
+    if (!this.validateSilentLiveness(face, faceRatio, frontal, qualityResult.score)) {
       return
     }
 
+    this.emitLivenessDetected(true, faceRatio, frontal, qualityResult.score, face.real || 0, face.live || 0)
+
+    // Process detection phases based on current period
     if (this.detectionState.period === DetectionPeriod.DETECT) {
-      this.detectionState.period = DetectionPeriod.COLLECT
-      this.emitDebug('detection', '进入图片采集阶段')
+      this.handleDetectPhase()
     }
 
     if (this.detectionState.period === DetectionPeriod.COLLECT) {
-      this.collectHighQualityImage(qualityResult.score, faceBox)
-      if(this.detectionState.collectCount >= this.config.silent_detect_count){
-        if(this.getPerformActionCount() > 0){
-          this.detectionState.period = DetectionPeriod.VERIFY
-          this.emitDebug('detection', '进入动作验证阶段')
-        } else {
-          this.stopDetection(true)
-          return
-        }
-      }
+      this.handleCollectPhase(qualityResult.score, faceBox)
     }
 
-    if(this.detectionState.period === DetectionPeriod.VERIFY){
-      // 当前还没有设定动作，设定后继续
-      if (!this.detectionState.currentAction) {
-        this.selectNextAction()
-        this.scheduleNextDetection(this.config.detection_frame_delay * 3)
-        return
+    if (this.detectionState.period === DetectionPeriod.VERIFY) {
+      this.handleVerifyPhase(gestures)
+    }
+  }
+
+  /**
+   * Validate face box existence
+   */
+  private validateFaceBox(faceBox: Box | undefined): boolean {
+    if (!faceBox) {
+      console.warn('[FaceDetector] Face detected but no box/boxRaw property')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+    return true
+  }
+
+  /**
+   * Validate face size ratio
+   */
+  private validateFaceSize(faceRatio: number, faceBox: Box): boolean {
+    if (faceRatio <= this.config.min_face_ratio!) {
+      this.emitLivenessDetected(false, faceRatio)
+      this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    if (faceRatio >= this.config.max_face_ratio!) {
+      this.emitLivenessDetected(false, faceRatio)
+      this.emitStatusPrompt(PromptCode.FACE_TOO_LARGE, { size: faceRatio })
+      this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * Validate face frontal angle
+   */
+  private validateFaceFrontal(face: FaceResult, gestures: GestureResult[], frameCanvas: HTMLCanvasElement, faceRatio: number): boolean {
+    const frontal = checkFaceFrontal(face, gestures, frameCanvas, this.config.face_frontal_features)
+    this.detectionState.lastFrontalScore = frontal
+
+    if (frontal < this.config.min_face_frontal) {
+      this.emitLivenessDetected(false, faceRatio, frontal)
+      this.emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal })
+      this.emitDebug('detection', 'Face is not frontal to camera', { frontal: frontal.toFixed(4), minFrontal: this.config.min_face_frontal! }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * Validate image quality
+   */
+  private validateImageQuality(qualityResult: any, faceRatio: number, frontal: number): boolean {
+    if (!qualityResult.passed || qualityResult.score < this.config.min_image_quality) {
+      this.emitLivenessDetected(false, faceRatio, frontal, qualityResult.score)
+      this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { result: qualityResult, minImageQuality: this.config.min_image_quality })
+      this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.config.min_image_quality }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * Validate silent liveness scores
+   */
+  private validateSilentLiveness(face: FaceResult, faceRatio: number, frontal: number, quality: number): boolean {
+    // Check reality score
+    if (face.real === undefined || typeof face.real !== 'number') {
+      this.emitLivenessDetected(false, faceRatio, frontal, quality)
+      this.emitDebug('detection', 'Face reality score is missing, cannot perform liveness check', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    if (face.real < this.config.min_real_score) {
+      this.detectionState.suspectedFraudsCount++
+      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real)
+      this.emitDebug('detection', 'Face reality score is insufficient, suspected non-liveness', { realScore: face.real.toFixed(4), minRealScore: this.config.min_real_score }, 'info')
+
+      if (this.detectionState.suspectedFraudsCount < this.config.suspected_frauds_count) {
+        this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { count: this.detectionState.suspectedFraudsCount, realScore: face.real })
+        this.scheduleNextDetection(this.config.error_retry_delay)
+        return false
       }
 
-      // Check if action detected
-      const detected = this.detectAction(this.detectionState.currentAction, gestures)
-      if (!detected) {
-        this.scheduleNextDetection()
-        return
-      }
-
-      this.emit('action-prompt' as any, {
-        action: this.detectionState.currentAction,
-        status: LivenessActionStatus.COMPLETED
+      this.emit('detector-error' as any, {
+        code: ErrorCode.SUSPECTED_FRAUDS_DETECTED,
+        message: 'Liveness detection failed: Suspected non-liveness face detected, please try again.'
       })
-
-      this.clearActionVerifyTimeout()
-      this.detectionState.completedActions.add(this.detectionState.currentAction)
-      this.detectionState.currentAction = null
-
-      // 已经完成规定次数的动作验证，结束检测
-      if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
-        this.stopDetection(true)
-        return
-      }
-
-      this.selectNextAction()
-      this.scheduleNextDetection()
+      this.stopDetection(false)
+      return false
     }
+
+    // Check liveness score
+    if (face.live === undefined || typeof face.live !== 'number') {
+      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real)
+      this.emitDebug('detection', 'Face liveness score is missing, cannot perform liveness check', {}, 'warn')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    if (face.live < this.config.min_live_score) {
+      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real, face.live)
+      this.emitDebug('detection', 'Face liveness score is insufficient, this frame does not pass', { liveScore: face.live.toFixed(4), minLiveScore: this.config.min_live_score }, 'info')
+      this.scheduleNextDetection(this.config.error_retry_delay)
+      return false
+    }
+
+    return true
+  }
+
+  /**
+   * Handle detect phase
+   */
+  private handleDetectPhase(): void {
+    this.detectionState.period = DetectionPeriod.COLLECT
+    this.emitDebug('detection', 'Entering image collection phase')
+  }
+
+  /**
+   * Handle collect phase
+   */
+  private handleCollectPhase(qualityScore: number, faceBox: Box): void {
+    this.collectHighQualityImage(qualityScore, faceBox)
+
+    if (this.detectionState.collectCount >= this.config.silent_detect_count) {
+      if (this.getPerformActionCount() > 0) {
+        this.detectionState.period = DetectionPeriod.VERIFY
+        this.emitDebug('detection', 'Entering action verification phase')
+      } else {
+        this.stopDetection(true)
+      }
+    }
+  }
+
+  /**
+   * Handle verify phase
+   */
+  private handleVerifyPhase(gestures: GestureResult[]): void {
+    // No action set yet, will continue after setting
+    if (!this.detectionState.currentAction) {
+      this.selectNextAction()
+      this.scheduleNextDetection(this.config.detection_frame_delay * 3)
+      return
+    }
+
+    // Check if action detected
+    const detected = this.detectAction(this.detectionState.currentAction, gestures)
+    if (!detected) {
+      this.scheduleNextDetection()
+      return
+    }
+
+    // Action completed
+    this.emit('action-prompt' as any, {
+      action: this.detectionState.currentAction,
+      status: LivenessActionStatus.COMPLETED
+    })
+
+    this.clearActionVerifyTimeout()
+    this.detectionState.completedActions.add(this.detectionState.currentAction)
+    this.detectionState.currentAction = null
+
+    // Check if all required actions completed
+    if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
+      this.stopDetection(true)
+      return
+    }
+
+    // Select next action
+    this.selectNextAction()
+    this.scheduleNextDetection()
   }
 
   /**
@@ -674,24 +763,28 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     if (frameQuality <= this.detectionState.bestQualityScore){
-      // 当前帧质量不如已保存的最佳帧，跳过，不实际保存
+      // Current frame quality is not better than saved best frame, skip without saving
       this.detectionState.collectCount++
       return
     }
     const frameImageData = this.captureFrame()
     if (!frameImageData) {
-      this.emitDebug('detection', '捕获当前帧图像失败', {}, 'warn')
+      this.emitDebug('detection', 'Failed to capture current frame image', {}, 'warn')
       return
     }
     const faceImageData = this.captureFrame(faceBox)
     if (!faceImageData) {
-      this.emitDebug('detection', '捕获人脸图像失败', {}, 'warn')
+      this.emitDebug('detection', 'Failed to capture face image', {}, 'warn')
       return
     }
     this.detectionState.collectCount++
     this.detectionState.bestQualityScore = frameQuality
     this.detectionState.bestFrameImage = frameImageData
     this.detectionState.bestFaceImage = faceImageData
+  }
+
+  private emitLivenessDetected(passed: boolean, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
+    this.emit('liveness-detected' as any, {passed, size, frontal, quality, real, live} as LivenessDetectedEventData)
   }
 
   /**
@@ -723,7 +816,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.emit('action-prompt' as any, promptData)
     this.emitDebug('liveness', 'Action selected', { action: this.detectionState.currentAction })
 
-    // 启动动作验证超时计时
+    // Start action verification timeout timer
     this.clearActionVerifyTimeout()
     this.detectionState.actionVerifyTimeout = setTimeout(() => {
       if (this.detectionState.currentAction) {
@@ -770,7 +863,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           if (!gestureStr || !gestureStr.includes('mouth')) return false
           const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
           if (!percentMatch || !percentMatch[1]) return false
-          const percent = parseInt(percentMatch[1]) / 100 // 转换为 0-1 范围
+          const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
           return percent > (this.config.min_mouth_open_percent ?? 0.2)
         })
       case LivenessAction.NOD:
@@ -816,22 +909,22 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * 从视频帧绘制到 canvas（内部使用，不转 Base64）
-   * @returns {HTMLCanvasElement | null} 绘制后的 canvas，如果失败返回 null
+   * Draw video frame to canvas (internal use, not converted to Base64)
+   * @returns {HTMLCanvasElement | null} Canvas after drawing, returns null if failed
    */
   private drawVideoToCanvas(): HTMLCanvasElement | null {
     try {
       if (!this.videoElement) return null
       
-      // 使用缓存的实际视频流分辨率（从 getSettings 获取）
-      // 如果缓存为空，则尝试从 video 元素的 videoWidth/videoHeight 获取
+      // Use cached actual video stream resolution (obtained from getSettings)
+      // If cache is empty, try to get from video element's videoWidth/videoHeight
       let videoWidth_actual = this.actualVideoWidth || this.videoElement.videoWidth 
       let videoHeight_actual = this.actualVideoHeight || this.videoElement.videoHeight 
       
       this.actualVideoWidth = videoWidth_actual
       this.actualVideoHeight = videoHeight_actual
       
-      // 再次检查是否为有效值
+      // Check again if values are valid
       if (!videoWidth_actual || !videoHeight_actual) {
         this.emitDebug('capture', 'invalid video size', { 
           videoWidth_actual, 
@@ -844,19 +937,19 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return null
       }
       
-      // 如果缓存的 canvas 尺寸不匹配，重新创建
+      // If cached canvas size does not match, recreate it
       if (!this.frameCanvasElement || this.frameCanvasElement.width !== videoWidth_actual || this.frameCanvasElement.height !== videoHeight_actual) {
         this.clearFrameCanvas()
         this.frameCanvasElement = document.createElement('canvas')
         this.frameCanvasElement.width = videoWidth_actual
         this.frameCanvasElement.height = videoHeight_actual
         this.frameCanvasContext = this.frameCanvasElement.getContext('2d')
-        this.emitDebug('capture', 'Canvas 创建/调整大小', { width: videoWidth_actual, height: videoHeight_actual })
+        this.emitDebug('capture', 'Canvas created/resized', { width: videoWidth_actual, height: videoHeight_actual })
       }
       
       if (!this.frameCanvasContext) return null
       
-      // 在尝试绘制前，验证视频的可绘制性
+      // Before attempting to draw, verify video drawability
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
         this.emitDebug('capture', 'draw video image failed', { 
           readyState: this.videoElement.readyState, 
@@ -866,11 +959,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       
       this.frameCanvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
-      this.emitDebug('capture', '帧已绘制到 canvas')
+      this.emitDebug('capture', 'Frame drawn to canvas')
       
       return this.frameCanvasElement
     } catch (e) {
-      this.emitDebug('capture', '绘制帧到 canvas 失败', { error: (e as Error).message }, 'error')
+      this.emitDebug('capture', 'Failed to draw frame to canvas', { error: (e as Error).message }, 'error')
       return null
     }
   }
@@ -905,18 +998,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private canvasToBase64(canvas: HTMLCanvasElement): string | null {
     try {
       const imageData = canvas.toDataURL('image/jpeg', 0.9)
-      this.emitDebug('capture', '图片已转换为 Base64', { size: imageData.length })
+      this.emitDebug('capture', 'Image converted to Base64', { size: imageData.length })
       return imageData
     } catch (e) {
-      this.emitDebug('capture', '转换为 Base64 失败', { error: (e as Error).message }, 'error')
+      this.emitDebug('capture', 'Failed to convert to Base64', { error: (e as Error).message }, 'error')
       return null
     }
   }
 
   /**
-   * 捕获当前视频帧（返回 Base64）
-   * @param {Box} box - 人脸框
-   * @returns {string | null} Base64 格式的 JPEG 图片数据
+   * Capture current video frame (returns Base64)
+   * @param {Box} box - Face box
+   * @returns {string | null} Base64 encoded JPEG image data
    */
   private captureFrame(box?: Box): string | null {
     if(!this.frameCanvasElement) {
@@ -926,7 +1019,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return this.canvasToBase64(this.frameCanvasElement)
     }
     const x = box[0], y = box[1], width = box[2], height = box[3]
-    // 如果缓存的 canvas 尺寸不匹配，重新创建
+    // If cached canvas size does not match, recreate it
     if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
       this.clearFaceCanvas()
       this.faceCanvasElement = document.createElement('canvas')
