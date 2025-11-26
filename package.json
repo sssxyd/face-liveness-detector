@@ -1,6 +1,6 @@
 {
   "name": "@sssxyd/face-liveness-detector",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "Pure JS/TS implementation of liveness face detection based on human.js and opencv.js",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
@@ -48,7 +48,7 @@
   "author": "xuyd <sssxyd@gmail.com>",
   "license": "MIT",
   "peerDependencies": {
-    "@techstark/opencv-js": "4.12.0-release.1",
+    "@techstark/opencv-js": "^4.12.0-release.1",
     "@vladmandic/human": "^3.3.0"
   },
   "devDependencies": {

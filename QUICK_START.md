@@ -70,11 +70,13 @@ npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-
             statusDiv.textContent = `👉 Please ${data.action}`
         })
         
-        engine.on('liveness-completed', (data) => {
-            statusDiv.textContent = '🎉 Verification Complete!'
+        engine.on('detector-finish', (data) => {
+            statusDiv.textContent = data.success ? '🎉 Verification Complete!' : '❌ Verification Failed'
             startBtn.disabled = false
-            resultImg.src = data.imageData
-            resultImg.style.display = 'block'
+            if (data.bestFrameImage) {
+                resultImg.src = data.bestFrameImage
+                resultImg.style.display = 'block'
+            }
         })
         
         engine.on('detector-error', (error) => {
@@ -86,7 +88,7 @@ npm install @face-liveness/detection-engine @vladmandic/human @techstark/opencv-
         startBtn.onclick = async () => {
             try {
                 startBtn.disabled = true
-                await engine.startDetection(videoEl, canvasEl)
+                await engine.startDetection(videoEl)
             } catch (err) {
                 statusDiv.textContent = `Error: ${err.message}`
                 startBtn.disabled = false
@@ -274,7 +276,7 @@ engine.on('detector-loaded', () => console.log('Ready'))
 engine.on('status-prompt', (data) => console.log('Status:', data))
 engine.on('face-detected', (data) => console.log('Frame:', data))
 engine.on('action-prompt', (data) => console.log('Action:', data))
-engine.on('liveness-completed', (data) => console.log('Result:', data))
+engine.on('detector-finish', (data) => console.log('Result:', data))
 engine.on('detector-error', (error) => console.error('Error:', error))
 engine.on('detector-debug', (debug) => console.log(`[${debug.stage}]`, debug.message))
 ```
@@ -283,24 +285,39 @@ engine.on('detector-debug', (debug) => console.log(`[${debug.stage}]`, debug.mes
 
 ### Get Captured Image
 ```typescript
-engine.on('liveness-completed', (data) => {
-  // data.imageData is base64 encoded
-  const img = new Image()
-  img.src = data.imageData
-  document.body.appendChild(img)
+engine.on('detector-finish', (data) => {
+  if (data.bestFrameImage) {
+    // data.bestFrameImage is base64 encoded frame
+    const img = new Image()
+    img.src = data.bestFrameImage
+    document.body.appendChild(img)
+  }
+  if (data.bestFaceImage) {
+    // data.bestFaceImage is base64 encoded face crop
+    const faceImg = new Image()
+    faceImg.src = data.bestFaceImage
+    document.body.appendChild(faceImg)
+  }
 })
 ```
 
 ### Send to Server
 ```typescript
-engine.on('liveness-completed', async (data) => {
+engine.on('detector-finish', async (data) => {
+  if (!data.success) {
+    console.error('Liveness verification failed')
+    return
+  }
+  
   const response = await fetch('/api/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      image: data.imageData,
-      quality: data.qualityScore,
-      liveness: data.liveness
+      frameImage: data.bestFrameImage,
+      faceImage: data.bestFaceImage,
+      quality: data.bestQualityScore,
+      silentPassed: data.silentPassedCount,
+      actionsPassed: data.actionPassedCount
     })
   })
   const result = await response.json()
@@ -355,14 +372,16 @@ engine.updateConfig({
 ```typescript
 const engine = new FaceDetectionEngine({
   detection_frame_delay: 200,  // Process fewer frames
-  camera_max_size: 480         // Smaller resolution
+  video_width: 480,            // Smaller resolution
+  video_height: 480
 })
 ```
 
 ### Optimize for Mobile
 ```typescript
 const engine = new FaceDetectionEngine({
-  camera_max_size: 480,
+  video_width: 480,
+  video_height: 480,
   detection_frame_delay: 100,
   min_image_quality: 0.6,  // More lenient quality
   min_real_score: 0.7

@@ -41,11 +41,12 @@ engine.on('face-detected', (data) => {
   console.log('Frame detected:', data)
 })
 
-engine.on('liveness-completed', (data) => {
+engine.on('detector-finish', (data) => {
   console.log('Liveness verification complete:', {
-    qualityScore: data.qualityScore,
-    imageData: data.imageData,
-    liveness: data.liveness
+    success: data.success,
+    qualityScore: data.bestQualityScore,
+    frameImage: data.bestFrameImage,
+    faceImage: data.bestFaceImage
   })
 })
 
@@ -77,7 +78,8 @@ engine.stopDetection()
 ```typescript
 interface FaceDetectionEngineConfig {
   // Detection Settings
-  camera_max_size?: number                    // Max camera resolution (default: 640)
+  video_width?: number                        // Video width (default: 640)
+  video_height?: number                       // Video height (default: 640)
   video_load_timeout?: number                 // Video load timeout in ms (default: 5000)
   detection_frame_delay?: number              // Delay between frames in ms (default: 100)
   detection_idle_timeout?: number             // Idle timeout in ms (default: 60000)
@@ -121,11 +123,12 @@ Load and initialize detection libraries. Must be called before using detection.
 await engine.initialize()
 ```
 
-#### `startDetection(videoElement, canvasElement?): Promise<void>`
+#### `startDetection(videoElement): Promise<void>`
 Start face detection on a video element.
 
 ```typescript
-await engine.startDetection(videoElement, canvasElement)
+const videoElement = document.getElementById('video') as HTMLVideoElement
+await engine.startDetection(videoElement)
 ```
 
 #### `stopDetection(success?: boolean): void`
@@ -173,11 +176,12 @@ engine.on('detector-loaded', () => {
 ```
 
 #### `face-detected`
-A valid face frame has been detected during collection phase.
+A valid face frame has been detected with silent liveness scores.
 
 ```typescript
-engine.on('face-detected', (data: LivenessDetectedData) => {
-  console.log(`Quality: ${data.quality}, Frontal: ${data.frontal}`)
+engine.on('face-detected', (data) => {
+  console.log(`Quality: ${data.quality}, Frontal: ${data.frontal}`)  
+  console.log(`Real: ${data.real}, Live: ${data.live}`)
 })
 ```
 
@@ -199,15 +203,18 @@ engine.on('action-prompt', (data: ActionPromptData) => {
 })
 ```
 
-#### `liveness-completed`
-Liveness detection completed successfully.
+#### `detector-finish`
+Liveness detection completed (successfully or not).
 
 ```typescript
-engine.on('liveness-completed', (data: LivenessCompletedData) => {
-  console.log('Liveness verified:', {
-    qualityScore: data.qualityScore,
-    liveness: data.liveness,
-    imageData: data.imageData
+engine.on('detector-finish', (data) => {
+  console.log('Detection finished:', {
+    success: data.success,
+    bestQuality: data.bestQualityScore,
+    silentPassed: data.silentPassedCount,
+    actionsPassed: data.actionPassedCount,
+    frameImage: data.bestFrameImage,
+    faceImage: data.bestFaceImage
   })
 })
 ```
@@ -344,7 +351,10 @@ engine.on('liveness-completed', (data) => {
 
 2. **Reduce canvas size** - Smaller canvases process faster
    ```typescript
-   engine.updateConfig({ camera_max_size: 480 })
+   engine.updateConfig({ 
+     video_width: 480,
+     video_height: 480
+   })
    ```
 
 3. **Optimize light conditions** - Better lighting = better detection
@@ -380,7 +390,7 @@ engine.on('liveness-completed', (data) => {
 
 ### High CPU usage
 - Increase `detection_frame_delay`
-- Reduce `camera_max_size`
+- Reduce `video_width` and `video_height`
 - Disable `show_action_prompt` if not needed
 
 ## License

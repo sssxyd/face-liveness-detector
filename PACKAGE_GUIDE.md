@@ -99,7 +99,7 @@ packages/face-detection-engine/
 emit: status-prompt
 emit: face-detected
 emit: action-prompt
-emit: liveness-completed ✓
+emit: detector-finish ✓
 emit: detector-error ✗
 ```
 
@@ -196,6 +196,15 @@ types/
 #### As ES Module
 ```typescript
 import FaceDetectionEngine from '@face-liveness/detection-engine'
+
+const engine = new FaceDetectionEngine({
+  liveness_action_list: ['blink'],
+  liveness_action_count: 1
+})
+
+await engine.initialize()
+const video = document.querySelector('video')
+await engine.startDetection(video)
 ```
 
 #### As CommonJS
@@ -228,13 +237,13 @@ const FaceDetectionEngine = require('@face-liveness/detection-engine')
 
 | Event | Data | Description |
 |-------|------|-------------|
-| `detector-loaded` | void | Libraries loaded, engine ready |
-| `status-prompt` | StatusPromptData | Status update |
-| `face-detected` | LivenessDetectedData | Frame accepted |
-| `action-prompt` | ActionPromptData | Action requested |
-| `liveness-completed` | LivenessCompletedData | Detection complete ✓ |
-| `detector-error` | ErrorData | Error occurred ✗ |
-| `detector-debug` | DebugData | Debug information |
+| `detector-loaded` | DetectorLoadedEventData | Libraries loaded, engine ready |
+| `status-prompt` | StatusPromptEventData | Status update (no face, face size, etc) |
+| `face-detected` | FaceDetectedEventData | High-quality frame accepted (silent liveness) |
+| `action-prompt` | ActionPromptEventData | Action requested (blink, mouth, nod) |
+| `detector-finish` | DetectorFinishEventData | Detection complete with results |
+| `detector-error` | DetectorErrorEventData | Error occurred |
+| `detector-debug` | DetectorDebugEventData | Debug information |
 
 ## Type Exports
 
@@ -296,7 +305,7 @@ export {
     :min_face_ratio="0.5"
     :liveness_action_count="1"
     @detector-loaded="onReady"
-    @liveness-completed="onComplete"
+    @detector-finish="onComplete"
   />
 </template>
 
@@ -315,10 +324,11 @@ const engine = new FaceDetectionEngine({
 })
 
 engine.on('detector-loaded', onReady)
-engine.on('liveness-completed', onComplete)
+engine.on('detector-finish', onComplete)
 
 await engine.initialize()
-await engine.startDetection(videoElement)
+const video = document.querySelector('video')
+await engine.startDetection(video)
 ```
 
 ## Publishing to NPM
@@ -355,9 +365,12 @@ npm info @face-liveness/detection-engine
    engine.updateConfig({ detection_frame_delay: 200 })
    ```
 
-2. **Reduce canvas size** for faster processing
+2. **Reduce video resolution** for faster processing
    ```typescript
-   engine.updateConfig({ camera_max_size: 480 })
+   engine.updateConfig({ 
+     video_width: 480,
+     video_height: 480
+   })
    ```
 
 3. **Tune quality thresholds** based on use case
