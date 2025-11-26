@@ -1,5 +1,5 @@
 {
-  "name": "@sssxyd/face-liveness-detector",
+  "name": "@face-liveness/detection-engine",
   "version": "0.2.0",
   "description": "Pure JS/TS implementation of liveness face detection based on human.js and opencv.js",
   "main": "dist/index.js",
