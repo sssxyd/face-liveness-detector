@@ -29,6 +29,7 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   min_image_quality: 0.8,
   min_real_score: 0.85,
   min_live_score: 0.5,
+  suspected_frauds_count: 3,
   face_frontal_features: Object.freeze({
     yaw_threshold: 3,
     pitch_threshold: 4,
@@ -43,11 +44,10 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   }),
 
   // LivenessSettings defaults
-  show_action_prompt: true,
-  liveness_action_timeout: 60000,
   liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   liveness_action_count: 1,
   liveness_action_randomize: true,
+  liveness_verify_timeout: 60000,
   min_mouth_open_percent: 0.2,
 
 })
@@ -112,17 +112,17 @@ export function mergeConfig(
   if (userConfig.min_real_score !== undefined) {
     merged.min_real_score = userConfig.min_real_score
   }
-  if (userConfig.show_action_prompt !== undefined) {
-    merged.show_action_prompt = userConfig.show_action_prompt
-  }
-  if (userConfig.liveness_action_timeout !== undefined) {
-    merged.liveness_action_timeout = userConfig.liveness_action_timeout
+  if (userConfig.suspected_frauds_count !== undefined) {
+    merged.suspected_frauds_count = userConfig.suspected_frauds_count
   }
   if (userConfig.liveness_action_count !== undefined) {
     merged.liveness_action_count = userConfig.liveness_action_count
   }
   if (userConfig.liveness_action_randomize !== undefined) {
     merged.liveness_action_randomize = userConfig.liveness_action_randomize
+  }
+  if (userConfig.liveness_verify_timeout !== undefined) {
+    merged.liveness_verify_timeout = userConfig.liveness_verify_timeout
   }
   if (userConfig.min_mouth_open_percent !== undefined) {
     merged.min_mouth_open_percent = userConfig.min_mouth_open_percent

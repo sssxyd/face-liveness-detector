@@ -7,36 +7,40 @@ import Human, { Box, FaceResult, GestureResult } from '@vladmandic/human'
 import type {
   FaceDetectionEngineConfig,
   LivenessDetectedEventData,
-  LivenessCompletedEventData,
+  DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
   StatusPromptEventData,
   ActionPromptEventData,
   EventMap,
-  ScoredList,
   FaceFrontalFeatures,
   ImageQualityFeatures,
   EventListener,
   DetectorLoadedEventData,
   ResolvedEngineConfig
 } from './types'
-import { ScoredList as ScoredListClass } from './types'
-import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus } from './enums'
-import { DEFAULT_CONFIG, mergeConfig } from './config'
+import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus, DetectionPeriod } from './enums'
+import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { loadOpenCV, loadHuman, getCvSync } from './library-loader'
-import { min } from '@techstark/opencv-js'
+import { loadOpenCV, loadHuman } from './library-loader'
+import { error } from 'console'
 
 /**
  * Internal detection state interface
  */
 interface DetectionState {
+  period: DetectionPeriod
+  startTime: number
+  collectCount: number
+  suspectedFraudsCount: number
+  bestQualityScore: number
+  bestFrameImage: string | null
+  bestFaceImage: string | null
   completedActions: Set<LivenessAction>
   currentAction: LivenessAction | null
-  collectedImages: ScoredList<string>
-  collectedFaces: ScoredList<string>
+  actionVerifyTimeout: ReturnType<typeof setTimeout> | null
 }
 
 /**
@@ -82,9 +86,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private faceCanvasContext: CanvasRenderingContext2D | null = null
 
   private detectionFrameId: number | null = null
-  private lastDetectionTime: number = 0
-  private actionTimeoutId: ReturnType<typeof setTimeout> | null = null
-  private detectionStartTime: number = 0
 
   private actualVideoWidth: number = 0
   private actualVideoHeight: number = 0
@@ -99,10 +100,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     super()
     this.config = mergeConfig(config)
     this.detectionState = {
+      period: DetectionPeriod.DETECT,
+      startTime: performance.now(),
+      collectCount: 0,
+      suspectedFraudsCount: 0,
+      bestQualityScore: 0,
+      bestFrameImage: null,
+      bestFaceImage: null,
       completedActions: new Set(),
       currentAction: null,
-      collectedImages: new ScoredListClass(this.config.silent_detect_count), 
-      collectedFaces: new ScoredListClass(this.config.silent_detect_count) 
+      actionVerifyTimeout: null,
     }
   }
 
@@ -125,6 +132,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // Load OpenCV
       this.emitDebug('initialization', 'Loading OpenCV...')
       const { cv } = await loadOpenCV()
+      if(!cv || !(cv as any).Mat) {
+        this.emit('detector-error' as any, {
+          success: false,
+          error: 'Failed to load OpenCV.js: module is null or invalid'
+        })
+        this.emit('detector-error' as any, {
+          code: ErrorCode.DETECTOR_NOT_INITIALIZED,
+          message: 'Failed to load OpenCV.js: module is null or invalid'
+        })
+        return
+      }
+
       this.emitDebug('initialization', 'OpenCV loaded successfully', {
         version: cv?.getBuildInformation?.() || 'unknown'
       })
@@ -133,11 +152,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('initialization', 'Loading Human.js...')
       this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
       if (!this.human) {
-        const errorData: DetectorLoadedEventData = {
+        this.emit('detector-loaded' as any, {
           success: false,
           error: 'Failed to load Human.js: instance is null'
-        }
-        this.emit('detector-loaded', errorData)
+        })
+        this.emit('detector-error' as any, {
+          code: ErrorCode.DETECTOR_NOT_INITIALIZED,
+          message: 'Failed to load Human.js: instance is null'
+        })
         return
       }
 
@@ -151,11 +173,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('initialization', 'Engine initialized and ready', loadedData)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-      const errorData: DetectorLoadedEventData = {
+      this.emit('detector-loaded' as any, {
         success: false,
         error: errorMsg
-      }
-      this.emit('detector-loaded', errorData)
+      })
+      this.emit('detector-error' as any, {
+        code: ErrorCode.DETECTOR_NOT_INITIALIZED,
+        message: errorMsg
+      })
       this.emitDebug('initialization', 'Failed to load libraries', {
         error: errorMsg,
         stack: error instanceof Error ? error.stack : 'N/A'
@@ -192,7 +217,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
             facingMode: 'user',
             width: { ideal: this.config.video_width },
             height: { ideal: this.config.video_height },
-            aspectRatio: { ideal: 1.0 }
+            aspectRatio: { ideal: this.config.video_width / this.config.video_height }
           },
           audio: false
         })
@@ -200,9 +225,31 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           trackCount: this.stream.getTracks().length
         })
       } catch (err) {
-        this.emitDebug('video-setup', 'Camera access denied', {
-          error: (err as Error).message
+        const error = err as DOMException
+        const isCameraAccessDenied = 
+          error.name === 'NotAllowedError' || 
+          error.name === 'PermissionDeniedError' ||
+          error.message.includes('Permission denied') ||
+          error.message.includes('Permission dismissed')
+        
+        this.emitDebug('video-setup', 'Camera access failed', {
+          errorName: error.name,
+          errorMessage: error.message,
+          isCameraAccessDenied
         }, 'error')
+        
+        if (isCameraAccessDenied) {
+          this.emit('detector-error' as any, {
+            code: ErrorCode.CAMERA_ACCESS_DENIED,
+            message: 'Camera access denied by user'
+          })
+        } else {
+          this.emit('detector-error' as any, {
+            code: ErrorCode.STREAM_ACQUISITION_FAILED,
+            message: error.name || 'UnknownError' + ": " + error.message || 'Unknown error message'
+          })
+        }
+        
         throw err
       }
 
@@ -226,8 +273,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if (videoTrack) {
         const settings = videoTrack.getSettings?.()
         if (settings) {
-          this.actualVideoWidth = settings.width || this.config.video_width || 640
-          this.actualVideoHeight = settings.height || this.config.video_height || 640
+          this.actualVideoWidth = settings.width || this.videoElement.videoWidth
+          this.actualVideoHeight = settings.height || this.videoElement.videoHeight
           this.emitDebug('video-setup', 'Video stream resolution detected', {
             width: this.actualVideoWidth,
             height: this.actualVideoHeight
@@ -239,8 +286,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('video-setup', 'Waiting for video to be ready...')
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
+          cleanup()
+          this.emit('detector-error' as any, {
+            code: ErrorCode.STREAM_ACQUISITION_FAILED,
+            message: 'Video loading timeout'
+          })
+          this.stopDetection(false)
           reject(new Error('Video loading timeout'))
-        }, this.config.video_load_timeout || 5000)
+        }, this.config.video_load_timeout)
 
         const onCanPlay = () => {
           clearTimeout(timeout)
@@ -266,7 +319,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       })
 
       this.isDetecting = true
-      this.detectionStartTime = performance.now()
       this.scheduleNextDetection(0)
 
       this.emitDebug('video-setup', 'Detection started')
@@ -288,10 +340,23 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Stop face detection
    * @param success - Whether to display the best collected image
    */
-  stopDetection(success: boolean = false): void {
+  stopDetection(success: boolean): void {
     this.isDetecting = false
+
+    const finishData: DetectorFinishEventData = {
+      success: success,
+      silentPassedCount: this.detectionState.collectCount,
+      actionPassedCount: this.detectionState.completedActions.size,
+      totalTime: performance.now() - this.detectionState.startTime,
+      bestQualityScore: this.detectionState.bestQualityScore,
+      bestFrameImage: this.detectionState.bestFrameImage,
+      bestFaceImage: this.detectionState.bestFaceImage
+    }
+    this.emit('detector-finish' as any, finishData)
+
     this.cancelPendingDetection()
-    this.clearAllTimers()
+
+    this.resetDetectionState()
 
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop())
@@ -346,14 +411,23 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Reset detection state
    */
   private resetDetectionState(): void {
-    this.isDetecting = true
-    this.detectionState.completedActions.clear()
-    this.detectionState.collectedImages.clear()
-    this.detectionState.currentAction = null
-    this.clearAllTimers()
-    this.detectionStartTime = performance.now()
+    this.clearActionVerifyTimeout()
+    this.detectionState = {
+      period: DetectionPeriod.DETECT,
+      startTime: performance.now(),
+      collectCount: 0,
+      suspectedFraudsCount: 0,
+      bestQualityScore: 0,
+      bestFrameImage: null,
+      bestFaceImage: null,
+      completedActions: new Set(),
+      currentAction: null,
+      actionVerifyTimeout: null,
+    }
     this.actualVideoWidth = 0
     this.actualVideoHeight = 0
+    this.clearFrameCanvas()
+    this.clearFaceCanvas()
   }
 
   /**
@@ -363,20 +437,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (!this.isDetecting) return
 
     if (this.detectionFrameId !== null) {
-      cancelAnimationFrame(this.detectionFrameId)
+      clearTimeout(this.detectionFrameId as any)
     }
 
-    const loop = (timestamp: number) => {
-      const timeSinceLastDetection = timestamp - this.lastDetectionTime
-      if (timeSinceLastDetection >= delayMs) {
-        this.lastDetectionTime = timestamp
+    this.detectionFrameId = setTimeout(() => {
+      if (this.isDetecting) {
         this.detect()
-      } else {
-        this.detectionFrameId = requestAnimationFrame(loop)
       }
-    }
-
-    this.detectionFrameId = requestAnimationFrame(loop)
+    }, delayMs) as any
   }
 
   /**
@@ -386,16 +454,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.detectionFrameId !== null) {
       cancelAnimationFrame(this.detectionFrameId)
       this.detectionFrameId = null
-    }
-  }
-
-  /**
-   * Clear all timers
-   */
-  private clearAllTimers(): void {
-    if (this.actionTimeoutId) {
-      clearTimeout(this.actionTimeoutId)
-      this.actionTimeoutId = null
     }
   }
 
@@ -448,18 +506,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * 当前帧是否处于采集照片阶段
-   * @returns 
-   */
-  private isCollectingPhotos(): boolean {
-    return this.detectionState.collectedImages.size() < this.config.silent_detect_count
-  }
-
-  private hasCollectedEnoughImages(): boolean {
-    return this.detectionState.collectedImages.size() >= this.config.silent_detect_count
-  }
-
-  /**
    * Handle single face detection
    */
   private handleSingleFace(face: FaceResult, gestures: GestureResult[]): void {
@@ -495,8 +541,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     // 检查人脸是否正对摄像头 (0-1 评分)
     let frontal = 1
-    // 非动作检测阶段，需要校验人脸正对度
-    if(this.isCollectingPhotos()){
+    // 检测&&采集阶段，都要检验人脸正对度
+    if(this.detectionState.period == DetectionPeriod.DETECT || this.detectionState.period == DetectionPeriod.COLLECT){
         frontal = checkFaceFrontal(face, gestures, frameCanvas, this.config.face_frontal_features)
         if(frontal < this.config.min_face_frontal){
             this.emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal })
@@ -522,13 +568,22 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
+    // 人脸真实度不够，疑似非活体
     if (face.real < this.config.min_real_score) {
+      this.detectionState.suspectedFraudsCount++
       this.emitDebug('detection', '人脸实度评分不足，疑似非活体', { realScore: face.real.toFixed(4), minRealScore: this.config.min_real_score }, 'info')
+      // 尚未达到疑似非活体次数阈值，继续检测
+      if(this.detectionState.suspectedFraudsCount < this.config.suspected_frauds_count){  
+        this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { count: this.detectionState.suspectedFraudsCount, realScore: face.real })
+        this.scheduleNextDetection(this.config.error_retry_delay)
+        return
+      }
+      // 达到疑似非活体次数阈值，判定为非活体，结束检测
       this.emit('detector-error' as any, { 
-        code: ErrorCode.LIVENESS_DETECTION_FAILED, 
+        code: ErrorCode.SUSPECTED_FRAUDS_DETECTED, 
         message: '活体检测失败：检测到疑似非活体人脸，请重新尝试。' 
       })
-      this.stopDetection()
+      this.stopDetection(false)
       return
     }
     
@@ -544,64 +599,57 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    // Capture face image
-    const frameImageData = this.captureFrame()
-    if (!frameImageData) {
-      this.emitDebug('detection', '捕获当前帧图像失败', {}, 'warn')
-      this.scheduleNextDetection(this.config.error_retry_delay)
-      return
-    }
-    const faceImageData = this.captureFrame(faceBox)
-    if (!faceImageData) {
-      this.emitDebug('detection', '捕获人脸图像失败', {}, 'warn')
-      this.scheduleNextDetection(this.config.error_retry_delay)
-      return
-    }
-    this.detectionState.collectedImages.add(frameImageData, qualityResult.score)
-    this.detectionState.collectedFaces.add(faceImageData, qualityResult.score)
-
-    // 未采集到足够的图片时，继续采集
-    if(!this.hasCollectedEnoughImages()){
-      this.scheduleNextDetection(this.config.detection_frame_delay * 2.5)
-      return
+    if (this.detectionState.period === DetectionPeriod.DETECT) {
+      this.detectionState.period = DetectionPeriod.COLLECT
+      this.emitDebug('detection', '进入图片采集阶段')
     }
 
-    // 不需要动作检测时，直接结束
-    if(this.getPerformActionCount() <= 0){
-      this.completeLiveness()
-      return
+    if (this.detectionState.period === DetectionPeriod.COLLECT) {
+      this.collectHighQualityImage(qualityResult.score, faceBox)
+      if(this.detectionState.collectCount >= this.config.silent_detect_count){
+        if(this.getPerformActionCount() > 0){
+          this.detectionState.period = DetectionPeriod.VERIFY
+          this.emitDebug('detection', '进入动作验证阶段')
+        } else {
+          this.stopDetection(true)
+          return
+        }
+      }
     }
 
-    // 当前还没有设定动作，设定后继续
-    if (!this.detectionState.currentAction) {
+    if(this.detectionState.period === DetectionPeriod.VERIFY){
+      // 当前还没有设定动作，设定后继续
+      if (!this.detectionState.currentAction) {
+        this.selectNextAction()
+        this.scheduleNextDetection(this.config.detection_frame_delay * 3)
+        return
+      }
+
+      // Check if action detected
+      const detected = this.detectAction(this.detectionState.currentAction, gestures)
+      if (!detected) {
+        this.scheduleNextDetection()
+        return
+      }
+
+      this.emit('action-prompt' as any, {
+        action: this.detectionState.currentAction,
+        status: LivenessActionStatus.COMPLETED
+      })
+
+      this.clearActionVerifyTimeout()
+      this.detectionState.completedActions.add(this.detectionState.currentAction)
+      this.detectionState.currentAction = null
+
+      // 已经完成规定次数的动作验证，结束检测
+      if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
+        this.stopDetection(true)
+        return
+      }
+
       this.selectNextAction()
-      this.scheduleNextDetection(this.config.detection_frame_delay * 3)
-      return
-    }
-
-    // Check if action detected
-    const detected = this.detectAction(this.detectionState.currentAction, gestures)
-    if (!detected) {
       this.scheduleNextDetection()
-      return
     }
-
-    this.detectionState.completedActions.add(this.detectionState.currentAction)
-    this.detectionState.currentAction = null
-
-    if (this.actionTimeoutId) {
-      clearTimeout(this.actionTimeoutId)
-      this.actionTimeoutId = null
-    }
-
-    // 已经完成规定次数的动作验证，结束检测
-    if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
-      this.completeLiveness()
-      return
-    }
-
-    this.selectNextAction()
-    this.scheduleNextDetection()
   }
 
   /**
@@ -614,37 +662,36 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitStatusPrompt(PromptCode.MULTIPLE_FACE, { count: faceCount })
     }
 
-    if (this.detectionState.collectedImages.size() > 0) {
+    if (this.detectionState.period !== DetectionPeriod.DETECT){
       this.resetDetectionState()
     }
 
     this.scheduleNextDetection()
   }
 
-  /**
-   * Complete liveness detection
-   */
-  private completeLiveness(): void {
-    const bestFrame = this.detectionState.collectedImages.getBestItem()
-    const bestFace = this.detectionState.collectedFaces.getBestItem()
-    const bestScore = this.detectionState.collectedImages.getBestScore()
-
-    if (!bestFrame || !bestFace || bestScore === null) {
-      this.emit('detector-error' as any, {
-        code: ErrorCode.DETECTION_ERROR,
-        message: 'No images collected, unable to select best image'
-      })
-      this.stopDetection()
+  private collectHighQualityImage(frameQuality: number, faceBox: Box): void{
+    if (this.detectionState.period !== DetectionPeriod.COLLECT){
       return
     }
-
-    this.emit('liveness-completed' as any, {
-      qualityScore: bestScore,
-      imageData: bestFrame,
-      faceData: bestFace,
-    })
-
-    this.stopDetection(true)
+    if (frameQuality <= this.detectionState.bestQualityScore){
+      // 当前帧质量不如已保存的最佳帧，跳过，不实际保存
+      this.detectionState.collectCount++
+      return
+    }
+    const frameImageData = this.captureFrame()
+    if (!frameImageData) {
+      this.emitDebug('detection', '捕获当前帧图像失败', {}, 'warn')
+      return
+    }
+    const faceImageData = this.captureFrame(faceBox)
+    if (!faceImageData) {
+      this.emitDebug('detection', '捕获人脸图像失败', {}, 'warn')
+      return
+    }
+    this.detectionState.collectCount++
+    this.detectionState.bestQualityScore = frameQuality
+    this.detectionState.bestFrameImage = frameImageData
+    this.detectionState.bestFaceImage = faceImageData
   }
 
   /**
@@ -676,44 +723,62 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.emit('action-prompt' as any, promptData)
     this.emitDebug('liveness', 'Action selected', { action: this.detectionState.currentAction })
 
-    // Set timeout
-    if (this.actionTimeoutId) {
-      clearTimeout(this.actionTimeoutId)
-    }
-
-    this.actionTimeoutId = setTimeout(() => {
+    // 启动动作验证超时计时
+    this.clearActionVerifyTimeout()
+    this.detectionState.actionVerifyTimeout = setTimeout(() => {
       if (this.detectionState.currentAction) {
-        this.emitDebug('liveness', 'Action timeout', {
-          action: this.detectionState.currentAction
+        this.emitDebug('liveness', 'Action verify timeout', {
+          action: this.detectionState.currentAction,
+          timeout: this.config.liveness_verify_timeout
         }, 'warn')
+        this.emit('action-prompt' as any, {
+          action: this.detectionState.currentAction,
+          status: LivenessActionStatus.TIMEOUT
+        })
         this.resetDetectionState()
       }
-    }, (this.config.liveness_action_timeout ?? 60) * 1000)
+    }, this.config.liveness_verify_timeout)
 
     return
+  }
+
+  /**
+   * Clear action verify timeout
+   */
+  private clearActionVerifyTimeout(): void {
+    if (this.detectionState.actionVerifyTimeout !== null) {
+      clearTimeout(this.detectionState.actionVerifyTimeout)
+      this.detectionState.actionVerifyTimeout = null
+    }
   }
 
   /**
    * Detect specific action
    */
   private detectAction(action: LivenessAction, gestures: GestureResult[]): boolean {
-    if (!gestures) return false
+    if (!gestures || gestures.length === 0) return false
 
     switch (action) {
       case LivenessAction.BLINK:
-        return gestures.some(g => g.gesture?.includes('blink'))
+        return gestures.some(g => {
+          if (!g.gesture) return false
+          return g.gesture.includes('blink')
+        })
       case LivenessAction.MOUTH_OPEN:
         return gestures.some(g => {
           const gestureStr = g.gesture
-          if (!gestureStr?.includes('mouth')) return false
-          const percentMatch = gestureStr.match(/mouth (\d+)% open/)?.[1]
-          const percent = percentMatch ? parseInt(percentMatch) : 0
-          return percent > (this.config.min_mouth_open_percent ?? 20)
+          if (!gestureStr || !gestureStr.includes('mouth')) return false
+          const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
+          if (!percentMatch || !percentMatch[1]) return false
+          const percent = parseInt(percentMatch[1]) / 100 // 转换为 0-1 范围
+          return percent > (this.config.min_mouth_open_percent ?? 0.2)
         })
       case LivenessAction.NOD:
         return gestures.some(g => {
-          const headDirection = g.gesture?.match(/(up|down)/)?.[0]
-          return !!headDirection
+          if (!g.gesture) return false
+          // Check for continuous head movement (up -> down or down -> up)
+          const headPattern = g.gesture.match(/head\s+(up|down)/i)
+          return !!headPattern && !!headPattern[1]
         })
       default:
         return false
@@ -781,6 +846,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       
       // 如果缓存的 canvas 尺寸不匹配，重新创建
       if (!this.frameCanvasElement || this.frameCanvasElement.width !== videoWidth_actual || this.frameCanvasElement.height !== videoHeight_actual) {
+        this.clearFrameCanvas()
         this.frameCanvasElement = document.createElement('canvas')
         this.frameCanvasElement.width = videoWidth_actual
         this.frameCanvasElement.height = videoHeight_actual
@@ -806,6 +872,28 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     } catch (e) {
       this.emitDebug('capture', '绘制帧到 canvas 失败', { error: (e as Error).message }, 'error')
       return null
+    }
+  }
+
+  private clearFrameCanvas(): void {
+    if(this.frameCanvasElement == null) return
+    this.frameCanvasElement.width = 0
+    this.frameCanvasElement.height = 0
+    this.frameCanvasElement = null
+    if (this.frameCanvasContext != null){
+      this.frameCanvasContext.clearRect(0, 0, 0, 0)
+      this.frameCanvasContext = null
+    }
+  }
+
+  private clearFaceCanvas(): void {
+    if(this.faceCanvasElement == null) return
+    this.faceCanvasElement.width = 0
+    this.faceCanvasElement.height = 0
+    this.faceCanvasElement = null
+    if (this.faceCanvasContext != null){
+      this.faceCanvasContext.clearRect(0, 0, 0, 0)
+      this.faceCanvasContext = null
     }
   }
 
@@ -840,6 +928,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const x = box[0], y = box[1], width = box[2], height = box[3]
     // 如果缓存的 canvas 尺寸不匹配，重新创建
     if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
+      this.clearFaceCanvas()
       this.faceCanvasElement = document.createElement('canvas')
       this.faceCanvasElement.width = width
       this.faceCanvasElement.height = height
@@ -858,15 +947,14 @@ export type {
   FaceDetectionEngineConfig,
   FaceFrontalFeatures,
   ImageQualityFeatures,
-  StatusPromptEventData as StatusPromptData,
-  ActionPromptEventData as ActionPromptData,
-  LivenessDetectedEventData as LivenessDetectedData,
-  LivenessCompletedEventData as LivenessCompletedData,
-  DetectorErrorEventData as ErrorData,
-  DetectorDebugEventData as DebugData,
+  StatusPromptEventData,
+  ActionPromptEventData,
+  LivenessDetectedEventData,
+  DetectorFinishEventData,
+  DetectorErrorEventData,
+  DetectorDebugEventData,
   EventListener,
   EventMap,
-  ScoredList
 }
 
 export default FaceDetectionEngine

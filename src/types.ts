@@ -39,31 +39,31 @@ export interface FaceDetectionEngineConfig {
   tensorflow_wasm_path?: string
 
   // ========== Detection Settings ==========
-  video_width?: number
-  video_height?: number
+  video_width?: number  // Width of the video stream
+  video_height?: number // Height of the video stream
   video_mirror?: boolean // Mirror video horizontally (like a mirror)
-  video_load_timeout?: number
-  detection_frame_delay?: number
-  error_retry_delay?: number
+  video_load_timeout?: number // Timeout for loading video stream (ms)
+  detection_frame_delay?: number // Delay between detection frames (ms)
+  error_retry_delay?: number // Delay before retrying after an error (ms)
 
   // ========== Collection Settings ==========
-  silent_detect_count?: number
-  min_face_ratio?: number
-  max_face_ratio?: number
-  min_face_frontal?: number
-  min_image_quality?: number
-  min_live_score?: number
-  min_real_score?: number
-  face_frontal_features?: FaceFrontalFeatures
-  image_quality_features?: ImageQualityFeatures
+  silent_detect_count?: number // Number of silent detections to collect
+  min_face_ratio?: number // Minimum face size ratio
+  max_face_ratio?: number // Maximum face size ratio
+  min_face_frontal?: number // Minimum face frontality
+  min_image_quality?: number // Minimum image quality
+  min_live_score?: number // Minimum live score
+  min_real_score?: number // Minimum real score
+  suspected_frauds_count?: number // Number of suspected frauds to detect
+  face_frontal_features?: FaceFrontalFeatures // Face frontal features
+  image_quality_features?: ImageQualityFeatures // Image quality features
 
   // ========== Liveness Settings ==========
-  show_action_prompt?: boolean
-  liveness_action_timeout?: number
-  liveness_action_list?: LivenessAction[]
-  liveness_action_count?: number
-  liveness_action_randomize?: boolean
-  min_mouth_open_percent?: number
+  liveness_action_list?: LivenessAction[] // List of liveness actions
+  liveness_action_count?: number // Number of liveness actions to perform
+  liveness_action_randomize?: boolean // Whether to randomize liveness actions
+  liveness_verify_timeout?: number // Timeout for liveness verification (ms)
+  min_mouth_open_percent?: number // Minimum mouth open percentage for detection
 
 }
 
@@ -86,17 +86,17 @@ export interface ResolvedEngineConfig {
   max_face_ratio: number
   min_face_frontal: number
   min_image_quality: number
-  min_live_score: number
   min_real_score: number
+  min_live_score: number
+  suspected_frauds_count: number
   face_frontal_features: FaceFrontalFeatures
   image_quality_features: ImageQualityFeatures
 
   // ========== Liveness Settings ==========
-  show_action_prompt: boolean
-  liveness_action_timeout: number
   liveness_action_list: LivenessAction[]
   liveness_action_count: number
   liveness_action_randomize: boolean
+  liveness_verify_timeout: number
   min_mouth_open_percent: number
 
 }
@@ -139,10 +139,14 @@ export interface LivenessDetectedEventData {
 /**
  * Action/silent liveness detection completion data
  */
-export interface LivenessCompletedEventData {
-  qualityScore: number  // Image quality score (0-1)
-  imageData: string | null  // Base64 encoded frame image
-  faceData: string | null   // Base64 encoded face image
+export interface DetectorFinishEventData {
+  success: boolean        // Whether liveness detection succeeded
+  silentPassedCount: number   // 静默活体检测通过次数
+  actionPassedCount: number  // 完成的动作的次数
+  totalTime: number       // Total time taken (ms)
+  bestQualityScore: number  // Image quality score (0-1)
+  bestFrameImage: string | null  // Base64 encoded frame image
+  bestFaceImage: string | null   // Base64 encoded face image
 }
 
 /**
@@ -180,64 +184,7 @@ export interface EventMap {
   'status-prompt': StatusPromptEventData
   'liveness-detected': LivenessDetectedEventData
   'action-prompt': ActionPromptEventData
-  'liveness-completed': LivenessCompletedEventData
+  'detector-finish': DetectorFinishEventData
   'detector-error': DetectorErrorEventData
   'detector-debug': DetectorDebugEventData
-}
-
-// ==================== Utility Classes ====================
-
-/**
- * Generic scored list for image collection
- * Maintains top N items sorted by score
- */
-export class ScoredList<T> {
-  private maxSize: number
-  private items: Array<{ item: T; score: number }>
-  private totalCount: number = 0
-
-  constructor(maxSize = 5) {
-    this.maxSize = maxSize
-    this.items = []
-  }
-
-  add(item: T, score: number): void {
-    this.totalCount++
-    this.items.push({ item, score })
-    // Sort by score descending
-    this.items.sort((a, b) => b.score - a.score)
-    // Remove lowest score if exceeds capacity
-    if (this.items.length > this.maxSize) {
-      this.items.pop()
-    }
-  }
-
-  getBestItem(): T | null {
-    return this.items[0]?.item ?? null
-  }
-
-  getBestScore(): number {
-    return this.items[0]?.score ?? 0
-  }
-
-  getAll(): T[] {
-    return this.items.map(x => x.item)
-  }
-
-  getAllWithScores(): Array<{ item: T; score: number }> {
-    return [...this.items]
-  }
-
-  clear(): void {
-    this.items = []
-    this.totalCount = 0
-  }
-
-  size(): number {
-    return this.items.length
-  }
-
-  total(): number {
-    return this.totalCount
-  }
 }
