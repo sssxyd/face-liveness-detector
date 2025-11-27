@@ -24,7 +24,7 @@ import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { loadOpenCV, loadHuman, getCvSync } from './library-loader'
+import { loadOpenCV, loadHuman, getCvSync, getOpenCVVersion, loadLibraries } from './library-loader'
 
 /**
  * Internal detection state interface
@@ -130,40 +130,27 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.emitDebug('initialization', 'Starting to load detection libraries...')
 
     try {
-      // Load OpenCV
-      this.emitDebug('initialization', 'Loading OpenCV...')
-      const { cv } = await loadOpenCV(300000) // 5 minute timeout
+      // Load Libraries
+      this.emitDebug('initialization', 'Loading Libraries...')
+      const startLoadTime = performance.now()
+      const { cv, human } = await loadLibraries(this.config.human_model_path, this.config.tensorflow_wasm_path, 30000) 
+      
       if(!cv || !(cv as any).Mat) {
         console.log('[FaceDetectionEngine] Failed to load OpenCV.js: module is null or invalid')
-        this.emit('detector-error' as any, {
+        this.emit('detector-loaded' as any, {
           success: false,
           error: 'Failed to load OpenCV.js: module is null or invalid'
-        })
+        })      
         this.emit('detector-error' as any, {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
           message: 'Failed to load OpenCV.js: module is null or invalid'
         })
         return
       }
-
-      this.emitDebug('initialization', 'OpenCV loaded successfully', {
-        version: cv?.getBuildInformation?.() || 'unknown'
-      })
-      console.log('[FaceDetectionEngine] OpenCV loaded successfully', {
-        version: cv?.getBuildInformation?.() || 'unknown'
-      })
-
-      // Load Human.js
-      console.log('[FaceDetectionEngine] Loading Human.js models...')
-      this.emitDebug('initialization', 'Loading Human.js...')
-      const humanStartTime = performance.now()
-      this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
-      const humanLoadTime = performance.now() - humanStartTime
       
-      if (!this.human) {
+      if (!human) {
         const errorMsg = 'Failed to load Human.js: instance is null'
         console.log('[FaceDetectionEngine] ' + errorMsg)
-        this.emitDebug('initialization', errorMsg, { loadTime: humanLoadTime }, 'error')
         this.emit('detector-loaded' as any, {
           success: false,
           error: errorMsg
@@ -174,23 +161,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         })
         return
       }
-      
-      this.emitDebug('initialization', 'Human.js loaded successfully', {
-        loadTime: `${humanLoadTime.toFixed(2)}ms`,
-        version: this.human.version
-      })
-      console.log('[FaceDetectionEngine] Human.js loaded successfully', {
-        loadTime: `${humanLoadTime.toFixed(2)}ms`,
-        version: this.human.version
-      })
+
+      // Store human instance
+      this.human = human
 
       this.isReady = true
       const loadedData: DetectorLoadedEventData = {
         success: true,
-        opencv_version: cv?.getBuildInformation?.() || 'unknown',
+        opencv_version: getOpenCVVersion(),
         human_version: this.human.version
       }
       console.log('[FaceDetectionEngine] Engine initialized and ready', {
+        initCostTime: (performance.now() - startLoadTime).toFixed(2),
         opencv_version: loadedData.opencv_version,
         human_version: loadedData.human_version
       })
@@ -1083,6 +1065,6 @@ export {
 } from './enums'
 
 // Export OpenCV related functions and module
-export { preloadOpenCV, loadOpenCV, getCvSync } from './library-loader'
+export { preloadOpenCV, loadOpenCV, getCvSync, getOpenCVVersion } from './library-loader'
 
 export default FaceDetectionEngine
