@@ -9,7 +9,7 @@
 export { FaceDetectionEngine, FaceDetectionEngine as default } from './index'
 
 // Export library loader functions
-export { preloadOpenCV, loadOpenCV, getCvSync } from './library-loader'
+export { preloadOpenCV, getOpenCVVersion, getCvSync } from './library-loader'
 
 // Export configuration type
 export type { FaceDetectionEngineConfig } from './types'
