@@ -271,10 +271,8 @@ export function getCvSync() {
  * @returns Promise that resolves with Human instance
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<Human> {
-  const config = {
+  const config: any = {
     backend: _detectOptimalBackend(),
-    modelBasePath: modelPath,
-    wasmPath: wasmPath,
     face: {
       enabled: true,
       detector: { rotation: false, return: true },
@@ -289,26 +287,44 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
     gesture: { enabled: true }
   }
 
+  // 只在提供了路径时才设置，否则让 Human.js 使用默认加载策略
+  if (modelPath) {
+    config.modelBasePath = modelPath
+  }
+  if (wasmPath) {
+    config.wasmPath = wasmPath
+  }
+
   console.log('[FaceDetectionEngine] Human.js config:', {
     backend: config.backend,
-    modelBasePath: config.modelBasePath,
-    wasmPath: config.wasmPath
+    modelBasePath: config.modelBasePath || '(using default)',
+    wasmPath: config.wasmPath || '(using default)'
   })
 
   const initStartTime = performance.now()
-  const human = new Human(config as any)
+  console.log('[FaceDetectionEngine] Creating Human instance...')
+  const human = new Human(config)
+  const instanceCreateTime = performance.now() - initStartTime
+  console.log(`[FaceDetectionEngine] Human instance created, took ${instanceCreateTime.toFixed(2)}ms`)
 
   console.log('[FaceDetectionEngine] Loading Human.js models...')
   const modelLoadStartTime = performance.now()
-  await human.load()
-  const loadTime = performance.now() - modelLoadStartTime
-  const totalTime = performance.now() - initStartTime
+  
+  try {
+    await human.load()
+    const loadTime = performance.now() - modelLoadStartTime
+    const totalTime = performance.now() - initStartTime
 
-  console.log('[FaceDetectionEngine] Human.js loaded successfully', {
-    modelLoadTime: `${loadTime.toFixed(2)}ms`,
-    totalInitTime: `${totalTime.toFixed(2)}ms`,
-    version: human.version
-  })
+    console.log('[FaceDetectionEngine] Human.js loaded successfully', {
+      modelLoadTime: `${loadTime.toFixed(2)}ms`,
+      totalInitTime: `${totalTime.toFixed(2)}ms`,
+      version: human.version
+    })
 
-  return human
+    return human
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[FaceDetectionEngine] Human.js load failed:', errorMsg)
+    throw error
+  }
 }
