@@ -16,14 +16,6 @@ if (cvModuleImport && (cvModuleImport as any).default) {
 let webglAvailableCache: boolean | null = null
 let opencvInitPromise: Promise<any> | null = null
 
-// 确保 OpenCV 能访问全局对象
-// OpenCV.js 的 WASM 初始化会尝试设置全局的 cv 对象
-if (typeof globalThis !== 'undefined' && !globalThis.cv) {
-  if (cvModuleImport && (cvModuleImport as any).Mat) {
-    (globalThis as any).cv = cvModuleImport
-  }
-}
-
 function _isWebGLAvailable(): boolean {
   if (webglAvailableCache !== null) {
     return webglAvailableCache
@@ -111,10 +103,8 @@ export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
 async function _initializeOpenCV(timeout: number): Promise<any> {
   console.log('[FaceDetectionEngine] Waiting for OpenCV WASM initialization...')
   
-  // 确保全局对象被正确设置
+  // 确保全局对象被正确设置（OpenCV 会自动初始化它）
   if (typeof globalThis !== 'undefined' && !(globalThis as any).cv) {
-    // Only assign if cvModule is extensible (mutable)
-    // If it is a frozen namespace, assigning it to global.cv will cause OpenCV initialization to fail
     if (cvModule && Object.isExtensible(cvModule)) {
       (globalThis as any).cv = cvModule
     }
@@ -124,18 +114,31 @@ async function _initializeOpenCV(timeout: number): Promise<any> {
     const timeoutId = setTimeout(() => {
       console.error('[FaceDetectionEngine] OpenCV.js initialization timeout')
       reject(new Error('OpenCV.js initialization timeout'))
-    }, timeout) 
+    }, timeout)
     
-    try {
-      // WASM 初始化时会调用此回调
-      let originalOnRuntimeInitialized: any = null
+    // 检查是否已经初始化
+    if ((cvModule as any).Mat) {
+      clearTimeout(timeoutId)
+      console.log('[FaceDetectionEngine] OpenCV.js already initialized')
+      resolve()
+      return
+    }
+    
+    if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
+      cvModule = (globalThis as any).cv
+      clearTimeout(timeoutId)
+      console.log('[FaceDetectionEngine] OpenCV.js already initialized (from global)')
+      resolve()
+      return
+    }
+    
+    // 尝试设置回调（只有在 cvModule 可扩展时才尝试）
+    const canSetCallback = cvModule && Object.isExtensible(cvModule)
+    
+    if (canSetCallback) {
       try {
-        originalOnRuntimeInitialized = (cvModule as any).onRuntimeInitialized
-      } catch (e) {
-        // 忽略读取错误
-      }
-      
-      try {
+        const originalOnRuntimeInitialized = (cvModule as any).onRuntimeInitialized
+        
         (cvModule as any).onRuntimeInitialized = () => {
           clearTimeout(timeoutId)
           console.log('[FaceDetectionEngine] OpenCV.js initialized via callback')
@@ -151,38 +154,36 @@ async function _initializeOpenCV(timeout: number): Promise<any> {
           
           resolve()
         }
+        
+        console.log('[FaceDetectionEngine] onRuntimeInitialized callback set successfully')
       } catch (e) {
-        console.warn('[FaceDetectionEngine] Failed to set onRuntimeInitialized callback, falling back to polling:', e)
-        // 如果无法设置回调（例如 cvModule 是只读的），启动轮询
-        const pollInterval = setInterval(() => {
-          // Check cvModule
-          if ((cvModule as any).Mat) {
-            clearInterval(pollInterval)
-            clearTimeout(timeoutId)
-            resolve()
-            return
-          }
-          // Check global cv
-          if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
-             // Update cvModule reference to the global one which is initialized
-             cvModule = (globalThis as any).cv
-             clearInterval(pollInterval)
-             clearTimeout(timeoutId)
-             resolve()
-             return
-          }
-        }, 100)
+        console.warn('[FaceDetectionEngine] Failed to set onRuntimeInitialized callback, will use polling')
+      }
+    } else {
+      console.log('[FaceDetectionEngine] cvModule is not extensible, using polling mode')
+    }
+    
+    // 启动轮询作为备用方案（无论回调是否设置成功）
+    const pollInterval = setInterval(() => {
+      // Check cvModule
+      if ((cvModule as any).Mat) {
+        clearInterval(pollInterval)
+        clearTimeout(timeoutId)
+        console.log('[FaceDetectionEngine] OpenCV.js initialized (detected via polling)')
+        resolve()
+        return
       }
       
-      // 如果已经初始化，立即调用
-      if ((cvModule as any).Mat) {
+      // Check global cv
+      if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
+        cvModule = (globalThis as any).cv
+        clearInterval(pollInterval)
         clearTimeout(timeoutId)
+        console.log('[FaceDetectionEngine] OpenCV.js initialized from global (detected via polling)')
         resolve()
+        return
       }
-    } catch (e) {
-      clearTimeout(timeoutId)
-      reject(e)
-    }
+    }, 100)
   })
   
   // 返回初始化后的 cv 模块

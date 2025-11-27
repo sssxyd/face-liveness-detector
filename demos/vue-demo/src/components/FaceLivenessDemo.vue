@@ -201,6 +201,7 @@ import FaceDetectionEngine, {
   type DetectorErrorEventData,
   type DetectorDebugEventData
 } from '@sssxyd/face-liveness-detector'
+import type { DetectorLoadedEventData } from '@sssxyd/face-liveness-detector/types'
 
 // 配置参数
 const actionCount = ref<number>(1)
@@ -286,9 +287,16 @@ onUnmounted(() => {
 })
 
 // 事件处理函数
-function handleEngineReady() {
-  isEngineReady.value = true
+function handleEngineReady(data: DetectorLoadedEventData) {
+  isEngineReady.value = data.success
+  if (!data.success) {
+    errorMessage.value = '引擎加载失败，' + (data.error || '未知错误')
+    console.error('❌ 引擎加载失败')
+    return
+  }
   statusMessage.value = '引擎已就绪，可以开始检测'
+  console.log(data.opencv_version || '未检测到 OpenCV')
+  console.log(data.human_version || '未检测到 Human.js')
   console.log('✅ 引擎已就绪')
 }
 
