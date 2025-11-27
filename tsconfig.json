@@ -4,7 +4,8 @@
     "module": "ES2020",
     "lib": ["ES2020", "DOM"],
     "declaration": true,
-    "declarationDir": "./types",
+    "declarationDir": "./dist/types",
+    "declarationMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "moduleResolution": "node",
@@ -15,8 +16,6 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
-    "declaration": true,
-    "declarationMap": true,
     "sourceMap": true
   },
   "include": ["src/**/*"],

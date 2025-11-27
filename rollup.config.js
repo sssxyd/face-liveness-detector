@@ -1,7 +1,6 @@
 import resolve from '@rollup/plugin-node-resolve'
 import commonjs from '@rollup/plugin-commonjs'
 import typescript from '@rollup/plugin-typescript'
-import path from 'path'
 
 export default [
   // ESM build
@@ -10,7 +9,8 @@ export default [
     output: {
       file: 'dist/index.esm.js',
       format: 'es',
-      sourcemap: true
+      sourcemap: true,
+      exports: 'named'
     },
     external: ['@vladmandic/human', '@techstark/opencv-js'],
     plugins: [
@@ -21,7 +21,8 @@ export default [
       typescript({
         tsconfig: './tsconfig.json',
         declaration: true,
-        declarationDir: './types'
+        declarationDir: './dist/types',
+        declarationMap: true
       })
     ]
   },
@@ -33,6 +34,7 @@ export default [
       format: 'umd',
       name: 'FaceDetectionEngine',
       sourcemap: true,
+      exports: 'named',
       globals: {
         '@vladmandic/human': 'Human',
         '@techstark/opencv-js': 'cv'
@@ -45,7 +47,10 @@ export default [
       }),
       commonjs(),
       typescript({
-        tsconfig: './tsconfig.json'
+        tsconfig: './tsconfig.json',
+        declaration: false,
+        declarationDir: undefined,
+        declarationMap: false
       })
     ]
   }

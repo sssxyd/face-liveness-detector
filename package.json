@@ -1,30 +1,30 @@
 {
+  "type": "module",
   "name": "@sssxyd/face-liveness-detector",
-  "version": "0.2.2",
+  "version": "0.2.10",
   "description": "Pure JS/TS implementation of liveness face detection based on human.js and opencv.js",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",
-  "types": "types/index.d.ts",
+  "types": "dist/types/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/types/index.d.ts",
       "import": "./dist/index.esm.js",
-      "require": "./dist/index.js",
-      "types": "./types/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./config": {
+      "types": "./dist/types/config.d.ts",
       "import": "./dist/config.esm.js",
-      "require": "./dist/config.js",
-      "types": "./types/config.d.ts"
+      "require": "./dist/config.js"
     },
     "./types": {
+      "types": "./dist/types/types.d.ts",
       "import": "./dist/types.esm.js",
-      "require": "./dist/types.js",
-      "types": "./types/types.d.ts"
+      "require": "./dist/types.js"
     }
   },
   "files": [
     "dist",
-    "types",
     "README.md",
     "LICENSE"
   ],
@@ -34,6 +34,7 @@
     "dev": "npm run build:watch",
     "clean": "rm -rf dist types",
     "type-check": "tsc --noEmit",
+    "verify-types": "node verify-types.js",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
@@ -47,12 +48,21 @@
   ],
   "author": "xuyd <sssxyd@gmail.com>",
   "license": "MIT",
-  "dependencies": {
+  "peerDependencies": {
     "@techstark/opencv-js": "^4.12.0-release.1",
     "@vladmandic/human": "^3.3.0"
   },
+  "peerDependenciesMeta": {
+    "@techstark/opencv-js": {
+      "optional": false
+    },
+    "@vladmandic/human": {
+      "optional": false
+    }
+  },
   "devDependencies": {
-    "@babel/preset-env": "^7.28.5",
+    "@techstark/opencv-js": "^4.12.0-release.1",
+    "@vladmandic/human": "^3.3.0",
     "@babel/preset-typescript": "^7.28.5",
     "@rollup/plugin-commonjs": "^29.0.0",
     "@rollup/plugin-node-resolve": "^15.1.0",
@@ -68,7 +78,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/sssxyd/face-liveness-detector.git"
+    "url": "git+https://github.com/sssxyd/face-liveness-detector.git"
   },
   "bugs": {
     "url": "https://github.com/sssxyd/face-liveness-detector/issues"
