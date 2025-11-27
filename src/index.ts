@@ -24,7 +24,7 @@ import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { loadOpenCV, loadHuman, getCvSync } from './library-loader'
+import { loadOpenCV, loadHuman, getOpenCVVersion } from './library-loader'
 
 /**
  * Internal detection state interface
@@ -132,7 +132,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // Load OpenCV
       this.emitDebug('initialization', 'Loading OpenCV...')
-      const { cv } = await loadOpenCV(300000) // 5 minute timeout
+      const { cv } = await loadOpenCV(60000) // 1 minute timeout
       if(!cv || !(cv as any).Mat) {
         console.log('[FaceDetectionEngine] Failed to load OpenCV.js: module is null or invalid')
         this.emit('detector-error' as any, {
@@ -145,12 +145,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         })
         return
       }
-
+      const cv_version = getOpenCVVersion()
       this.emitDebug('initialization', 'OpenCV loaded successfully', {
-        version: cv?.getBuildInformation?.() || 'unknown'
+        version: cv_version
       })
       console.log('[FaceDetectionEngine] OpenCV loaded successfully', {
-        version: cv?.getBuildInformation?.() || 'unknown'
+        version: cv_version
       })
 
       // Load Human.js
@@ -187,7 +187,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.isReady = true
       const loadedData: DetectorLoadedEventData = {
         success: true,
-        opencv_version: cv?.getBuildInformation?.() || 'unknown',
+        opencv_version: cv_version,
         human_version: this.human.version
       }
       console.log('[FaceDetectionEngine] Engine initialized and ready', {
@@ -1083,6 +1083,6 @@ export {
 } from './enums'
 
 // Export OpenCV related functions and module
-export { preloadOpenCV, loadOpenCV, getCvSync } from './library-loader'
+export { preloadOpenCV, getCvSync, getOpenCVVersion } from './library-loader'
 
 export default FaceDetectionEngine

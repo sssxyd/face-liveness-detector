@@ -51,23 +51,6 @@ function _detectOptimalBackend(): string {
 }
 
 /**
- * OpenCV.js 初始化辅助
- * 确保在浏览器环境中正确初始化 OpenCV
- */
-function _setupOpenCVGlobal() {
-  // 确保全局对象可用
-  if (typeof globalThis === 'undefined') {
-    if (typeof window !== 'undefined') {
-      (window as any).globalThis = window
-    } else if (typeof self !== 'undefined') {
-      (self as any).globalThis = self
-    } else if (typeof global !== 'undefined') {
-      (global as any).globalThis = global;
-    }
-  }  
-}
-
-/**
  * 预加载 OpenCV.js 以确保全局 cv 对象可用
  * 这是一个异步函数，应该在应用启动时调用
  * @param timeout - Maximum wait time in milliseconds (default: 30000)
@@ -327,4 +310,34 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
     console.error('[FaceDetectionEngine] Human.js load failed:', errorMsg)
     throw error
   }
+}
+
+/**
+ * Extract OpenCV version from getBuildInformation
+ * @returns version string like "4.12.0"
+ */
+export function getOpenCVVersion() {
+    try {
+        const cv = getCvSync();
+        if (!cv || !cv.getBuildInformation) {
+            return 'unknown';
+        }
+        const buildInfo = cv.getBuildInformation();
+        // 查找 "Version control:" 或 "OpenCV" 开头的行
+        // 格式: "Version control:               4.12.0"
+        const versionMatch = buildInfo.match(/Version\s+control:\s+(\d+\.\d+\.\d+)/i);
+        if (versionMatch && versionMatch[1]) {
+            return versionMatch[1];
+        }
+        // 备用方案：查找 "OpenCV X.X.X" 格式
+        const opencvMatch = buildInfo.match(/OpenCV\s+(\d+\.\d+\.\d+)/i);
+        if (opencvMatch && opencvMatch[1]) {
+            return opencvMatch[1];
+        }
+        return 'unknown';
+    }
+    catch (error) {
+        console.error('[getOpenCVVersion] Failed to get version:', error);
+        return 'unknown';
+    }
 }
