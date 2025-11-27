@@ -221,10 +221,7 @@ export async function loadOpenCV(timeout: number = 30000): Promise<any> {
     // 快速检查是否已经初始化完成
     if (opencvInitialized) {
       console.log('[loadOpenCV] Already initialized, returning immediately')
-      const cv = getCvSync()
-      if (cv) {
-        return { cv }
-      }
+      return getCvSync()
     }
     
     // 等待初始化
@@ -313,6 +310,7 @@ export function getOpenCVVersion(): string {
  * @returns Promise that resolves with Human instance
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<Human> {
+  console.log('[loadHuman] START - creating config')
   const initStartTime = performance.now()
   const config: any = {
     backend: _detectOptimalBackend(),
@@ -344,10 +342,14 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
     wasmPath: config.wasmPath || '(using default)'
   })
 
+  console.log('[loadHuman] Creating Human instance...')
   const human = new Human(config)
+  console.log('[loadHuman] Human instance created, starting load...')
 
   try {
+    console.log('[loadHuman] Calling human.load()...')
     await human.load()
+    console.log('[loadHuman] human.load() completed')
     const totalTime = performance.now() - initStartTime
 
     console.log('[loadHuman] Loaded successfully', {
@@ -359,30 +361,36 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
     console.error('[loadHuman] Load failed:', errorMsg)
+    console.error('[loadHuman] Error stack:', error instanceof Error ? error.stack : 'N/A')
     throw error
   }
 }
 
-export async function loadLibraries(modelPath?: string, wasmPath?: string, timeout?:number): Promise<{ cv: any; human: Human }> {
+export async function loadLibraries(
+  modelPath?: string,
+  wasmPath?: string,
+  timeout: number = 30000
+): Promise<{ cv: any; human: Human }> {
   console.log('[loadLibraries] Starting parallel load of OpenCV and Human...')
   const startTime = performance.now()
-  if (timeout == undefined){
-    timeout = 30000
-  }
+
   try {
-    // 并行加载 OpenCV 和 Human
+    console.log('[loadLibraries] Launching Promise.all with OpenCV and Human...')
     const [cv, human] = await Promise.all([
       loadOpenCV(timeout),
       loadHuman(modelPath, wasmPath)
     ])
-    
+
+    console.log('[loadLibraries] Both promises resolved')
+
     const totalTime = performance.now() - startTime
-    console.log('[loadLibraries] Both libraries loaded successfully in', totalTime.toFixed(2), 'ms')
-    
-    return {
-      cv,
-      human
-    }
+    console.log('[loadLibraries] libraries loaded successfully', {
+      totalInitTime: `${totalTime.toFixed(2)}ms`,
+      opencvVersion: getOpenCVVersion(),
+      humanVersion: human.version
+    })
+
+    return { cv, human }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
     console.error('[loadLibraries] Failed to load libraries:', errorMsg)

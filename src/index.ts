@@ -24,7 +24,7 @@ import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { loadOpenCV, loadHuman, getCvSync, getOpenCVVersion, loadLibraries } from './library-loader'
+import { getOpenCVVersion, loadLibraries } from './library-loader'
 
 /**
  * Internal detection state interface
@@ -1065,6 +1065,6 @@ export {
 } from './enums'
 
 // Export OpenCV related functions and module
-export { preloadOpenCV, loadOpenCV, getCvSync, getOpenCVVersion } from './library-loader'
+export { preloadOpenCV, getCvSync, getOpenCVVersion } from './library-loader'
 
 export default FaceDetectionEngine
