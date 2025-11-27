@@ -14,7 +14,7 @@ if (cvModuleImport && (cvModuleImport as any).default) {
 }
 
 let webglAvailableCache: boolean | null = null
-let preloadPromise: Promise<void> | null = null
+let opencvInitPromise: Promise<any> | null = null
 
 // 确保 OpenCV 能访问全局对象
 // OpenCV.js 的 WASM 初始化会尝试设置全局的 cv 对象
@@ -81,61 +81,50 @@ function _setupOpenCVGlobal() {
  * @param timeout - Maximum wait time in milliseconds (default: 30000)
  */
 export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
-  // 如果已经在预加载中，返回现有的 Promise
-  if (preloadPromise) {
-    return preloadPromise
+  // 如果已经在初始化中，返回现有的 Promise
+  if (opencvInitPromise) {
+    console.log('[OpenCV] Already initializing, reusing existing promise')
+    await opencvInitPromise
+    return
   }
 
   _setupOpenCVGlobal()
 
-  preloadPromise = (async () => {
-    // 等待 cv 全局对象可用
-    return new Promise<void>((resolve) => {
-      const maxWaitTime = timeout
-      const startTime = performance.now()
-      
-      const checkCv = () => {
-        // 检查全局 cv 对象
-        if ((globalThis as any).cv && (globalThis as any).cv.Mat) {
-          console.log('[OpenCV] Global cv object is available')
-          resolve()
-          return
-        }
-        
-        // 检查是否超时
-        if (performance.now() - startTime > maxWaitTime) {
-          console.warn('[OpenCV] Timeout waiting for cv global object, continuing anyway...')
-          resolve() // 继续，不中断初始化流程
-          return
-        }
-        
-        // 继续检查
-        setTimeout(checkCv, 100)
-      }
-      
-      checkCv()
-    })
-  })()
-
-  return preloadPromise
+  // 复用 loadOpenCV 的初始化逻辑
+  opencvInitPromise = _initializeOpenCV(timeout)
+  
+  try {
+    await opencvInitPromise
+    console.log('[OpenCV] Preload completed successfully')
+  } catch (error) {
+    console.error('[OpenCV] Preload failed:', error)
+    // 失败后清除 Promise，允许重试
+    opencvInitPromise = null
+    throw error
+  }
 }
 
 /**
- * Internal helper to wait for OpenCV initialization
+ * Internal helper to initialize OpenCV
+ * This is the core initialization logic shared by both preloadOpenCV and loadOpenCV
  */
-async function _waitForOpenCVInitialization(): Promise<void> {
+async function _initializeOpenCV(timeout: number): Promise<any> {
   console.log('[FaceDetectionEngine] Waiting for OpenCV WASM initialization...')
   
   // 确保全局对象被正确设置
   if (typeof globalThis !== 'undefined' && !(globalThis as any).cv) {
-    (globalThis as any).cv = cvModule
+    // Only assign if cvModule is extensible (mutable)
+    // If it is a frozen namespace, assigning it to global.cv will cause OpenCV initialization to fail
+    if (cvModule && Object.isExtensible(cvModule)) {
+      (globalThis as any).cv = cvModule
+    }
   }
   
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       console.error('[FaceDetectionEngine] OpenCV.js initialization timeout')
       reject(new Error('OpenCV.js initialization timeout'))
-    }, 30000) // 30 second timeout
+    }, timeout) 
     
     try {
       // WASM 初始化时会调用此回调
@@ -148,7 +137,7 @@ async function _waitForOpenCVInitialization(): Promise<void> {
       
       try {
         (cvModule as any).onRuntimeInitialized = () => {
-          clearTimeout(timeout)
+          clearTimeout(timeoutId)
           console.log('[FaceDetectionEngine] OpenCV.js initialized via callback')
           
           // 调用原始回调（如果存在）
@@ -166,24 +155,44 @@ async function _waitForOpenCVInitialization(): Promise<void> {
         console.warn('[FaceDetectionEngine] Failed to set onRuntimeInitialized callback, falling back to polling:', e)
         // 如果无法设置回调（例如 cvModule 是只读的），启动轮询
         const pollInterval = setInterval(() => {
+          // Check cvModule
           if ((cvModule as any).Mat) {
             clearInterval(pollInterval)
-            clearTimeout(timeout)
+            clearTimeout(timeoutId)
             resolve()
+            return
+          }
+          // Check global cv
+          if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
+             // Update cvModule reference to the global one which is initialized
+             cvModule = (globalThis as any).cv
+             clearInterval(pollInterval)
+             clearTimeout(timeoutId)
+             resolve()
+             return
           }
         }, 100)
       }
       
       // 如果已经初始化，立即调用
       if ((cvModule as any).Mat) {
-        clearTimeout(timeout)
+        clearTimeout(timeoutId)
         resolve()
       }
     } catch (e) {
-      clearTimeout(timeout)
+      clearTimeout(timeoutId)
       reject(e)
     }
   })
+  
+  // 返回初始化后的 cv 模块
+  // 优先返回 globalThis.cv（如果存在且已初始化）
+  if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
+    cvModule = (globalThis as any).cv
+    return cvModule
+  }
+  
+  return cvModule
 }
 
 /**
@@ -191,7 +200,7 @@ async function _waitForOpenCVInitialization(): Promise<void> {
  * 如果已经通过 preloadOpenCV 在加载中或加载完成，会复用其结果
  * @returns Promise that resolves with cv module
  */
-export async function loadOpenCV() {
+export async function loadOpenCV(timeout: number = 30000): Promise<{ cv: any }> {
 
   _setupOpenCVGlobal()
 
@@ -199,25 +208,29 @@ export async function loadOpenCV() {
   console.log('[FaceDetectionEngine] Loading OpenCV.js...')
 
   try {
-    // 首先检查是否已有预加载的 Promise
-    if (preloadPromise) {
-      console.log('[FaceDetectionEngine] Waiting for preload OpenCV Promise...')
-      await preloadPromise
-    }
-
-    // 检查 cvModule 是否已经是一个 Promise（WASM 加载中）
-    if (cvModule instanceof Promise) {
-      console.log('[FaceDetectionEngine] Waiting for cvModule Promise...')
-      cv = await cvModule
-    } else {
+    // 如果已经在初始化中，复用现有的 Promise
+    if (opencvInitPromise) {
+      console.log('[FaceDetectionEngine] OpenCV initialization in progress, waiting...')
+      cv = await opencvInitPromise
+    } else if ((cvModule as any).Mat) {
       // 检查 cvModule 是否已经初始化
-      if ((cvModule as any).Mat) {
-        console.log('[FaceDetectionEngine] OpenCV.js already initialized')
-        cv = cvModule
-      } else {
-        // cvModule 可能是一个对象，但 WASM 还未初始化
-        await _waitForOpenCVInitialization()
-        cv = cvModule
+      console.log('[FaceDetectionEngine] OpenCV.js already initialized')
+      cv = cvModule
+    } else if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
+      // 检查全局 cv 是否已经初始化
+      console.log('[FaceDetectionEngine] OpenCV.js already initialized (global)')
+      cvModule = (globalThis as any).cv
+      cv = cvModule
+    } else {
+      // 开始新的初始化
+      console.log('[FaceDetectionEngine] Starting OpenCV initialization...')
+      opencvInitPromise = _initializeOpenCV(timeout)
+      try {
+        cv = await opencvInitPromise
+      } catch (error) {
+        // 失败后清除 Promise，允许重试
+        opencvInitPromise = null
+        throw error
       }
     }
 

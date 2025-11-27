@@ -132,7 +132,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // Load OpenCV
       this.emitDebug('initialization', 'Loading OpenCV...')
-      const { cv } = await loadOpenCV()
+      const { cv } = await loadOpenCV(300000) // 5 minute timeout
       if(!cv || !(cv as any).Mat) {
         this.emit('detector-error' as any, {
           success: false,
