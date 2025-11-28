@@ -15,7 +15,8 @@ export default [
     external: ['@vladmandic/human', '@techstark/opencv-js'],
     plugins: [
       resolve({
-        browser: true
+        browser: true,
+        preferBuiltins: false
       }),
       commonjs(),
       typescript({
@@ -43,7 +44,8 @@ export default [
     external: ['@vladmandic/human', '@techstark/opencv-js'],
     plugins: [
       resolve({
-        browser: true
+        browser: true,
+        preferBuiltins: false
       }),
       commonjs(),
       typescript({

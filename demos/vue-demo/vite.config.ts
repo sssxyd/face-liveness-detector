@@ -27,8 +27,7 @@ export default defineConfig({
             return 'face-liveness'
           }
         }
-      },
-      external: ['fs', 'path', 'crypto'],
+      }
     },
     // 优化构建
     minify: 'terser',
@@ -36,14 +35,6 @@ export default defineConfig({
     reportCompressedSize: true,
     chunkSizeWarningLimit: 5000, // 5MB 警告阈值（大型库）
     sourcemap: false,
-  },
-  resolve: {
-    alias: {
-      // 避免 opencv-js 引入 Node.js 模块
-      fs: 'fs',
-      path: 'path',
-      crypto: 'crypto',
-    },
   },
   optimizeDeps: {
     // 在预构建时排除大型库以加快开发
