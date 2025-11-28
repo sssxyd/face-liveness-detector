@@ -14,8 +14,7 @@ if (cvModuleImport && (cvModuleImport as any).default) {
 }
 
 let webglAvailableCache: boolean | null = null
-let opencvInitPromise: Promise<number> | null = null
-let opencvInitialized: boolean = false  // 标记是否已初始化完成
+let opencvInitPromise: Promise<boolean> | null = null
 
 function _isWebGLAvailable(): boolean {
   if (webglAvailableCache !== null) {
@@ -90,15 +89,15 @@ export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
  * Internal helper to initialize OpenCV
  * This is the core initialization logic shared by both preloadOpenCV and loadOpenCV
  */
-async function _initializeOpenCV(timeout: number): Promise<number> {
+async function _initializeOpenCV(timeout: number): Promise<boolean> {
   const initStartTime = performance.now()
   console.log('Waiting for OpenCV WASM initialization...')
   
   // 快速路径：检查是否已经初始化
   if ((cvModule as any).Mat) {
     const initTime = performance.now() - initStartTime
-    console.log(`OpenCV.js already initialized, took ${initTime.toFixed(2)}ms`)
-    return cvModule
+    console.log(`[FaceDetectionEngine] OpenCV.js already initialized, took ${initTime.toFixed(2)}ms`)
+    return true
   }
   
   if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
@@ -118,15 +117,11 @@ async function _initializeOpenCV(timeout: number): Promise<number> {
     }
   }
   
-  return new Promise<number>((resolve, reject) => {
-    // 轮询检查OpenCV初始化状态的标记
+  return new Promise<any>((resolve, reject) => {
     let pollInterval: NodeJS.Timeout | null = null
-    // 防止多次调用 resolve/reject
-    let finished = false
     
     const timeoutId = setTimeout(() => {
-      console.error('OpenCV.js initialization timeout after ' + timeout + 'ms')
-      finished = true
+      console.error('[FaceDetectionEngine] OpenCV.js initialization timeout after ' + timeout + 'ms')
       if (pollInterval) {
         clearInterval(pollInterval)
       }
@@ -143,20 +138,12 @@ async function _initializeOpenCV(timeout: number): Promise<number> {
       
       // 立即停止所有定时器和轮询
       clearTimeout(timeoutId)
-      if (pollInterval !== null) {
+      if (pollInterval) {
         clearInterval(pollInterval)
-        pollInterval = null
-        console.log('[resolveOnce] Poll interval cleared')
       }
-      
       const initTime = performance.now() - initStartTime
-      console.log(`OpenCV.js initialized (${source}), took ${initTime.toFixed(2)}ms`)
-      
-      // 标记初始化完成
-      opencvInitialized = true
-      
-      // 返回简单的标记，实际的 cv 对象已经在 globalThis.cv 上了
-      resolve(initTime)
+      console.log(`[FaceDetectionEngine] OpenCV.js initialized (${source}), took ${initTime.toFixed(2)}ms`)
+      resolve(true)
     }
     
     // 尝试设置回调（只有在 cvModule 可扩展时才尝试）
@@ -191,8 +178,6 @@ async function _initializeOpenCV(timeout: number): Promise<number> {
     
     // 启动轮询作为备用方案或主要方案
     pollInterval = setInterval(() => {
-      console.log('[polling] Checking for Mat class...')
-      
       // 优先检查 cvModule 中是否有 Mat
       if ((cvModule as any).Mat) {
         console.log('[polling] Found Mat in cvModule')
@@ -218,34 +203,51 @@ async function _initializeOpenCV(timeout: number): Promise<number> {
  */
 export async function loadOpenCV(timeout: number = 30000): Promise<any> { 
   try {
-    // 快速检查是否已经初始化完成
-    if (opencvInitialized) {
-      console.log('[loadOpenCV] Already initialized, returning immediately')
-      return getCvSync()
-    }
-    
-    // 等待初始化
-    console.log('[loadOpenCV] Waiting for initialization...')
-    if (!opencvInitPromise) {
-      console.log('[loadOpenCV] Starting new initialization')
+    // 如果已经在初始化中，复用现有的 Promise
+    if (opencvInitPromise) {
+      console.log('[FaceDetectionEngine] OpenCV initialization in progress, waiting...')
+      try {
+        await opencvInitPromise
+        cv = getCvSync()
+        if (cv && (cv as any).Mat) {
+          console.log('[FaceDetectionEngine] OpenCV.js loaded successfully')
+          return { cv }
+        }
+      } catch (error) {
+        // 失败后清除 Promise，允许重试
+        opencvInitPromise = null
+        throw error
+      }
+    } else {
+      cv = getCvSync()
+      if (cv && (cv as any).Mat) {
+        console.log('[FaceDetectionEngine] OpenCV.js already initialized')
+        return { cv }
+      }
+      // 开始新的初始化
+      console.log('[FaceDetectionEngine] Starting OpenCV initialization...')
       opencvInitPromise = _initializeOpenCV(timeout)
+      try {
+        await opencvInitPromise
+        cv = getCvSync()
+        if (cv && (cv as any).Mat) {
+          console.log('[FaceDetectionEngine] OpenCV.js loaded successfully')
+          return { cv }
+        }
+      } catch (error) {
+        // 失败后清除 Promise，允许重试
+        opencvInitPromise = null
+        throw error
+      }
     }
-    
-    console.log('[loadOpenCV] Awaiting opencvInitPromise')
-    const initTime = await opencvInitPromise
-    
-    // 获取初始化后的 cv 对象
-    const cv = getCvSync()
-    if (!cv) {
-      console.error('[loadOpenCV] getCvSync returned null')
-      throw new Error('OpenCV module is invalid')
-    }
-    
-    console.log('[loadOpenCV] OpenCV.js load successfully', {
-      initTime: `${initTime.toFixed(2)}ms`,
-      version: getOpenCVVersion()
+
+    // 如果到这里还没有返回，说明加载失败
+    console.error('[FaceDetectionEngine] OpenCV module is invalid:', {
+      hasMat: cv && (cv as any).Mat,
+      type: typeof cv,
+      keys: cv ? Object.keys(cv).slice(0, 10) : 'N/A'
     })
-    return cv
+    throw new Error('OpenCV.js loaded but module is invalid (no Mat class found)')
   } catch (error) {
     console.error('[loadOpenCV] OpenCV.js load failed', error)
     opencvInitPromise = null  // 失败时清除 Promise，允许重试
@@ -396,4 +398,34 @@ export async function loadLibraries(
     console.error('[loadLibraries] Failed to load libraries:', errorMsg)
     throw error
   }
+}
+
+/**
+ * Extract OpenCV version from getBuildInformation
+ * @returns version string like "4.12.0"
+ */
+export function getOpenCVVersion() {
+    try {
+        const cv = getCvSync();
+        if (!cv || !cv.getBuildInformation) {
+            return 'unknown';
+        }
+        const buildInfo = cv.getBuildInformation();
+        // 查找 "Version control:" 或 "OpenCV" 开头的行
+        // 格式: "Version control:               4.12.0"
+        const versionMatch = buildInfo.match(/Version\s+control:\s+(\d+\.\d+\.\d+)/i);
+        if (versionMatch && versionMatch[1]) {
+            return versionMatch[1];
+        }
+        // 备用方案：查找 "OpenCV X.X.X" 格式
+        const opencvMatch = buildInfo.match(/OpenCV\s+(\d+\.\d+\.\d+)/i);
+        if (opencvMatch && opencvMatch[1]) {
+            return opencvMatch[1];
+        }
+        return 'unknown';
+    }
+    catch (error) {
+        console.error('[getOpenCVVersion] Failed to get version:', error);
+        return 'unknown';
+    }
 }

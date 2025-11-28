@@ -24,7 +24,7 @@ import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { getOpenCVVersion, loadLibraries } from './library-loader'
+import { loadOpenCV, loadHuman, getOpenCVVersion } from './library-loader'
 
 /**
  * Internal detection state interface
@@ -130,11 +130,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.emitDebug('initialization', 'Starting to load detection libraries...')
 
     try {
-      // Load Libraries
-      this.emitDebug('initialization', 'Loading Libraries...')
-      const startLoadTime = performance.now()
-      const { cv, human } = await loadLibraries(this.config.human_model_path, this.config.tensorflow_wasm_path, 30000) 
-      
+      // Load OpenCV
+      this.emitDebug('initialization', 'Loading OpenCV...')
+      const { cv } = await loadOpenCV(60000) // 1 minute timeout
       if(!cv || !(cv as any).Mat) {
         console.log('[FaceDetectionEngine] Failed to load OpenCV.js: module is null or invalid')
         this.emit('detector-loaded' as any, {
@@ -147,6 +145,21 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         })
         return
       }
+
+      const cv_version = getOpenCVVersion()
+      this.emitDebug('initialization', 'OpenCV loaded successfully', {
+        version: cv_version
+      })
+      console.log('[FaceDetectionEngine] OpenCV loaded successfully', {
+        version: cv_version
+      })
+
+      // Load Human.js
+      console.log('[FaceDetectionEngine] Loading Human.js models...')
+      this.emitDebug('initialization', 'Loading Human.js...')
+      const humanStartTime = performance.now()
+      this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
+      const humanLoadTime = performance.now() - humanStartTime
       
       if (!human) {
         const errorMsg = 'Failed to load Human.js: instance is null'
@@ -168,7 +181,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.isReady = true
       const loadedData: DetectorLoadedEventData = {
         success: true,
-        opencv_version: getOpenCVVersion(),
+        opencv_version: cv_version,
         human_version: this.human.version
       }
       console.log('[FaceDetectionEngine] Engine initialized and ready', {
