@@ -248,8 +248,6 @@ const maxDebugLogs = 100
 
 // 计算配置
 const config = computed(() => ({
-  human_model_path: 'https://app.unpkg.com/@vladmandic/human@3.3.6/files/models',
-  tensorflow_wasm_path: 'https://app.unpkg.com/@tensorflow/tfjs-backend-wasm@4.22.0/files/dist',
   min_face_ratio: minFaceRatio.value,
   max_face_ratio: maxFaceRatio.value,
   min_face_frontal: 0.9,
