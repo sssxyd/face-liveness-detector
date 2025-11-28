@@ -34,7 +34,7 @@ function _isWebGLAvailable(): boolean {
 
 type BrowserEngine = 'chromium' | 'webkit' | 'gecko' | 'other'
 
-function _detectBrowserEngine(userAgent: string): BrowserEngine {
+export function detectBrowserEngine(userAgent: string): BrowserEngine {
   const ua = userAgent.toLowerCase()
   
   // 1. 检测 Gecko (Firefox)
@@ -96,7 +96,7 @@ function _detectEnvironmentInfo(): Record<string, any> {
     memory,
     connection,
     userAgent: navigator.userAgent,
-    platform: navigator.platform,
+    platform: (navigator as any).userAgentData?.platform || 'unknown',
     language: navigator.language,
     hardwareConcurrency: navigator.hardwareConcurrency,
     maxTouchPoints: navigator.maxTouchPoints,
@@ -127,7 +127,7 @@ function _detectOptimalBackend(preferredBackend?: 'auto' | 'webgl' | 'wasm'): st
   }
 
   const userAgent = navigator.userAgent.toLowerCase()
-  const engine = _detectBrowserEngine(userAgent)
+  const engine = detectBrowserEngine(userAgent)
   
   console.log('[Backend Detection] Detected browser engine:', {
     engine,

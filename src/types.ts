@@ -3,7 +3,7 @@
  * Framework-agnostic type definitions for face liveness detection
  */
 
-import type { LivenessAction, LivenessActionStatus, PromptCode, ErrorCode } from './enums'
+import type { LivenessAction, LivenessActionStatus, DetectionCode, ErrorCode } from './enums'
 
 // ==================== Configuration Interfaces ====================
 
@@ -112,25 +112,18 @@ export interface DetectorLoadedEventData {
   human_version?: string  // Human.js version
 }
 
-export interface StatusPromptEventData {
-  code: PromptCode    // Prompt code
-  size?: number       // Face size percentage
-  frontal?: number    // Face frontality percentage
-  real?: number       // Anti-spoofing score
-  live?: number       // Liveness score
-  quality?: number    // Image quality score
-}
 
-export interface ActionPromptEventData {
+export interface DetectorActionEventData {
   action: LivenessAction
   status: LivenessActionStatus
 }
 
 /**
- * Silent liveness detection data
+ * Face detect info event data
  */
-export interface FaceDetectedEventData {
+export interface DetectorInfoEventData {
   passed: boolean  // Whether silent liveness detection passed
+  code: DetectionCode // Prompt code
   size: number     // Face size percentage (0-1)
   frontal: number  // Face frontality percentage (0-1)
   quality: number  // Image quality score (0-1)
@@ -183,9 +176,8 @@ export interface EventEmitter {
 
 export interface EventMap {
   'detector-loaded': DetectorLoadedEventData
-  'status-prompt': StatusPromptEventData
-  'face-detected': FaceDetectedEventData
-  'action-prompt': ActionPromptEventData
+  'detector-info': DetectorInfoEventData
+  'detector-action': DetectorActionEventData
   'detector-finish': DetectorFinishEventData
   'detector-error': DetectorErrorEventData
   'detector-debug': DetectorDebugEventData

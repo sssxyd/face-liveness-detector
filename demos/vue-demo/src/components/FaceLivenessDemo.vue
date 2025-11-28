@@ -213,12 +213,12 @@ import FaceDetectionEngine, {
   LivenessAction,
   type DetectorLoadedEventData,
   type DetectorFinishEventData,
-  type FaceDetectedEventData,
-  type StatusPromptEventData,
-  type ActionPromptEventData,
+  type DetectorInfoEventData,
+  type DetectorActionEventData,
   type DetectorErrorEventData,
   type DetectorDebugEventData,
-  type FaceDetectionEngineConfig
+  type FaceDetectionEngineConfig,
+  DetectionCode
 } from '@sssxyd/face-liveness-detector'
 
 // 配置参数
@@ -288,9 +288,8 @@ onMounted(async () => {
     
     // Listen to events
     engine.on('detector-loaded', handleEngineReady)
-    engine.on('status-prompt', handleStatusPrompt)
-    engine.on('face-detected', handleFaceDetected)
-    engine.on('action-prompt', handleActionPrompt)
+    engine.on('detector-info', handleDetectorInfo)
+    engine.on('detector-action', handleDetectorAction)
     engine.on('detector-finish', handleDetectionFinish)
     engine.on('detector-error', handleDetectionError)
     engine.on('detector-debug', handleDebugLog)
@@ -323,19 +322,26 @@ function handleEngineReady(data: DetectorLoadedEventData) {
   console.log('✅ Engine is ready')
 }
 
-function handleStatusPrompt(data: StatusPromptEventData) {
-  statusMessage.value = getPromptMessage(data.code)
-  // Update border color based on prompt code
-  if (data.code === 'FRAME_DETECTED') {
-    borderColor.value = 'yes'
-  } else {
-    borderColor.value = 'warn'
-  }
-}
 
-function handleFaceDetected(data: FaceDetectedEventData) {
+function handleDetectorInfo(data: DetectorInfoEventData) {
   if (data.passed) {
     silentPassedCount.value++
+  }
+
+  switch(data.code){
+    case DetectionCode.FACE_CHECK_PASS:
+      borderColor.value = 'yes'
+      statusMessage.value = 'Face detected successfully'
+      break
+    case DetectionCode.VIDEO_NO_FACE:
+    case DetectionCode.MULTIPLE_FACE:
+      borderColor.value = 'failed'
+      statusMessage.value = getPromptMessage(data.code)
+      break
+    default:
+      borderColor.value = 'warn'
+      statusMessage.value = getPromptMessage(data.code)
+      break
   }
   
   faceInfo.value = {
@@ -347,7 +353,7 @@ function handleFaceDetected(data: FaceDetectedEventData) {
   }
 }
 
-function handleActionPrompt(data: ActionPromptEventData) {
+function handleDetectorAction(data: DetectorActionEventData) {
   if (data.status === 'started') {
     currentAction.value = data.action
     statusMessage.value = `Please perform action: ${getActionText(data.action)}`
@@ -447,13 +453,13 @@ function resetDetection() {
 // Helper functions
 function getPromptMessage(code: string): string {
   const messages: Record<string, string> = {
-    'NO_FACE': 'Face not detected, please face the camera',
-    'MULTIPLE_FACE': 'Multiple faces detected, ensure only one person',
-    'FACE_TOO_SMALL': 'Face too small, please move closer to the camera',
-    'FACE_TOO_LARGE': 'Face too large, please move away from the camera',
-    'FACE_NOT_FRONTAL': 'Please face the camera directly',
-    'IMAGE_QUALITY_LOW': 'Image quality is insufficient, please keep steady',
-    'FRAME_DETECTED': 'Valid frame detected'
+    [DetectionCode.VIDEO_NO_FACE]: 'Face not detected, please face the camera',
+    [DetectionCode.MULTIPLE_FACE]: 'Multiple faces detected, ensure only one person',
+    [DetectionCode.FACE_TOO_SMALL]: 'Face too small, please move closer to the camera',
+    [DetectionCode.FACE_TOO_LARGE]: 'Face too large, please move away from the camera',
+    [DetectionCode.FACE_NOT_FRONTAL]: 'Please face the camera directly',
+    [DetectionCode.FACE_LOW_QUALITY]: 'Image quality too low, please improve lighting or camera focus',
+    [DetectionCode.FACE_CHECK_PASS]: 'Face detected successfully'
   }
   return messages[code] || 'Detecting...'
 }
@@ -738,7 +744,7 @@ function getActionCountLabel(count: number): string {
 
 .info-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(2, 1fr);
   gap: 15px;
 }
 

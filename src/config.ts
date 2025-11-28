@@ -37,10 +37,10 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
     roll_threshold: 2
   }),
   image_quality_features: Object.freeze({
-    require_full_face_in_bounds: true,
+    require_full_face_in_bounds: false, // 改为 false，允许人脸部分超出边界（更符合实际场景）
     use_opencv_enhancement: true,
-    min_laplacian_variance: 100,
-    min_gradient_sharpness: 0.3,
+    min_laplacian_variance: 50, // 降低拉普拉斯方差阈值（从 100 → 50）
+    min_gradient_sharpness: 0.2, // 降低梯度清晰度阈值（从 0.3 → 0.2）
     min_blur_score: 0.6
   }),
 

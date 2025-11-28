@@ -26,16 +26,18 @@ export enum DetectionPeriod {
 }
 
 /**
- * Prompt code enumeration - for status prompt events
+ * Detect code enumeration - for detector info events
  */
-export enum PromptCode {
-  NO_FACE = 'NO_FACE',
+export enum DetectionCode {
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',
   MULTIPLE_FACE = 'MULTIPLE_FACE',
   FACE_TOO_SMALL = 'FACE_TOO_SMALL',
   FACE_TOO_LARGE = 'FACE_TOO_LARGE',
   FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',
-  IMAGE_QUALITY_LOW = 'IMAGE_QUALITY_LOW',
-  FRAME_DETECTED = 'FRAME_DETECTED'
+  FACE_NOT_REAL = 'FACE_NOT_REAL',
+  FACE_NOT_LIVE = 'FACE_NOT_LIVE',
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',
+  FACE_CHECK_PASS = 'FACE_CHECK_PASS'
 }
 
 /**

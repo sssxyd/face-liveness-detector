@@ -169,7 +169,8 @@ function checkFaceCompletenessInternal(
   imageHeight: number,
   config: ImageQualityFeatures
 ): QualityMetricResult {
-  // 第一层：Human.js 边界检测 (60%)
+  // 第一层：Human.js 边界检测 (80%)
+  // require_full_face_in_bounds 设为 false 时允许 90% 的完整度即可
   let humanScore = calculateHumanCompleteness(face, imageWidth, imageHeight, config.require_full_face_in_bounds)
 
   // 第二、三层：OpenCV 增强检测
@@ -187,11 +188,11 @@ function checkFaceCompletenessInternal(
     }
   }
 
-  // 组合评分
+  // 组合评分：减少对 OpenCV 辅助检测的依赖
+  // Human.js 作为主要判据（权重提升到 80%），OpenCV 作为辅助增强（20%）
   const completenessScore =
-    humanScore * 0.6 +
-    opencvContourScore * 0.3 +
-    opencvSharpnessScore * 0.1
+    humanScore * 0.8 +
+    Math.max(opencvContourScore, opencvSharpnessScore) * 0.2
 
   return {
     name: '人脸完整度',
@@ -229,7 +230,12 @@ function calculateHumanCompleteness(
   if (requireFullFaceInBounds) {
     const isFullyInBounds = x >= 0 && y >= 0 && x + width <= imageWidth && y + height <= imageHeight
     if (!isFullyInBounds) {
-      completenessScore = 0
+      // 改进：不是直接返回 0，而是按超出程度扣分
+      // 90% 以上在边界内可以接受
+      const minCompleteness = 0.9
+      if (completenessScore < minCompleteness) {
+        completenessScore = completenessScore * 0.5 // 超出较多时严重扣分
+      }
     }
   }
 

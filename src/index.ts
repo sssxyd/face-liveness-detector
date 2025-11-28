@@ -6,12 +6,11 @@
 import Human, { Box, FaceResult, GestureResult } from '@vladmandic/human'
 import type {
   FaceDetectionEngineConfig,
-  FaceDetectedEventData,
+  DetectorInfoEventData,
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
-  StatusPromptEventData,
-  ActionPromptEventData,
+  DetectorActionEventData,
   EventMap,
   EventEmitter,
   FaceFrontalFeatures,
@@ -20,12 +19,12 @@ import type {
   DetectorLoadedEventData,
   ResolvedEngineConfig
 } from './types'
-import { LivenessAction, ErrorCode, PromptCode, LivenessActionStatus, DetectionPeriod } from './enums'
+import { LivenessAction, ErrorCode, DetectionCode, LivenessActionStatus, DetectionPeriod } from './enums'
 import { mergeConfig } from './config'
 import { SimpleEventEmitter } from './event-emitter'
 import { checkFaceFrontal } from './face-frontal-checker'
 import { checkImageQuality } from './image-quality-checker'
-import { loadOpenCV, loadHuman, getOpenCVVersion } from './library-loader'
+import { loadOpenCV, loadHuman, getOpenCVVersion, detectBrowserEngine } from './library-loader'
 
 /**
  * Internal detection state interface
@@ -170,8 +169,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           error: errorMsg,
           stack,
           userAgent: navigator.userAgent,
-          platform: navigator.platform,
-          browser: this.detectBrowserInfo(),
+          platform: (navigator as any).userAgentData?.platform || 'unknown',
+          browser: detectBrowserEngine(navigator.userAgent),
           backend: this.config.tensorflow_backend,
           source: 'human.js'
         }
@@ -669,7 +668,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    this.emitLivenessDetected(true, faceRatio, frontal, qualityResult.score, face.real || 0, face.live || 0)
+    this.emitDetectorInfo(true, DetectionCode.FACE_CHECK_PASS, faceRatio, frontal, qualityResult.score, face.real || 0, face.live || 0)
 
     // Process detection phases based on current period
     if (this.detectionState.period === DetectionPeriod.DETECT) {
@@ -703,15 +702,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private validateFaceSize(faceRatio: number, faceBox: Box): boolean {
     if (faceRatio <= this.config.min_face_ratio!) {
-      this.emitLivenessDetected(false, faceRatio)
+      this.emitDetectorInfo(false, DetectionCode.FACE_TOO_SMALL, faceRatio)
       this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
     }
 
     if (faceRatio >= this.config.max_face_ratio!) {
-      this.emitLivenessDetected(false, faceRatio)
-      this.emitStatusPrompt(PromptCode.FACE_TOO_LARGE, { size: faceRatio })
+      this.emitDetectorInfo(false, DetectionCode.FACE_TOO_LARGE, faceRatio)
       this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.config.min_face_ratio!, maxRatio: this.config.max_face_ratio! }, 'info')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
@@ -728,8 +726,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.detectionState.lastFrontalScore = frontal
 
     if (frontal < this.config.min_face_frontal) {
-      this.emitLivenessDetected(false, faceRatio, frontal)
-      this.emitStatusPrompt(PromptCode.FACE_NOT_FRONTAL, { frontal })
+      this.emitDetectorInfo(false, DetectionCode.FACE_NOT_FRONTAL, faceRatio, frontal)
       this.emitDebug('detection', 'Face is not frontal to camera', { frontal: frontal.toFixed(4), minFrontal: this.config.min_face_frontal! }, 'info')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
@@ -743,8 +740,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private validateImageQuality(qualityResult: any, faceRatio: number, frontal: number): boolean {
     if (!qualityResult.passed || qualityResult.score < this.config.min_image_quality) {
-      this.emitLivenessDetected(false, faceRatio, frontal, qualityResult.score)
-      this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { result: qualityResult, minImageQuality: this.config.min_image_quality })
+      this.emitDetectorInfo(false, DetectionCode.FACE_LOW_QUALITY, faceRatio, frontal, qualityResult.score)
       this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.config.min_image_quality }, 'info')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
@@ -759,7 +755,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private validateSilentLiveness(face: FaceResult, faceRatio: number, frontal: number, quality: number): boolean {
     // Check reality score
     if (face.real === undefined || typeof face.real !== 'number') {
-      this.emitLivenessDetected(false, faceRatio, frontal, quality)
+      this.emitDetectorInfo(false, DetectionCode.FACE_NOT_REAL, faceRatio, frontal, quality, -1)
       this.emitDebug('detection', 'Face reality score is missing, cannot perform liveness check', {}, 'warn')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
@@ -767,11 +763,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     if (face.real < this.config.min_real_score) {
       this.detectionState.suspectedFraudsCount++
-      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real)
+      this.emitDetectorInfo(false, DetectionCode.FACE_NOT_REAL, faceRatio, frontal, quality, face.real)
       this.emitDebug('detection', 'Face reality score is insufficient, suspected non-liveness', { realScore: face.real.toFixed(4), minRealScore: this.config.min_real_score }, 'info')
 
       if (this.detectionState.suspectedFraudsCount < this.config.suspected_frauds_count) {
-        this.emitStatusPrompt(PromptCode.IMAGE_QUALITY_LOW, { count: this.detectionState.suspectedFraudsCount, realScore: face.real })
         this.scheduleNextDetection(this.config.error_retry_delay)
         return false
       }
@@ -786,14 +781,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     // Check liveness score
     if (face.live === undefined || typeof face.live !== 'number') {
-      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real)
+      this.emitDetectorInfo(false, DetectionCode.FACE_NOT_LIVE, faceRatio, frontal, quality, face.real, -1)
       this.emitDebug('detection', 'Face liveness score is missing, cannot perform liveness check', {}, 'warn')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
     }
 
     if (face.live < this.config.min_live_score) {
-      this.emitLivenessDetected(false, faceRatio, frontal, quality, face.real, face.live)
+      this.emitDetectorInfo(false, DetectionCode.FACE_NOT_LIVE, faceRatio, frontal, quality, face.real, face.live)
       this.emitDebug('detection', 'Face liveness score is insufficient, this frame does not pass', { liveScore: face.live.toFixed(4), minLiveScore: this.config.min_live_score }, 'info')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
@@ -870,9 +865,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private handleMultipleFaces(faceCount: number): void {
     if (faceCount === 0) {
-      this.emitStatusPrompt(PromptCode.NO_FACE, { count: faceCount })
+      this.emitDetectorInfo(false, DetectionCode.VIDEO_NO_FACE, 0)
     } else if (faceCount > 1) {
-      this.emitStatusPrompt(PromptCode.MULTIPLE_FACE, { count: faceCount })
+      this.emitDetectorInfo(false, DetectionCode.MULTIPLE_FACE, faceCount)
     }
 
     if (this.detectionState.period !== DetectionPeriod.DETECT){
@@ -911,9 +906,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
   }
 
-  private emitLivenessDetected(passed: boolean, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
-    this.emit('face-detected' as any, {passed, size, frontal, quality, real, live} as FaceDetectedEventData)
-  }
+  private emitDetectorInfo(passed: boolean, code: DetectionCode, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
+    this.emit('detector-info' as any, {passed, code, size, frontal, quality, real, live} as DetectorInfoEventData)
+  }  
 
   /**
    * Select next action
@@ -937,7 +932,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     this.detectionState.currentAction = nextAction
 
-    const promptData: ActionPromptEventData = {
+    const promptData: DetectorActionEventData = {
       action: this.detectionState.currentAction,
       status: LivenessActionStatus.STARTED
     }
@@ -1014,35 +1009,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('liveness', 'Error during action detection', { action, error: (error as Error).message }, 'error')
       return false
     }
-  }
-
-  /**
-   * Emit status prompt event
-   */
-  private emitStatusPrompt(code: PromptCode, data?: Record<string, any>): void {
-    const promptData: StatusPromptEventData = {
-      code,
-      ...data
-    }
-    this.emit('status-prompt' as any, promptData)
-  }
-
-  /**
-   * Detect browser information for debugging
-   */
-  private detectBrowserInfo(): string {
-    const ua = navigator.userAgent.toLowerCase()
-    
-    if (/quark/i.test(ua)) return 'Quark Browser'
-    if (/micromessenger/i.test(ua)) return 'WeChat'
-    if (/alipay/i.test(ua)) return 'Alipay'
-    if (/qq/i.test(ua)) return 'QQ'
-    if (/safari/i.test(ua) && !/chrome/i.test(ua)) return 'Safari'
-    if (/chrome/i.test(ua)) return 'Chrome'
-    if (/firefox/i.test(ua)) return 'Firefox'
-    if (/edge/i.test(ua)) return 'Edge'
-    
-    return 'Unknown'
   }
 
   /**
@@ -1200,34 +1166,27 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 }
 
-// Export types
+// Export public API
 export type {
   FaceDetectionEngineConfig,
-  ResolvedEngineConfig,
   FaceFrontalFeatures,
-  ImageQualityFeatures,
-  StatusPromptEventData,
-  ActionPromptEventData,
-  FaceDetectedEventData,
+  ImageQualityFeatures,  
+  DetectorInfoEventData,
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
-  DetectorLoadedEventData,
-  EventListener,
-  EventEmitter,
+  DetectorActionEventData,
+  DetectorLoadedEventData,  
   EventMap,
-}
+  EventEmitter,
+  EventListener,
+  ResolvedEngineConfig
+} from './types'
 
-// Export enums
-export {
-  LivenessAction,
-  LivenessActionStatus,
-  PromptCode,
-  ErrorCode,
-  DetectionPeriod
-} from './enums'
+export { LivenessAction, ErrorCode, DetectionCode, LivenessActionStatus, DetectionPeriod } from './enums'
 
-// Export OpenCV related functions and module
-export { preloadOpenCV, getCvSync, getOpenCVVersion } from './library-loader'
+export { preloadOpenCV, getCvSync, getOpenCVVersion, detectBrowserEngine } from './library-loader'
+
+export { SimpleEventEmitter } from './event-emitter'
 
 export default FaceDetectionEngine

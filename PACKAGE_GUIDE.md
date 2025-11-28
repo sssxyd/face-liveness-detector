@@ -9,15 +9,14 @@ This is a framework-agnostic, TypeScript-based npm package extracted from the Vu
 ```
 packages/face-detection-engine/
 ├── src/
-│   ├── index.ts                 # Main FaceDetectionEngine class
+│   ├── index.ts                 # Main FaceDetectionEngine class and public API exports
 │   ├── types.ts                 # TypeScript type definitions
 │   ├── enums.ts                 # Enumerations (LivenessAction, PromptCode, etc.)
 │   ├── config.ts                # Configuration management and defaults
 │   ├── event-emitter.ts         # Generic event emitter implementation
 │   ├── library-loader.ts        # Human.js and OpenCV.js loader
 │   ├── face-frontal-checker.ts  # Face frontality detection
-│   ├── image-quality-checker.ts # Image quality assessment
-│   └── exports.ts               # Re-exports for public API
+│   └── image-quality-checker.ts # Image quality assessment
 ├── dist/                        # Compiled output (ESM + UMD)
 ├── types/                       # Generated TypeScript definitions
 ├── package.json                 # NPM package configuration
