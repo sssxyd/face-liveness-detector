@@ -56,12 +56,6 @@ function _detectOptimalBackend(): string {
  * @param timeout - Maximum wait time in milliseconds (default: 30000)
  */
 export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
-  // 如果已经初始化完成，直接返回
-  if (opencvInitialized) {
-    console.log('[OpenCV] Already initialized, skipping preload')
-    return
-  }
-
   // 如果已经在初始化中，返回现有的 Promise
   if (opencvInitPromise) {
     console.log('[OpenCV] Already initializing, reusing existing promise')
@@ -73,14 +67,12 @@ export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
   opencvInitPromise = _initializeOpenCV(timeout)
   
   try {
-    const initTime = await opencvInitPromise
-    console.log('[OpenCV] Preload completed successfully ', {
-      initTime: `${initTime.toFixed(2)}ms`,
-      version: getOpenCVVersion()
-    })
+    await opencvInitPromise
+    console.log('[OpenCV] Preload completed successfully')
   } catch (error) {
     console.error('[OpenCV] Preload failed:', error)
-    opencvInitPromise = null  // 失败时清除 Promise，允许重试
+    // 失败后清除 Promise，允许重试
+    opencvInitPromise = null
     throw error
   }
 }
@@ -91,7 +83,7 @@ export async function preloadOpenCV(timeout: number = 30000): Promise<void> {
  */
 async function _initializeOpenCV(timeout: number): Promise<boolean> {
   const initStartTime = performance.now()
-  console.log('Waiting for OpenCV WASM initialization...')
+  console.log('[FaceDetectionEngine] Waiting for OpenCV WASM initialization...')
   
   // 快速路径：检查是否已经初始化
   if ((cvModule as any).Mat) {
@@ -102,7 +94,7 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
   
   if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
     const initTime = performance.now() - initStartTime
-    console.log(`OpenCV.js already initialized (from global), took ${initTime.toFixed(2)}ms`)
+    console.log(`[FaceDetectionEngine] OpenCV.js already initialized (from global), took ${initTime.toFixed(2)}ms`)
     cvModule = (globalThis as any).cv
     return cvModule
   }
@@ -111,9 +103,9 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
   if (typeof globalThis !== 'undefined' && !(globalThis as any).cv) {
     if (cvModule && Object.isExtensible(cvModule)) {
       (globalThis as any).cv = cvModule
-      console.log('cvModule assigned to globalThis.cv')
+      console.log('[FaceDetectionEngine] cvModule assigned to globalThis.cv')
     } else {
-      console.log('cvModule is not extensible or globalThis already has cv')
+      console.log('[FaceDetectionEngine] cvModule is not extensible or globalThis already has cv')
     }
   }
   
@@ -128,15 +120,11 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
       reject(new Error('OpenCV.js initialization timeout'))
     }, timeout)
     
+    let resolved = false
+    
     const resolveOnce = (source: string) => {
-      if (finished) {
-        console.log('[resolveOnce] Already finished, ignoring call from:', source)
-        return
-      }
-      finished = true
-      console.log('[resolveOnce] Marking as finished')
-      
-      // 立即停止所有定时器和轮询
+      if (resolved) return
+      resolved = true
       clearTimeout(timeoutId)
       if (pollInterval) {
         clearInterval(pollInterval)
@@ -154,40 +142,38 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
         const originalOnRuntimeInitialized = (cvModule as any).onRuntimeInitialized
         
         (cvModule as any).onRuntimeInitialized = () => {
-          console.log('[onRuntimeInitialized] callback triggered')
+          console.log('[FaceDetectionEngine] onRuntimeInitialized callback triggered')
           
           // 调用原始回调（如果存在）
           if (originalOnRuntimeInitialized && typeof originalOnRuntimeInitialized === 'function') {
             try {
               originalOnRuntimeInitialized()
             } catch (e) {
-              console.warn('[onRuntimeInitialized] callback failed:', e)
+              console.warn('[FaceDetectionEngine] Original onRuntimeInitialized callback failed:', e)
             }
           }
           
           resolveOnce('callback')
         }
         
-        console.log('[onRuntimeInitialized] callback set successfully')
+        console.log('[FaceDetectionEngine] onRuntimeInitialized callback set successfully')
       } catch (e) {
-        console.warn('[onRuntimeInitialized] Failed to set callback, will use polling:', e)
+        console.warn('[FaceDetectionEngine] Failed to set onRuntimeInitialized callback, will use polling:', e)
       }
     } else {
-      console.log('[polling] cvModule is not extensible, using polling mode')
+      console.log('[FaceDetectionEngine] cvModule is not extensible, using polling mode')
     }
     
     // 启动轮询作为备用方案或主要方案
     pollInterval = setInterval(() => {
       // 优先检查 cvModule 中是否有 Mat
       if ((cvModule as any).Mat) {
-        console.log('[polling] Found Mat in cvModule')
         resolveOnce('cvModule polling')
         return
       }
       
       // 其次检查 globalThis.cv 中是否有 Mat
       if (typeof globalThis !== 'undefined' && (globalThis as any).cv && (globalThis as any).cv.Mat) {
-        console.log('[polling] Found Mat in globalThis.cv')
         cvModule = (globalThis as any).cv
         resolveOnce('globalThis.cv polling')
         return
@@ -201,7 +187,10 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
  * 如果已经通过 preloadOpenCV 在加载中或加载完成，会复用其结果
  * @returns Promise that resolves with cv module
  */
-export async function loadOpenCV(timeout: number = 30000): Promise<any> { 
+export async function loadOpenCV(timeout: number = 30000): Promise<{ cv: any }> {
+  let cv: any
+  console.log('[FaceDetectionEngine] Loading OpenCV.js...')
+
   try {
     // 如果已经在初始化中，复用现有的 Promise
     if (opencvInitPromise) {
@@ -209,10 +198,6 @@ export async function loadOpenCV(timeout: number = 30000): Promise<any> {
       try {
         await opencvInitPromise
         cv = getCvSync()
-        if (cv && (cv as any).Mat) {
-          console.log('[FaceDetectionEngine] OpenCV.js loaded successfully')
-          return { cv }
-        }
       } catch (error) {
         // 失败后清除 Promise，允许重试
         opencvInitPromise = null
@@ -220,7 +205,7 @@ export async function loadOpenCV(timeout: number = 30000): Promise<any> {
       }
     } else {
       cv = getCvSync()
-      if (cv && (cv as any).Mat) {
+      if(cv && cv.Mat) {
         console.log('[FaceDetectionEngine] OpenCV.js already initialized')
         return { cv }
       }
@@ -230,10 +215,6 @@ export async function loadOpenCV(timeout: number = 30000): Promise<any> {
       try {
         await opencvInitPromise
         cv = getCvSync()
-        if (cv && (cv as any).Mat) {
-          console.log('[FaceDetectionEngine] OpenCV.js loaded successfully')
-          return { cv }
-        }
       } catch (error) {
         // 失败后清除 Promise，允许重试
         opencvInitPromise = null
@@ -241,16 +222,20 @@ export async function loadOpenCV(timeout: number = 30000): Promise<any> {
       }
     }
 
-    // 如果到这里还没有返回，说明加载失败
-    console.error('[FaceDetectionEngine] OpenCV module is invalid:', {
-      hasMat: cv && (cv as any).Mat,
-      type: typeof cv,
-      keys: cv ? Object.keys(cv).slice(0, 10) : 'N/A'
-    })
-    throw new Error('OpenCV.js loaded but module is invalid (no Mat class found)')
+    // 最终验证
+    if (!cv || !(cv as any).Mat) {
+      console.error('[FaceDetectionEngine] OpenCV module is invalid:', {
+        hasMat: cv && (cv as any).Mat,
+        type: typeof cv,
+        keys: cv ? Object.keys(cv).slice(0, 10) : 'N/A'
+      })
+      throw new Error('OpenCV.js loaded but module is invalid (no Mat class found)')
+    }
+
+    console.log('[FaceDetectionEngine] OpenCV.js loaded successfully')
+    return { cv }
   } catch (error) {
-    console.error('[loadOpenCV] OpenCV.js load failed', error)
-    opencvInitPromise = null  // 失败时清除 Promise，允许重试
+    console.error('[FaceDetectionEngine] Failed to load OpenCV.js:', error)
     throw error
   }
 }
@@ -274,46 +259,12 @@ export function getCvSync() {
 }
 
 /**
- * Extract OpenCV version from getBuildInformation
- * @returns version string like "4.12.0"
- */
-export function getOpenCVVersion(): string {
-  try {
-    const cv = getCvSync()
-    if (!cv || !cv.getBuildInformation) {
-      return 'unknown'
-    }
-    
-    const buildInfo = cv.getBuildInformation()
-    // 查找 "Version control:" 或 "OpenCV" 开头的行
-    // 格式: "Version control:               4.12.0"
-    const versionMatch = buildInfo.match(/Version\s+control:\s+(\d+\.\d+\.\d+)/i)
-    if (versionMatch && versionMatch[1]) {
-      return versionMatch[1]
-    }
-    
-    // 备用方案：查找 "OpenCV X.X.X" 格式
-    const opencvMatch = buildInfo.match(/OpenCV\s+(\d+\.\d+\.\d+)/i)
-    if (opencvMatch && opencvMatch[1]) {
-      return opencvMatch[1]
-    }
-    
-    return 'unknown'
-  } catch (error) {
-    console.error('[getOpenCVVersion] Failed to get version:', error)
-    return 'unknown'
-  }
-}
-
-/**
  * Load Human.js
  * @param modelPath - Path to model files (optional)
  * @param wasmPath - Path to WASM files (optional)
  * @returns Promise that resolves with Human instance
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<Human> {
-  console.log('[loadHuman] START - creating config')
-  const initStartTime = performance.now()
   const config: any = {
     backend: _detectOptimalBackend(),
     face: {
@@ -338,23 +289,28 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
     config.wasmPath = wasmPath
   }
 
-  console.log('[loadHuman] Config:', {
+  console.log('[FaceDetectionEngine] Human.js config:', {
     backend: config.backend,
     modelBasePath: config.modelBasePath || '(using default)',
     wasmPath: config.wasmPath || '(using default)'
   })
 
-  console.log('[loadHuman] Creating Human instance...')
+  const initStartTime = performance.now()
+  console.log('[FaceDetectionEngine] Creating Human instance...')
   const human = new Human(config)
-  console.log('[loadHuman] Human instance created, starting load...')
+  const instanceCreateTime = performance.now() - initStartTime
+  console.log(`[FaceDetectionEngine] Human instance created, took ${instanceCreateTime.toFixed(2)}ms`)
 
+  console.log('[FaceDetectionEngine] Loading Human.js models...')
+  const modelLoadStartTime = performance.now()
+  
   try {
-    console.log('[loadHuman] Calling human.load()...')
     await human.load()
-    console.log('[loadHuman] human.load() completed')
+    const loadTime = performance.now() - modelLoadStartTime
     const totalTime = performance.now() - initStartTime
 
-    console.log('[loadHuman] Loaded successfully', {
+    console.log('[FaceDetectionEngine] Human.js loaded successfully', {
+      modelLoadTime: `${loadTime.toFixed(2)}ms`,
       totalInitTime: `${totalTime.toFixed(2)}ms`,
       version: human.version
     })
@@ -362,40 +318,7 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
     return human
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-    console.error('[loadHuman] Load failed:', errorMsg)
-    console.error('[loadHuman] Error stack:', error instanceof Error ? error.stack : 'N/A')
-    throw error
-  }
-}
-
-export async function loadLibraries(
-  modelPath?: string,
-  wasmPath?: string,
-  timeout: number = 30000
-): Promise<{ cv: any; human: Human }> {
-  console.log('[loadLibraries] Starting parallel load of OpenCV and Human...')
-  const startTime = performance.now()
-
-  try {
-    console.log('[loadLibraries] Launching Promise.all with OpenCV and Human...')
-    const [cv, human] = await Promise.all([
-      loadOpenCV(timeout),
-      loadHuman(modelPath, wasmPath)
-    ])
-
-    console.log('[loadLibraries] Both promises resolved')
-
-    const totalTime = performance.now() - startTime
-    console.log('[loadLibraries] libraries loaded successfully', {
-      totalInitTime: `${totalTime.toFixed(2)}ms`,
-      opencvVersion: getOpenCVVersion(),
-      humanVersion: human.version
-    })
-
-    return { cv, human }
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-    console.error('[loadLibraries] Failed to load libraries:', errorMsg)
+    console.error('[FaceDetectionEngine] Human.js load failed:', errorMsg)
     throw error
   }
 }
