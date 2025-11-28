@@ -103,31 +103,35 @@
       <h3>Detection Information</h3>
       <div class="info-grid">
         <div class="info-item">
-          <span class="label">Silent Detection:</span>
+          <span class="label">Collect:</span>
           <span class="value">{{ silentPassedCount }} / {{ config.silent_detect_count }}</span>
         </div>
         <div class="info-item">
-          <span class="label">Action Detection:</span>
+          <span class="label">Action:</span>
           <span class="value">{{ actionPassedCount }} / {{ actionCount }}</span>
         </div>
-        <div v-if="faceInfo.size > 0" class="info-item">
-          <span class="label">Face Size:</span>
+        <div class="info-item">
+          <span class="label">Passed:</span>
+          <span class="value">{{ faceInfo.passed ? 'Yes' : 'No' }}</span>
+        </div>              
+        <div class="info-item">
+          <span class="label">Size:</span>
           <span class="value">{{ (faceInfo.size * 100).toFixed(1) }}%</span>
-        </div>
-        <div v-if="faceInfo.frontal > 0" class="info-item">
-          <span class="label">Frontal Degree:</span>
+        </div>  
+        <div class="info-item">
+          <span class="label">Frontal:</span>
           <span class="value">{{ (faceInfo.frontal * 100).toFixed(1) }}%</span>
         </div>
-        <div v-if="faceInfo.quality > 0" class="info-item">
-          <span class="label">Image Quality:</span>
+        <div class="info-item">
+          <span class="label">Quality:</span>
           <span class="value">{{ (faceInfo.quality * 100).toFixed(1) }}%</span>
         </div>
-        <div v-if="faceInfo.real > 0" class="info-item">
-          <span class="label">Authenticity Score:</span>
+        <div class="info-item">
+          <span class="label">Real:</span>
           <span class="value">{{ (faceInfo.real * 100).toFixed(1) }}%</span>
         </div>
-        <div v-if="faceInfo.live > 0" class="info-item">
-          <span class="label">Liveness Score:</span>
+        <div class="info-item">
+          <span class="label">LIVE:</span>
           <span class="value">{{ (faceInfo.live * 100).toFixed(1) }}%</span>
         </div>
       </div>
@@ -245,6 +249,7 @@ const currentAction = ref<LivenessAction | null>(null)
 const silentPassedCount = ref<number>(0)
 const actionPassedCount = ref<number>(0)
 const faceInfo = ref({
+  passed: false,
   size: 0,
   frontal: 0,
   quality: 0,
@@ -345,6 +350,7 @@ function handleDetectorInfo(data: DetectorInfoEventData) {
   }
   
   faceInfo.value = {
+    passed: data.passed,
     size: data.size,
     frontal: data.frontal,
     quality: data.quality,
@@ -415,7 +421,7 @@ async function startDetection() {
     currentAction.value = null
     detectionResult.value = null
     errorMessage.value = ''
-    faceInfo.value = { size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
+    faceInfo.value = { passed: false, size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
     
     // Update configuration
     engine.updateConfig(config.value)
@@ -445,7 +451,7 @@ function resetDetection() {
   errorMessage.value = ''
   silentPassedCount.value = 0
   actionPassedCount.value = 0
-  faceInfo.value = { size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
+  faceInfo.value = { passed: false, size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
   statusMessage.value = 'Waiting to start detection...'
   borderColor.value = 'idle'
 }
@@ -1071,7 +1077,7 @@ function getActionCountLabel(count: number): string {
   }
 
   .info-grid {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(2, 1fr);
     gap: 10px;
   }
 
@@ -1268,7 +1274,7 @@ function getActionCountLabel(count: number): string {
   }
 
   .info-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .result-info {
