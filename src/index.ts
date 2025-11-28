@@ -681,6 +681,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     if (this.detectionState.period === DetectionPeriod.VERIFY) {
       this.handleVerifyPhase(gestures)
+    } else {
+      // 采集阶段，继续调度下一次检测
+      this.scheduleNextDetection(this.config.detection_frame_delay * 2.5)
     }
   }
 
