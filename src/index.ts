@@ -157,7 +157,30 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       console.log('[FaceDetectionEngine] Loading Human.js models...')
       this.emitDebug('initialization', 'Loading Human.js...')
       const humanStartTime = performance.now()
-      this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
+      
+      try {
+        this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path, this.config.tensorflow_backend)
+      } catch (humanError) {
+        const errorMsg = humanError instanceof Error ? humanError.message : 'Unknown error'
+        console.error('[FaceDetectionEngine] Human.js loading failed with error:', errorMsg)
+        this.emitDebug('initialization', 'Human.js loading failed with exception', {
+          error: errorMsg,
+          stack: humanError instanceof Error ? humanError.stack : 'N/A',
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          browser: this.detectBrowserInfo()
+        }, 'error')
+        this.emit('detector-loaded' as any, {
+          success: false,
+          error: `Failed to load Human.js: ${errorMsg}`
+        })
+        this.emit('detector-error' as any, {
+          code: ErrorCode.DETECTOR_NOT_INITIALIZED,
+          message: `Human.js loading error: ${errorMsg}`
+        })
+        return
+      }
+      
       const humanLoadTime = performance.now() - humanStartTime
       
       if (!this.human) {
@@ -175,13 +198,36 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return
       }
       
+      // Verify Human.js instance has required properties
+      if (!this.human.version || typeof this.human.detect !== 'function') {
+        const errorMsg = 'Human.js instance is incomplete: missing version or detect method'
+        console.error('[FaceDetectionEngine] ' + errorMsg)
+        this.emitDebug('initialization', errorMsg, {
+          hasVersion: !!this.human.version,
+          hasDetect: typeof this.human.detect === 'function',
+          instanceKeys: Object.keys(this.human || {})
+        }, 'error')
+        this.emit('detector-loaded' as any, {
+          success: false,
+          error: errorMsg
+        })
+        this.emit('detector-error' as any, {
+          code: ErrorCode.DETECTOR_NOT_INITIALIZED,
+          message: errorMsg
+        })
+        return
+      }
+      
       this.emitDebug('initialization', 'Human.js loaded successfully', {
         loadTime: `${humanLoadTime.toFixed(2)}ms`,
-        version: this.human.version
+        version: this.human.version,
+        backend: this.human.config?.backend || 'unknown',
+        config: this.human.config
       })
       console.log('[FaceDetectionEngine] Human.js loaded successfully', {
         loadTime: `${humanLoadTime.toFixed(2)}ms`,
-        version: this.human.version
+        version: this.human.version,
+        backend: this.human.config?.backend || 'unknown'
       })
 
       this.isReady = true
@@ -494,15 +540,32 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // Check video is ready
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        this.scheduleNextDetection(this.config.error_retry_delay) // ERROR_RETRY_DELAY
+        this.scheduleNextDetection(this.config.error_retry_delay)
         return
       }
 
       // Perform face detection
-      const result = await this.human.detect(this.videoElement)
+      let result
+      try {
+        result = await this.human.detect(this.videoElement)
+      } catch (detectError) {
+        const errorMsg = detectError instanceof Error ? detectError.message : 'Unknown error'
+        this.emitDebug('detection', 'Human.detect() call failed', {
+          error: errorMsg,
+          stack: detectError instanceof Error ? detectError.stack : 'N/A',
+          hasHuman: !!this.human,
+          humanVersion: this.human?.version,
+          videoReadyState: this.videoElement?.readyState,
+          videoWidth: this.videoElement?.videoWidth,
+          videoHeight: this.videoElement?.videoHeight
+        }, 'error')
+        this.scheduleNextDetection(this.config.error_retry_delay)
+        return
+      }
 
       if (!result) {
-        this.scheduleNextDetection(this.config.error_retry_delay) // DETECTION_FRAME_DELAY
+        this.emitDebug('detection', 'Face detection returned null result', {}, 'warn')
+        this.scheduleNextDetection(this.config.error_retry_delay)
         return
       }
 
@@ -515,11 +578,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.handleMultipleFaces(faces.length)
       }
     } catch (error) {
-      this.emitDebug('detection', 'Detection error', {
-        error: (error as Error).message,
-        stack: (error as Error).stack
+      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      this.emitDebug('detection', 'Unexpected error in detection loop', {
+        error: errorMsg,
+        stack: error instanceof Error ? error.stack : 'N/A'
       }, 'error')
-      this.scheduleNextDetection(this.config.error_retry_delay) // ERROR_RETRY_DELAY
+      this.scheduleNextDetection(this.config.error_retry_delay)
     }
   }
 
@@ -930,6 +994,24 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       ...data
     }
     this.emit('status-prompt' as any, promptData)
+  }
+
+  /**
+   * Detect browser information for debugging
+   */
+  private detectBrowserInfo(): string {
+    const ua = navigator.userAgent.toLowerCase()
+    
+    if (/quark/i.test(ua)) return 'Quark Browser'
+    if (/micromessenger/i.test(ua)) return 'WeChat'
+    if (/alipay/i.test(ua)) return 'Alipay'
+    if (/qq/i.test(ua)) return 'QQ'
+    if (/safari/i.test(ua) && !/chrome/i.test(ua)) return 'Safari'
+    if (/chrome/i.test(ua)) return 'Chrome'
+    if (/firefox/i.test(ua)) return 'Firefox'
+    if (/edge/i.test(ua)) return 'Edge'
+    
+    return 'Unknown'
   }
 
   /**

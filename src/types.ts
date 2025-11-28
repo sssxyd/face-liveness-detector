@@ -37,6 +37,7 @@ export interface FaceDetectionEngineConfig {
   // resource paths
   human_model_path?: string
   tensorflow_wasm_path?: string
+  tensorflow_backend?: 'auto' | 'webgl' | 'wasm'  // TensorFlow backend selection
 
   // ========== Detection Settings ==========
   video_width?: number  // Width of the video stream
@@ -71,6 +72,7 @@ export interface ResolvedEngineConfig {
   // resource paths
   human_model_path: string
   tensorflow_wasm_path: string
+  tensorflow_backend: 'auto' | 'webgl' | 'wasm'
 
   // ========== Detection Settings ==========
   video_width: number

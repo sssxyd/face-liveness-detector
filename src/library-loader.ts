@@ -32,22 +32,84 @@ function _isWebGLAvailable(): boolean {
   }
 }
 
-function _detectOptimalBackend(): string {
-  const userAgent = navigator.userAgent.toLowerCase()
+type BrowserEngine = 'chromium' | 'webkit' | 'gecko' | 'other'
 
-  // Special browsers: prefer WASM
-  if (
-    (/safari/.test(userAgent) && !/chrome/.test(userAgent)) ||
-    /micromessenger/i.test(userAgent) ||
-    /alipay/.test(userAgent) ||
-    /qq/.test(userAgent) ||
-    /(wechat|alipay|qq)webview/i.test(userAgent)
-  ) {
-    return 'wasm'
+function _detectBrowserEngine(userAgent: string): BrowserEngine {
+  const ua = userAgent.toLowerCase()
+  
+  // 检测 Gecko (Firefox)
+  if (/firefox/i.test(ua) && !/seamonkey/i.test(ua)) {
+    return 'gecko'
+  }
+  
+  // 检测 WebKit (Safari, iOS browsers)
+  // Safari 的特征：有 Safari 但没有 Chrome
+  if (/safari/i.test(ua) && !/chrome|chromium|crios|edge|edgios|edg|brave|opera|vivaldi|whale|arc|yabrowser|samsung|kiwi|ghostery/i.test(ua)) {
+    return 'webkit'
+  }
+  
+  // 检测 Chromium/Blink
+  // Chrome-based browsers: Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Whale, Arc, etc.
+  if (/chrome|chromium|crios|edge|edgios|edg|brave|opera|vivaldi|whale|arc|yabrowser|samsung|kiwi|ghostery/i.test(ua)) {
+    return 'chromium'
+  }
+  
+  // 默认为 other
+  return 'other'
+}
+
+function _getOptimalBackendForEngine(engine: BrowserEngine): 'webgl' | 'wasm' {
+  // 针对不同内核的优化策略
+  const backendConfig = {
+    chromium: 'webgl' as const,  // Chromium 内核：优先 WebGL
+    webkit: 'wasm' as const,     // WebKit（Safari、iOS）：使用 WASM
+    gecko: 'webgl' as const,     // Firefox：优先 WebGL
+    other: 'wasm' as const       // 未知浏览器：保守使用 WASM
+  }
+  
+  return backendConfig[engine]
+}
+
+function _detectOptimalBackend(preferredBackend?: 'auto' | 'webgl' | 'wasm'): string {
+  // If user explicitly specified a backend, honor it (unless it's 'auto')
+  if (preferredBackend && preferredBackend !== 'auto') {
+    console.log('[Backend Detection] Using user-specified backend:', {
+      backend: preferredBackend,
+      userAgent: navigator.userAgent
+    })
+    return preferredBackend
   }
 
-  // Desktop: prefer WebGL
-  return _isWebGLAvailable() ? 'webgl' : 'wasm'
+  const userAgent = navigator.userAgent.toLowerCase()
+  const engine = _detectBrowserEngine(userAgent)
+  
+  console.log('[Backend Detection] Detected browser engine:', {
+    engine,
+    userAgent: navigator.userAgent
+  })
+  
+  // 获取该内核的推荐后端
+  let preferredBackendForEngine = _getOptimalBackendForEngine(engine)
+  
+  // 对于 Chromium 和 Gecko，检查 WebGL 是否可用
+  if (preferredBackendForEngine === 'webgl') {
+    const hasWebGL = _isWebGLAvailable()
+    console.log('[Backend Detection] WebGL availability check:', {
+      engine,
+      hasWebGL,
+      selectedBackend: hasWebGL ? 'webgl' : 'wasm'
+    })
+    
+    return hasWebGL ? 'webgl' : 'wasm'
+  }
+  
+  // 对于 WebKit 和 other，直接使用 WASM
+  console.log('[Backend Detection] Using backend for engine:', {
+    engine,
+    backend: preferredBackendForEngine
+  })
+  
+  return preferredBackendForEngine
 }
 
 /**
@@ -262,11 +324,12 @@ export function getCvSync() {
  * Load Human.js
  * @param modelPath - Path to model files (optional)
  * @param wasmPath - Path to WASM files (optional)
+ * @param preferredBackend - Preferred TensorFlow backend: 'auto' | 'webgl' | 'wasm' (default: 'auto')
  * @returns Promise that resolves with Human instance
  */
-export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<Human> {
+export async function loadHuman(modelPath?: string, wasmPath?: string, preferredBackend?: 'auto' | 'webgl' | 'wasm'): Promise<Human> {
   const config: any = {
-    backend: _detectOptimalBackend(),
+    backend: _detectOptimalBackend(preferredBackend),
     face: {
       enabled: true,
       detector: { rotation: false, return: true },
@@ -292,34 +355,103 @@ export async function loadHuman(modelPath?: string, wasmPath?: string): Promise<
   console.log('[FaceDetectionEngine] Human.js config:', {
     backend: config.backend,
     modelBasePath: config.modelBasePath || '(using default)',
-    wasmPath: config.wasmPath || '(using default)'
+    wasmPath: config.wasmPath || '(using default)',
+    userAgent: navigator.userAgent,
+    platform: navigator.platform
   })
 
   const initStartTime = performance.now()
   console.log('[FaceDetectionEngine] Creating Human instance...')
-  const human = new Human(config)
+  
+  let human: Human
+  try {
+    human = new Human(config)
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : 'Unknown error during Human instantiation'
+    console.error('[FaceDetectionEngine] Failed to create Human instance:', errorMsg)
+    throw new Error(`Human instantiation failed: ${errorMsg}`)
+  }
+  
   const instanceCreateTime = performance.now() - initStartTime
   console.log(`[FaceDetectionEngine] Human instance created, took ${instanceCreateTime.toFixed(2)}ms`)
+
+  // 验证 Human 实例
+  if (!human) {
+    throw new Error('Human instance is null after creation')
+  }
 
   console.log('[FaceDetectionEngine] Loading Human.js models...')
   const modelLoadStartTime = performance.now()
   
   try {
-    await human.load()
+    // 添加超时机制防止无限等待
+    const loadTimeout = new Promise<never>((_, reject) => {
+      const timeoutId = setTimeout(() => {
+        reject(new Error('Human.js load() timeout after 60 seconds - possible issue with model loading on mobile'))
+      }, 60000)
+    })
+
+    // 竞速：哪个先完成就用哪个
+    await Promise.race([
+      human.load(),
+      loadTimeout
+    ])
+
     const loadTime = performance.now() - modelLoadStartTime
     const totalTime = performance.now() - initStartTime
 
     console.log('[FaceDetectionEngine] Human.js loaded successfully', {
       modelLoadTime: `${loadTime.toFixed(2)}ms`,
       totalInitTime: `${totalTime.toFixed(2)}ms`,
-      version: human.version
+      version: human.version,
+      config: human.config
     })
+
+    // 验证加载后的 Human 实例有必要的方法和属性
+    if (typeof human.detect !== 'function') {
+      throw new Error('Human.detect method not available after loading')
+    }
+
+    if (!human.version) {
+      console.warn('[FaceDetectionEngine] Human.js loaded but version is missing')
+    }
+
+    // 打印加载的模型信息
+    if (human.models) {
+      const loadedModels = Object.entries(human.models).map(([name, model]: [string, any]) => ({
+        name,
+        loaded: model?.loaded || model?.state === 'loaded',
+        type: typeof model
+      }))
+      console.log('[FaceDetectionEngine] Loaded models:', {
+        totalModels: Object.keys(human.models).length,
+        models: loadedModels,
+        allModels: Object.keys(human.models)
+      })
+    } else {
+      console.warn('[FaceDetectionEngine] human.models is not available')
+    }
+
+    // 额外验证：检查模型是否加载成功
+    if (!human.models || Object.keys(human.models).length === 0) {
+      console.warn('[FaceDetectionEngine] Warning: human.models appears to be empty after loading')
+    }
 
     return human
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-    console.error('[FaceDetectionEngine] Human.js load failed:', errorMsg)
-    throw error
+    const stack = error instanceof Error ? error.stack : 'N/A'
+    
+    console.error('[FaceDetectionEngine] Human.js load failed:', {
+      errorMsg,
+      stack,
+      userAgent: navigator.userAgent,
+      platform: navigator.platform,
+      humanVersion: human?.version,
+      humanConfig: human?.config
+    })
+    
+    throw new Error(`Human.js loading failed: ${errorMsg}`)
   }
 }
 

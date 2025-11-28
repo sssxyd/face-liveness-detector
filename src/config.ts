@@ -12,6 +12,7 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   // resource paths
   human_model_path: undefined,
   tensorflow_wasm_path: undefined,
+  tensorflow_backend: 'auto', // 'auto' | 'webgl' | 'wasm'
 
   // DetectionSettings defaults
   video_width: 640,
@@ -72,6 +73,9 @@ export function mergeConfig(
   }
   if (userConfig.tensorflow_wasm_path !== undefined) {
     merged.tensorflow_wasm_path = userConfig.tensorflow_wasm_path
+  }
+  if (userConfig.tensorflow_backend !== undefined) {
+    merged.tensorflow_backend = userConfig.tensorflow_backend
   }
   if (userConfig.video_width !== undefined) {
     merged.video_width = userConfig.video_width
