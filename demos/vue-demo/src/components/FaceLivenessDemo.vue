@@ -10,12 +10,15 @@
       <h3>检测配置</h3>
       <div class="config-item">
         <label>动作检测数量 (0-3):</label>
-        <select v-model.number="actionCount" :disabled="isDetecting">
-          <option :value="0">0 - 仅静默检测</option>
-          <option :value="1">1 - 静默 + 1个动作</option>
-          <option :value="2">2 - 静默 + 2个动作</option>
-          <option :value="3">3 - 静默 + 3个动作</option>
-        </select>
+        <input 
+          type="range" 
+          v-model.number="actionCount" 
+          min="0" 
+          max="3" 
+          step="1"
+          :disabled="isDetecting"
+        />
+        <span>{{ actionCount }} - {{ getActionCountLabel(actionCount) }}</span>
       </div>
       <div class="config-item">
         <label>最小人脸占比:</label>
@@ -40,6 +43,26 @@
           :disabled="isDetecting"
         />
         <span>{{ (maxFaceRatio * 100).toFixed(0) }}%</span>
+      </div>
+      <div class="config-item">
+        <label>模型地址:</label>
+        <input 
+          type="text" 
+          v-model="humanModelPath"
+          placeholder="输入Human模型路径"
+          :disabled="isDetecting"
+          class="config-text-input"
+        />
+      </div>
+      <div class="config-item">
+        <label>Wasm地址:</label>
+        <input 
+          type="text" 
+          v-model="tensorflowWasmPath"
+          placeholder="输入TensorFlow WASM路径"
+          :disabled="isDetecting"
+          class="config-text-input"
+        />
       </div>
     </div>
 
@@ -204,12 +227,14 @@ import FaceDetectionEngine, {
 import type { DetectorLoadedEventData } from '@sssxyd/face-liveness-detector/types'
 
 // 配置参数
-const actionCount = ref<number>(1)
+const actionCount = ref<number>(0)
 const minFaceRatio = ref<number>(0.5)
 const maxFaceRatio = ref<number>(0.8)
+const humanModelPath = ref<string>('https://app.unpkg.com/@vladmandic/human@3.3.6/files/models')
+const tensorflowWasmPath = ref<string>('https://app.unpkg.com/@tensorflow/tfjs-backend-wasm@4.22.0/files/dist')
 
 // 引擎实例
-const engine = ref<FaceDetectionEngine | null>(null)
+let engine: FaceDetectionEngine | null = null
 const videoElement = ref<HTMLVideoElement | null>(null)
 
 // 状态
@@ -261,19 +286,19 @@ const config = computed(() => ({
 // 初始化引擎
 onMounted(async () => {
   try {
-    engine.value = new FaceDetectionEngine(config.value)
+    engine = new FaceDetectionEngine(config.value)
     
     // 监听事件
-    engine.value.on('detector-loaded', handleEngineReady)
-    engine.value.on('status-prompt', handleStatusPrompt)
-    engine.value.on('face-detected', handleFaceDetected)
-    engine.value.on('action-prompt', handleActionPrompt)
-    engine.value.on('detector-finish', handleDetectionFinish)
-    engine.value.on('detector-error', handleDetectionError)
-    engine.value.on('detector-debug', handleDebugLog)
+    engine.on('detector-loaded', handleEngineReady)
+    engine.on('status-prompt', handleStatusPrompt)
+    engine.on('face-detected', handleFaceDetected)
+    engine.on('action-prompt', handleActionPrompt)
+    engine.on('detector-finish', handleDetectionFinish)
+    engine.on('detector-error', handleDetectionError)
+    engine.on('detector-debug', handleDebugLog)
     
     // 初始化
-    await engine.value.initialize()
+    await engine.initialize()
   } catch (error: any) {
     console.error('引擎初始化失败:', error)
     errorMessage.value = `引擎初始化失败: ${error.message}`
@@ -281,8 +306,8 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (engine.value) {
-    engine.value.stopDetection(false)
+  if (engine) {
+    engine.stopDetection(false)
   }
 })
 
@@ -367,7 +392,7 @@ function handleDebugLog(debug: DetectorDebugEventData) {
 
 // 操作函数
 async function startDetection() {
-  if (!engine.value || !videoElement.value) {
+  if (!engine || !videoElement.value) {
     return
   }
   
@@ -381,10 +406,10 @@ async function startDetection() {
     faceInfo.value = { size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
     
     // 更新配置
-    engine.value.updateConfig(config.value)
+    engine.updateConfig(config.value)
     
     // 开始检测
-    await engine.value.startDetection(videoElement.value)
+    await engine.startDetection(videoElement.value)
     isDetecting.value = true
     statusMessage.value = '正在检测人脸...'
   } catch (error: any) {
@@ -394,8 +419,8 @@ async function startDetection() {
 }
 
 function stopDetection() {
-  if (engine.value) {
-    engine.value.stopDetection(false)
+  if (engine) {
+    engine.stopDetection(false)
     isDetecting.value = false
     currentAction.value = null
     statusMessage.value = '检测已停止'
@@ -441,6 +466,16 @@ function getActionIcon(action: LivenessAction): string {
     [LivenessAction.NOD]: '👆'
   }
   return icons[action] || '🔄'
+}
+
+function getActionCountLabel(count: number): string {
+  const labels: Record<number, string> = {
+    0: '仅静默检测',
+    1: '随机1个动作',
+    2: '随机2个动作',
+    3: '随机3个动作'
+  }
+  return labels[count] || '未知'
 }
 </script>
 
@@ -497,6 +532,23 @@ function getActionIcon(action: LivenessAction): string {
 .config-item select,
 .config-item input[type="range"] {
   flex: 1;
+}
+
+.config-item input[type="text"] {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.config-item input[type="text"]:disabled {
+  background-color: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.config-text-input {
+  word-break: break-all;
 }
 
 .config-item span {
@@ -857,20 +909,316 @@ function getActionIcon(action: LivenessAction): string {
 
 /* 响应式设计 */
 @media (max-width: 768px) {
+  .face-liveness-demo {
+    padding: 12px;
+  }
+
+  .header {
+    margin-bottom: 20px;
+  }
+
+  .header h1 {
+    font-size: 24px;
+    margin-bottom: 8px;
+  }
+
+  .header p {
+    font-size: 12px;
+  }
+
+  /* 配置面板响应式 */
+  .config-panel {
+    padding: 15px;
+    margin-bottom: 15px;
+  }
+
+  .config-panel h3 {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+
+  .config-item {
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    gap: 6px;
+  }
+
+  .config-item label {
+    min-width: auto;
+    font-size: 13px;
+  }
+
+  .config-item input[type="range"] {
+    width: 100%;
+  }
+
+  .config-item span {
+    min-width: auto;
+    display: block;
+    font-size: 13px;
+  }
+
+  .config-item input[type="text"] {
+    width: 100%;
+    padding: 6px;
+    font-size: 12px;
+  }
+
+  /* 按钮响应式 */
+  .control-panel {
+    margin-bottom: 15px;
+  }
+
+  .btn-primary, .btn-danger {
+    padding: 10px 24px;
+    font-size: 14px;
+    width: 100%;
+    max-width: 300px;
+  }
+
+  /* 视频容器响应式 */
   .video-container {
     width: 100%;
     height: auto;
     aspect-ratio: 4/3;
+    margin-bottom: 15px;
   }
-  
+
+  /* 信息面板响应式 */
+  .info-panel {
+    padding: 12px;
+    margin-bottom: 15px;
+  }
+
+  .info-panel h3 {
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+
+  .info-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+  }
+
+  .info-item {
+    padding: 8px;
+    font-size: 12px;
+    flex-direction: column;
+    border-left-width: 2px;
+  }
+
+  .info-item .label {
+    font-size: 12px;
+    margin-bottom: 3px;
+  }
+
+  .info-item .value {
+    font-size: 13px;
+  }
+
+  /* 结果面板响应式 */
+  .result-panel {
+    padding: 15px;
+    margin-bottom: 15px;
+  }
+
+  .result-panel h3 {
+    font-size: 18px;
+    margin-bottom: 15px;
+  }
+
+  .result-info {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 10px;
+    margin-bottom: 15px;
+  }
+
+  .result-item {
+    padding: 10px;
+    font-size: 11px;
+    flex-direction: column;
+  }
+
+  .result-item .label {
+    font-size: 11px;
+    margin-bottom: 3px;
+  }
+
+  .result-item .value {
+    font-size: 12px;
+  }
+
+  .result-images {
+    flex-direction: column;
+    gap: 12px;
+    margin: 15px 0;
+  }
+
+  .image-box {
+    text-align: center;
+  }
+
+  .image-box h4 {
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+
+  .image-box img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* 错误面板响应式 */
+  .error-panel {
+    padding: 15px;
+    margin-bottom: 15px;
+  }
+
+  .error-panel p {
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+
+  /* 调试面板响应式 */
+  .debug-panel {
+    position: fixed;
+    bottom: 60px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-height: 50vh;
+    max-width: calc(100% - 20px);
+    border-radius: 8px;
+  }
+
+  .debug-header {
+    padding: 12px;
+  }
+
+  .debug-header h3 {
+    font-size: 14px;
+  }
+
+  .close-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .debug-content {
+    max-height: calc(50vh - 50px);
+    padding: 8px;
+  }
+
+  .log-item {
+    margin-bottom: 8px;
+    padding: 8px;
+    font-size: 11px;
+  }
+
+  .log-header {
+    gap: 6px;
+    font-size: 10px;
+  }
+
+  .log-message {
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .log-details pre {
+    font-size: 9px;
+  }
+
+  .show-debug-btn {
+    bottom: 10px;
+    right: 10px;
+    left: 10px;
+    width: auto;
+    max-width: calc(100% - 20px);
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+
+  /* 状态提示 */
+  .status-info {
+    font-size: 14px;
+  }
+
+  .action-prompt {
+    padding: 20px 30px;
+  }
+
+  .action-icon {
+    font-size: 36px;
+  }
+
+  .action-text {
+    font-size: 18px;
+  }
+}
+
+/* 超小屏幕（< 480px） */
+@media (max-width: 480px) {
+  .face-liveness-demo {
+    padding: 8px;
+  }
+
+  .header h1 {
+    font-size: 20px;
+  }
+
+  .header p {
+    font-size: 11px;
+  }
+
+  .config-panel {
+    padding: 12px;
+  }
+
+  .config-item {
+    margin-bottom: 10px;
+  }
+
+  .config-item label {
+    font-size: 12px;
+  }
+
+  .config-item span {
+    font-size: 12px;
+  }
+
+  .btn-primary, .btn-danger {
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .result-info {
+    grid-template-columns: 1fr;
+  }
+
   .result-images {
     flex-direction: column;
   }
-  
-  .debug-panel {
-    width: calc(100% - 40px);
-    right: 20px;
-    left: 20px;
+
+  .status-info {
+    font-size: 12px;
+  }
+
+  .action-prompt {
+    padding: 15px 20px;
+  }
+
+  .action-icon {
+    font-size: 32px;
+  }
+
+  .action-text {
+    font-size: 16px;
   }
 }
 </style>
