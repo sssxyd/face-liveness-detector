@@ -63,6 +63,47 @@ function _detectBrowserEngine(userAgent: string): BrowserEngine {
   return 'other'
 }
 
+/**
+ * 检测环境信息（用于诊断）
+ */
+function _detectEnvironmentInfo(): Record<string, any> {
+  const isMobile = /android|iphone|ipad|ipod|opera mini|iemobile|wpdesktop/i.test(navigator.userAgent.toLowerCase())
+  const isAndroid = /android/i.test(navigator.userAgent)
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  
+  // 检测内存
+  let memory: Record<string, any> = { available: 'unknown' }
+  if ((navigator as any).deviceMemory) {
+    memory = { available: `${(navigator as any).deviceMemory}GB` }
+  }
+  
+  // 检测连接
+  let connection: Record<string, any> = { type: 'unknown' }
+  if ((navigator as any).connection) {
+    const conn = (navigator as any).connection
+    connection = {
+      type: conn.effectiveType,
+      downlink: `${conn.downlink}Mbps`,
+      rtt: `${conn.rtt}ms`,
+      saveData: conn.saveData
+    }
+  }
+  
+  return {
+    isMobile,
+    isAndroid,
+    isIOS,
+    memory,
+    connection,
+    userAgent: navigator.userAgent,
+    platform: navigator.platform,
+    language: navigator.language,
+    hardwareConcurrency: navigator.hardwareConcurrency,
+    maxTouchPoints: navigator.maxTouchPoints,
+    vendor: navigator.vendor
+  }
+}
+
 function _getOptimalBackendForEngine(engine: BrowserEngine): 'webgl' | 'wasm' {
   // 针对不同内核的优化策略
   const backendConfig = {
@@ -366,14 +407,29 @@ async function _loadAndVerifyHuman(human: Human): Promise<void> {
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
     const errorStack = error instanceof Error ? error.stack : 'N/A'
+    const isCORSError = errorMsg.toLowerCase().includes('cors') || 
+                        errorMsg.toLowerCase().includes('cross-origin') ||
+                        errorMsg.toLowerCase().includes('blocked by cors policy')
+    const isNetworkError = errorMsg.toLowerCase().includes('network') || 
+                           errorMsg.toLowerCase().includes('failed to fetch') ||
+                           errorMsg.toLowerCase().includes('fetch failed')
+    const isWASMError = errorMsg.toLowerCase().includes('wasm') ||
+                        errorMsg.toLowerCase().includes('webassembly')
+    
     console.error('[FaceDetectionEngine] Error during human.load():', {
       errorMsg,
       stack: errorStack,
       backend: human.config?.backend,
       hasModels: !!human.models,
-      modelsKeys: human.models ? Object.keys(human.models).length : 0
+      modelsKeys: human.models ? Object.keys(human.models).length : 0,
+      isCORSError,
+      isNetworkError,
+      isWASMError,
+      modelBasePath: human.config?.modelBasePath,
+      wasmPath: human.config?.wasmPath,
+      userAgent: navigator.userAgent
     })
-    throw new Error(`Model loading error: ${errorMsg}`)
+    throw new Error(`Model loading error (${human.config?.backend} backend): ${errorMsg}`)
   }
 
   const loadTime = performance.now() - modelLoadStartTime
@@ -443,7 +499,11 @@ async function _tryLoadHumanWithBackend(
       errorMsg,
       stack,
       backend: config.backend,
-      userAgent: navigator.userAgent
+      userAgent: navigator.userAgent,
+      isCORSError: errorMsg.toLowerCase().includes('cors'),
+      isNetworkError: errorMsg.toLowerCase().includes('network'),
+      isWASMError: errorMsg.toLowerCase().includes('wasm'),
+      environmentInfo: _detectEnvironmentInfo()
     })
     return null
   }
@@ -453,20 +513,28 @@ async function _tryLoadHumanWithBackend(
     console.error(`[FaceDetectionEngine] Human instance is null (${backend})`)
     return null
   }
-
-  // 验证 Human 实例结构（早期检测 WASM 问题）
-  if (!human.config) {
-    console.warn('[FaceDetectionEngine] Warning: human.config is missing')
-  }
   
   try {
+    console.log(`[FaceDetectionEngine] Starting model loading for ${backend} backend...`)
     await _loadAndVerifyHuman(human)
     const totalTime = performance.now() - initStartTime
     console.log(`[FaceDetectionEngine] Successfully loaded Human.js with ${backend} backend in ${totalTime.toFixed(2)}ms`)
     return human
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-    console.error(`[FaceDetectionEngine] Failed to load models with ${backend} backend:`, errorMsg)
+    const stack = error instanceof Error ? error.stack : 'N/A'
+    console.error(`[FaceDetectionEngine] Failed to load models with ${backend} backend:`, {
+      errorMsg,
+      stack,
+      backend,
+      modelPath,
+      wasmPath,
+      isCORSError: errorMsg.toLowerCase().includes('cors') || errorMsg.toLowerCase().includes('cross-origin'),
+      isNetworkError: errorMsg.toLowerCase().includes('network') || errorMsg.toLowerCase().includes('failed to fetch'),
+      isWASMError: errorMsg.toLowerCase().includes('wasm'),
+      duration: `${(performance.now() - initStartTime).toFixed(2)}ms`,
+      environmentInfo: _detectEnvironmentInfo()
+    })
     return null
   }
 }
@@ -480,16 +548,17 @@ async function _tryLoadHumanWithBackend(
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string, preferredBackend?: 'auto' | 'webgl' | 'wasm'): Promise<Human> {
   const selectedBackend = _detectOptimalBackend(preferredBackend)
+  const environmentInfo = _detectEnvironmentInfo()
   
   console.log('[FaceDetectionEngine] Starting Human.js initialization:', {
     selectedBackend,
     modelBasePath: modelPath || '(using default)',
     wasmPath: wasmPath || '(using default)',
-    userAgent: navigator.userAgent,
-    platform: navigator.platform
+    ...environmentInfo
   })
 
   // 尝试用主后端加载
+  console.log(`[FaceDetectionEngine] Attempting to load Human.js with ${selectedBackend} backend...`)
   const human = await _tryLoadHumanWithBackend(selectedBackend, modelPath, wasmPath)
   if (human) {
     return human
@@ -509,12 +578,39 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
     console.warn(`[FaceDetectionEngine] Primary backend (${selectedBackend}) failed, attempting fallback to ${fallbackBackend}...`)
     const humanFallback = await _tryLoadHumanWithBackend(fallbackBackend, modelPath, wasmPath)
     if (humanFallback) {
+      console.log(`[FaceDetectionEngine] Successfully loaded with fallback backend: ${fallbackBackend}`)
       return humanFallback
     }
-    throw new Error(`Human.js loading failed: both ${selectedBackend} and ${fallbackBackend} backends failed`)
+    const errorDetails = {
+      message: `Human.js loading failed: both ${selectedBackend} and ${fallbackBackend} backends failed`,
+      backends: {
+        primary: selectedBackend,
+        fallback: fallbackBackend,
+        both_failed: true
+      },
+      environment: environmentInfo,
+      paths: {
+        modelBasePath: modelPath || '(using default)',
+        wasmPath: wasmPath || '(using default)'
+      },
+      webglAvailable: _isWebGLAvailable()
+    }
+    console.error('[FaceDetectionEngine] CRITICAL ERROR:', errorDetails)
+    throw new Error(errorDetails.message)
   }
 
-  throw new Error(`Human.js loading failed: ${selectedBackend} backend failed (no fallback available)`)
+  const errorDetails = {
+    message: `Human.js loading failed: ${selectedBackend} backend failed (no fallback available)`,
+    backend: selectedBackend,
+    environment: environmentInfo,
+    paths: {
+      modelBasePath: modelPath || '(using default)',
+      wasmPath: wasmPath || '(using default)'
+    },
+    webglAvailable: _isWebGLAvailable()
+  }
+  console.error('[FaceDetectionEngine] CRITICAL ERROR:', errorDetails)
+  throw new Error(errorDetails.message)
 }
 
 /**

@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "postinstall": "node patch-opencv.js"
+    "postinstall": "node patch-opencv.js",
+    "copy-models": "node copy-models.js",
+    "download-wasm": "node download-wasm.js"
   },
   "dependencies": {
-    "@sssxyd/face-liveness-detector": "^0.2.34",
+    "@sssxyd/face-liveness-detector": "^0.2.35",
     "@techstark/opencv-js": "^4.12.0-release.1",
     "@vladmandic/human": "^3.3.6",
     "vue": "^3.5.24"

@@ -230,8 +230,8 @@ import type { DetectorLoadedEventData } from '@sssxyd/face-liveness-detector/typ
 const actionCount = ref<number>(0)
 const minFaceRatio = ref<number>(0.5)
 const maxFaceRatio = ref<number>(0.8)
-const humanModelPath = ref<string>('https://app.unpkg.com/@vladmandic/human@3.3.6/files/models')
-const tensorflowWasmPath = ref<string>('https://app.unpkg.com/@tensorflow/tfjs-backend-wasm@4.22.0/files/dist')
+const humanModelPath = ref<string>('/models')
+const tensorflowWasmPath = ref<string>('/wasm')
 
 // 引擎实例
 let engine: FaceDetectionEngine | null = null

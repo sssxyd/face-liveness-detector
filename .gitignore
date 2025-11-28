@@ -1,7 +1,6 @@
 node_modules/
 dist/
 types/
-public/
 *.tsbuildinfo
 
 # Logs
