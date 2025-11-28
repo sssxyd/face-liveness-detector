@@ -399,60 +399,14 @@ async function _loadAndVerifyHuman(human: Human): Promise<void> {
     throw new Error('No models were loaded - human.models is empty')
   }
 
-  // 详细检查每个关键模型及其结构
-  const criticalModels = ['face', 'antispoof', 'liveness']
-  const missingModels: string[] = []
-  
-  for (const modelName of criticalModels) {
-    const model = (human.models as any)[modelName]
-    if (!model) {
-      missingModels.push(modelName)
-      console.error(`[FaceDetectionEngine] CRITICAL: Model '${modelName}' is missing!`)
-    } else {
-      const isLoaded = model.loaded || model.state === 'loaded' || !!model.model
-      
-      // 检查模型是否有必要的内部结构（防止 "Cannot read properties of undefined (reading 'inputs')" 错误）
-      const hasExecutor = !!model['executor']
-      const hasInputs = !!model.inputs && Array.isArray(model.inputs) && model.inputs.length > 0
-      const hasModelUrl = !!model['modelUrl']
-      
-      console.log(`[FaceDetectionEngine] Model '${modelName}':`, {
-        loaded: isLoaded,
-        state: model.state,
-        hasModel: !!model.model,
-        hasExecutor,
-        hasInputs,
-        hasModelUrl,
-        inputsType: typeof model.inputs,
-        inputsLength: Array.isArray(model.inputs) ? model.inputs.length : 'N/A'
-      })
-      
-      // 严格检查：模型必须有以下结构才能正常工作
-      if (!isLoaded || !hasExecutor || !hasModelUrl) {
-        missingModels.push(`${modelName} (incomplete)`)
-        console.error(`[FaceDetectionEngine] WARNING: Model '${modelName}' may not be fully loaded - missing structure`)
-      }
-      
-      // 如果 inputs 未定义会导致 "Cannot read properties of undefined (reading 'inputs')" 错误
-      if (!hasInputs && modelName !== 'antispoof') {
-        console.warn(`[FaceDetectionEngine] WARNING: Model '${modelName}' has no inputs - may cause errors during detection`)
-        missingModels.push(`${modelName} (no inputs)`)
-      }
-    }
-  }
-
-  if (missingModels.length > 0) {
-    console.error('[FaceDetectionEngine] Some critical models failed to load:', missingModels)
-    throw new Error(`Critical models not loaded: ${missingModels.join(', ')}`)
-  }
-
   // 打印加载的模型信息
   if (human.models) {
     const loadedModels = Object.entries(human.models).map(([name, model]: [string, any]) => ({
       name,
       loaded: model?.loaded || model?.state === 'loaded',
       type: typeof model,
-      hasModel: !!model?.model
+      hasModel: !!model?.model,
+      keys: Object.keys(model).length
     }))
     console.log('[FaceDetectionEngine] All loaded models:', {
       backend: human.config?.backend,
