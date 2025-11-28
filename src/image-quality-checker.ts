@@ -80,7 +80,8 @@ export function checkImageQuality(
   face: FaceResult,
   imageWidth: number,
   imageHeight: number,
-  config: ImageQualityFeatures
+  config: ImageQualityFeatures,
+  minQuality: number
 ): ImageQualityResult {
   const metrics: Record<string, QualityMetricResult> = {}
   const completenessReasons: string[] = []
@@ -111,21 +112,21 @@ export function checkImageQuality(
   }
 
   // ===== 第三部分：综合评分 =====
-  // 加权：完整度(50%) + 清晰度(50%)
+  // 加权：完整度(40%) + 清晰度(60%)
   const completenessScore = Math.min(1, completenessResult.value)
   const sharpnessScore = blurResult.overallScore
-  const overallScore = completenessScore * 0.5 + sharpnessScore * 0.5
+  const overallScore = completenessScore * 0.4 + sharpnessScore * 0.6
 
   const overallMetric: QualityMetricResult = {
     name: '综合图像质量',
     value: overallScore,
-    threshold: 0.8,
-    passed: overallScore >= 0.8,
+    threshold: minQuality,
+    passed: overallScore >= minQuality,
     description: `综合质量评分 ${(overallScore * 100).toFixed(1)}% (完整度: ${(completenessScore * 100).toFixed(0)}% | 清晰度: ${(sharpnessScore * 100).toFixed(0)}%)`
   }
   metrics.overallQuality = overallMetric
 
-  const passed = overallScore >= 0.8
+  const passed = overallScore >= minQuality
 
   const suggestions: string[] = []
   if (!completenessResult.passed) {
@@ -437,9 +438,9 @@ function checkImageSharpness(
         const gradientResult = calculateGradientSharpness(roi, config.min_gradient_sharpness)
 
         // 综合评分
-        const laplacianScore = Math.min(1, laplacianResult.value / 200)
+        const laplacianScore = Math.min(1, laplacianResult.value / 150)
         const gradientScore = gradientResult.value
-        const overallScore = 0.6 * laplacianScore + 0.4 * gradientScore
+        const overallScore = 0.4 * laplacianScore + 0.6 * gradientScore
 
         return {
           laplacianVariance: laplacianResult,
@@ -579,7 +580,7 @@ function calculateGradientSharpness(
       const mean = cv.mean(gradMagnitude)
       const gradientEnergy = mean[0]
 
-      const sharpnessScore = Math.min(1, gradientEnergy / 150)
+      const sharpnessScore = Math.min(1, gradientEnergy / 100)
 
       gradX.delete()
       gradY.delete()

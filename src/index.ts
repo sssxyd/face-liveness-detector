@@ -659,7 +659,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       frontal = this.detectionState.lastFrontalScore
     }
 
-    const qualityResult = checkImageQuality(frameCanvas, face, this.actualVideoWidth, this.actualVideoHeight, this.config.image_quality_features)
+    const qualityResult = checkImageQuality(frameCanvas, face, this.actualVideoWidth, this.actualVideoHeight, this.config.image_quality_features, this.config.min_image_quality)
     if (!this.validateImageQuality(qualityResult, faceRatio, frontal)) {
       return
     }
