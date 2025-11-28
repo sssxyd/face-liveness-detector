@@ -13,6 +13,14 @@ A framework-agnostic, TypeScript-based npm package for face liveness detection. 
 - 🛡️ **Anti-Spoofing** - Real-time anti-spoofing detection
 - 📊 **Detailed Debugging** - Rich debug information for troubleshooting
 
+## 🚀 Try Online Demo
+
+**[👉 Live Demo: https://face.lowtechsoft.com/](https://face.lowtechsoft.com/)**
+
+Scan the QR code with your phone to test the detection engine right now:
+
+[![Face Liveness Detection Demo QR Code](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/vue-demo.png)](https://face.lowtechsoft.com/)
+
 ## Installation
 
 ```bash
@@ -31,25 +39,113 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 > **Note**: `@vladmandic/human` and `@techstark/opencv-js` are peer dependencies and must be installed separately to avoid bundling large libraries. This keeps your final bundle size smaller if you're already using these libraries elsewhere in your project.
 
+## Quick Start - Using Local Resources
 
-## Quick Start - Using Default CDN Files
+> ⚠️ **CRITICAL**: `@techstark/opencv-js` contains an ESM incompatible UMD-format OpenCV.js library that **will cause load failures**. You MUST apply the patch script.
+> - **Issue**: https://github.com/TechStark/opencv-js/issues/44
+> - **Patch Script**: [patch-opencv.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/patch-opencv.js)
+> - **Setup**: Add to your `package.json` scripts as a `postinstall` hook to auto-apply after dependencies install
 
-If you prefer not to host local files, the engine will automatically use CDN sources:
+> ⚠️ **CRITICAL**: `@vladmandic/human` requires downloading large model files and TensorFlow WASM backend files. The component **will fail to load without these resources**. Download them to your project directory and configure the paths.
+> - **Models Download Script**: [copy-models.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/copy-models.js)
+> - **WASM Download Script**: [download-wasm.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/download-wasm.js)
+> - **Setup**: Run both scripts as `postinstall` hooks, then configure paths in your engine config
+
 
 ```typescript
-import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
+import FaceDetectionEngine, { LivenessAction } from '@sssxyd/face-liveness-detector'
 
-// No need to specify paths - uses CDN by default
+// Initialize the engine with custom configuration
 const engine = new FaceDetectionEngine({
-  min_face_ratio: 0.5,
-  max_face_ratio: 0.9,
-  liveness_action_count: 1,
-  liveness_action_list: ['blink']
+  // Configure resource paths (optional - uses CDN if not provided)
+  human_model_path: '/models',
+  tensorflow_wasm_path: '/wasm',
+  
+  // Detection settings
+  video_width: 640,
+  video_height: 640,
+  
+  // Quality settings
+  min_image_quality: 0.5,
+  min_face_frontal: 0.9,
+  
+  // Liveness settings - choose your preferred actions
+  liveness_action_count: 1,  // 0 for silent detection only, 1-3 for action-based
+  liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD]
 })
 
-await engine.initialize()
-const videoElement = document.getElementById('video') as HTMLVideoElement
-await engine.startDetection(videoElement)
+// Listen for events
+engine.on('detector-loaded', (data) => {
+  console.log('✅ Engine is ready')
+  console.log(`OpenCV: ${data.opencv_version}`)
+  console.log(`Human.js: ${data.human_version}`)
+})
+
+engine.on('detector-info', (data) => {
+  // Real-time detection information
+  console.log({
+    quality: (data.quality * 100).toFixed(1) + '%',
+    frontal: (data.frontal * 100).toFixed(1) + '%',
+    liveness: (data.live * 100).toFixed(1) + '%',
+    realness: (data.real * 100).toFixed(1) + '%'
+  })
+})
+
+engine.on('detector-action', (data) => {
+  // Action liveness prompts
+  if (data.status === 'started') {
+    console.log(`Please perform: ${data.action}`)
+  } else if (data.status === 'completed') {
+    console.log(`✅ Action recognized: ${data.action}`)
+  }
+})
+
+engine.on('detector-finish', (data) => {
+  if (data.success) {
+    console.log('✅ Liveness verification passed!')
+    console.log({
+      silentDetections: data.silentPassedCount,
+      actionsCompleted: data.actionPassedCount,
+      imageQuality: (data.bestQualityScore * 100).toFixed(1) + '%',
+      totalTime: (data.totalTime / 1000).toFixed(2) + 's',
+      bestFrame: data.bestFrameImage,  // Base64 encoded
+      bestFace: data.bestFaceImage     // Base64 encoded
+    })
+  } else {
+    console.log('❌ Liveness verification failed')
+  }
+})
+
+engine.on('detector-error', (error) => {
+  console.error(`Error [${error.code}]: ${error.message}`)
+})
+
+engine.on('detector-debug', (debug) => {
+  console.log(`[${debug.stage}] ${debug.message}`)
+})
+
+// Initialize and start detection
+async function runDetection() {
+  try {
+    // Initialize libraries (models, TensorFlow WASM, etc.)
+    await engine.initialize()
+    
+    // Get video element
+    const videoElement = document.getElementById('video') as HTMLVideoElement
+    
+    // Start detection on the video stream
+    await engine.startDetection(videoElement)
+    
+    // Detection runs until completion or error
+    // Stop manually if needed:
+    // engine.stopDetection(true)  // true to display best image
+  } catch (error) {
+    console.error('Failed to run detection:', error)
+  }
+}
+
+// Call when ready
+runDetection()
 ```
 
 ## Configuration
@@ -61,6 +157,7 @@ interface FaceDetectionEngineConfig {
   // ========== Resource Paths ==========
   human_model_path?: string        // Path to human.js models (default: undefined)
   tensorflow_wasm_path?: string    // Path to TensorFlow WASM files (default: undefined)
+  tensorflow_backend?: 'auto' | 'webgl' | 'wasm'  // TensorFlow backend selection (default: 'auto')
 
   // ========== Detection Settings ==========
   video_width?: number             // Width of the video stream (default: 640)
@@ -75,7 +172,7 @@ interface FaceDetectionEngineConfig {
   min_face_ratio?: number          // Minimum face size ratio (default: 0.5)
   max_face_ratio?: number          // Maximum face size ratio (default: 0.9)
   min_face_frontal?: number        // Minimum face frontality (default: 0.9)
-  min_image_quality?: number       // Minimum image quality (default: 0.8)
+  min_image_quality?: number       // Minimum image quality (default: 0.5)
   min_live_score?: number          // Minimum live score (default: 0.5)
   min_real_score?: number          // Minimum anti-spoofing score (default: 0.85)
   suspected_frauds_count?: number  // Number of suspected frauds to detect (default: 3)
@@ -85,10 +182,10 @@ interface FaceDetectionEngineConfig {
     roll_threshold: number         // Roll angle threshold in degrees (default: 2)
   }
   image_quality_features?: {       // Image quality features
-    require_full_face_in_bounds: boolean    // Require face completely within bounds (default: true)
+    require_full_face_in_bounds: boolean    // Require face completely within bounds (default: false)
     use_opencv_enhancement: boolean         // Use OpenCV enhancement for quality detection (default: true)
-    min_laplacian_variance: number          // Minimum Laplacian variance for blur detection (default: 100)
-    min_gradient_sharpness: number          // Minimum gradient sharpness for blur detection (default: 0.3)
+    min_laplacian_variance: number          // Minimum Laplacian variance for blur detection (default: 50)
+    min_gradient_sharpness: number          // Minimum gradient sharpness for blur detection (default: 0.15)
     min_blur_score: number                  // Minimum blur score for blur detection (default: 0.6)
   }
 
@@ -153,76 +250,244 @@ const { isReady, isDetecting, isInitializing } = engine.getStatus()
 
 ### Events
 
-The engine uses a TypeScript event emitter pattern:
+The engine uses a TypeScript event emitter pattern. All events are type-safe:
 
 #### `detector-loaded`
-Engine has finished initialization.
+Fired when the engine finishes initialization.
 
+**Data:**
 ```typescript
-engine.on('detector-loaded', () => {
-  console.log('Ready to start detection')
+interface DetectorLoadedEventData {
+  success: boolean        // Whether initialization succeeded
+  error?: string          // Error message if any
+  opencv_version?: string // OpenCV.js version
+  human_version?: string  // Human.js version
+}
+```
+
+**Example:**
+```typescript
+engine.on('detector-loaded', (data) => {
+  if (data.success) {
+    console.log('✅ Engine ready')
+    console.log(`OpenCV: ${data.opencv_version}`)
+    console.log(`Human.js: ${data.human_version}`)
+  } else {
+    console.error('Engine failed:', data.error)
+  }
 })
 ```
 
-#### `face-detected`
-A face frame has been detected with silent liveness scores.
+#### `detector-info`
+Real-time detection information for each frame.
 
+**Data:**
 ```typescript
-engine.on('face-detected', (data) => {
-  console.log(`Quality: ${data.quality}, Frontal: ${data.frontal}`)  
-  console.log(`Real: ${data.real}, Live: ${data.live}`)
-})
+interface DetectorInfoEventData {
+  passed: boolean     // Whether silent liveness check passed
+  code: DetectionCode // Detection status code
+  size: number        // Face size ratio (0-1)
+  frontal: number     // Face frontality score (0-1)
+  quality: number     // Image quality score (0-1)
+  real: number        // Anti-spoofing score (0-1)
+  live: number        // Liveness score (0-1)
+}
 ```
 
-#### `status-prompt`
-Status update prompt.
-
+**Detection Codes:**
 ```typescript
-engine.on('status-prompt', (data: StatusPromptData) => {
-  console.log(`Code: ${data.code}, Message: ${data.message}`)
-})
+enum DetectionCode {
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',        // No face detected
+  MULTIPLE_FACE = 'MULTIPLE_FACE',        // Multiple faces detected
+  FACE_TOO_SMALL = 'FACE_TOO_SMALL',      // Face too small
+  FACE_TOO_LARGE = 'FACE_TOO_LARGE',      // Face too large
+  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',  // Face not frontal enough
+  FACE_NOT_REAL = 'FACE_NOT_REAL',        // Suspected spoofing
+  FACE_NOT_LIVE = 'FACE_NOT_LIVE',        // Low liveness score
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',  // Image quality too low
+  FACE_CHECK_PASS = 'FACE_CHECK_PASS'     // All checks passed
+}
 ```
 
-#### `action-prompt`
-Action liveness request.
-
+**Example:**
 ```typescript
-engine.on('action-prompt', (data: ActionPromptData) => {
-  console.log(`Action: ${data.action}, Status: ${data.status}`)
-})
-```
-
-#### `detector-finish`
-Liveness detection completed (successfully or not).
-
-```typescript
-engine.on('detector-finish', (data) => {
-  console.log('Detection finished:', {
-    success: data.success,
-    bestQuality: data.bestQualityScore,
-    silentPassed: data.silentPassedCount,
-    actionsPassed: data.actionPassedCount,
-    frameImage: data.bestFrameImage,
-    faceImage: data.bestFaceImage
+engine.on('detector-info', (data) => {
+  console.log({
+    passed: data.passed,
+    status: data.code,
+    quality: (data.quality * 100).toFixed(1) + '%',
+    frontal: (data.frontal * 100).toFixed(1) + '%',
+    liveness: (data.live * 100).toFixed(1) + '%',
+    realness: (data.real * 100).toFixed(1) + '%'
   })
 })
 ```
 
-#### `detector-error`
-An error occurred during detection.
+#### `detector-action`
+Action liveness prompts and status updates.
 
+**Data:**
 ```typescript
-engine.on('detector-error', (error: ErrorData) => {
-  console.error(`Error [${error.code}]: ${error.message}`)
+interface DetectorActionEventData {
+  action: LivenessAction    // The action to perform
+  status: LivenessActionStatus // Action status
+}
+```
+
+**Action Types:**
+```typescript
+enum LivenessAction {
+  BLINK = 'blink',
+  MOUTH_OPEN = 'mouth_open',
+  NOD = 'nod'
+}
+```
+
+**Action Status:**
+```typescript
+enum LivenessActionStatus {
+  STARTED = 'started',      // Action prompt started
+  COMPLETED = 'completed',  // Action recognized
+  TIMEOUT = 'timeout'       // Action recognition timeout
+}
+```
+
+**Example:**
+```typescript
+engine.on('detector-action', (data) => {
+  switch (data.status) {
+    case 'started':
+      console.log(`👤 Please perform: ${data.action}`)
+      // Update UI to show action prompt
+      break
+    case 'completed':
+      console.log(`✅ Action recognized: ${data.action}`)
+      // Update progress indicator
+      break
+    case 'timeout':
+      console.log(`⏱️ Action timeout: ${data.action}`)
+      break
+  }
+})
+```
+
+#### `detector-finish`
+Fired when liveness detection completes (successfully or failed).
+
+**Data:**
+```typescript
+interface DetectorFinishEventData {
+  success: boolean         // Whether liveness verification passed
+  silentPassedCount: number    // Number of silent detections passed
+  actionPassedCount: number    // Number of actions completed
+  totalTime: number        // Total detection time in ms
+  bestQualityScore: number // Best image quality score (0-1)
+  bestFrameImage: string | null  // Base64 encoded best frame image
+  bestFaceImage: string | null   // Base64 encoded best face image
+}
+```
+
+**Example:**
+```typescript
+engine.on('detector-finish', (data) => {
+  if (data.success) {
+    console.log('✅ Liveness verification passed!')
+    console.log({
+      silentDetections: data.silentPassedCount,
+      actionsCompleted: data.actionPassedCount,
+      quality: (data.bestQualityScore * 100).toFixed(1) + '%',
+      time: (data.totalTime / 1000).toFixed(2) + 's'
+    })
+    
+    // Send results to server
+    if (data.bestFrameImage) {
+      uploadVerificationResult({
+        image: data.bestFrameImage,
+        quality: data.bestQualityScore,
+        timestamp: new Date()
+      })
+    }
+  } else {
+    console.log('❌ Liveness verification failed')
+    // Prompt user to try again
+  }
+})
+```
+
+#### `detector-error`
+Fired when an error occurs during detection.
+
+**Data:**
+```typescript
+interface DetectorErrorEventData {
+  code: ErrorCode // Error code
+  message: string // Error message
+}
+```
+
+**Error Codes:**
+```typescript
+enum ErrorCode {
+  DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',
+  CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',
+  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED',
+  SUSPECTED_FRAUDS_DETECTED = 'SUSPECTED_FRAUDS_DETECTED'
+}
+```
+
+**Example:**
+```typescript
+engine.on('detector-error', (error) => {
+  console.error(`❌ Error [${error.code}]: ${error.message}`)
+  
+  switch (error.code) {
+    case 'CAMERA_ACCESS_DENIED':
+      showErrorMessage('Please grant camera permissions')
+      break
+    case 'STREAM_ACQUISITION_FAILED':
+      showErrorMessage('Failed to access camera')
+      break
+    case 'SUSPECTED_FRAUDS_DETECTED':
+      showErrorMessage('Spoofing detected - please try again')
+      break
+    default:
+      showErrorMessage('Detection failed: ' + error.message)
+  }
 })
 ```
 
 #### `detector-debug`
-Debug information (useful for development).
+Debug information for development and troubleshooting.
 
+**Data:**
 ```typescript
-engine.on('detector-debug', (debug: DebugData) => {
-  console.log(`[${debug.level}] ${debug.stage}: ${debug.message}`)
+interface DetectorDebugEventData {
+  level: 'info' | 'warn' | 'error'  // Debug level
+  stage: string                      // Current processing stage
+  message: string                    // Debug message
+  details?: Record<string, any>      // Additional details
+  timestamp: number                  // Unix timestamp
+}
+```
+
+**Example:**
+```typescript
+engine.on('detector-debug', (debug) => {
+  const time = new Date(debug.timestamp).toLocaleTimeString()
+  console.log(`[${time}] [${debug.stage}] ${debug.message}`)
+  
+  if (debug.details) {
+    console.log('Details:', debug.details)
+  }
+  
+  // Log errors for troubleshooting
+  if (debug.level === 'error') {
+    logErrorToServer({
+      stage: debug.stage,
+      message: debug.message,
+      details: debug.details
+    })
+  }
 })
 ```
 
@@ -237,143 +502,65 @@ enum LivenessAction {
 }
 ```
 
-### PromptCode
+### LivenessActionStatus
 ```typescript
-enum PromptCode {
-  NO_FACE = 'NO_FACE',
-  MULTIPLE_FACE = 'MULTIPLE_FACE',
-  FACE_TOO_SMALL = 'FACE_TOO_SMALL',
-  FACE_TOO_LARGE = 'FACE_TOO_LARGE',
-  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',
-  BLURRY_IMAGE = 'BLURRY_IMAGE',
-  LOW_QUALITY = 'LOW_QUALITY',
-  FRAME_DETECTED = 'FRAME_DETECTED'
+enum LivenessActionStatus {
+  STARTED = 'started',      // Action prompt has started
+  COMPLETED = 'completed',  // Action successfully recognized
+  TIMEOUT = 'timeout'       // Action recognition timeout
+}
+```
+
+### DetectionCode
+```typescript
+enum DetectionCode {
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',            // No face detected in the video
+  MULTIPLE_FACE = 'MULTIPLE_FACE',            // Multiple faces detected
+  FACE_TOO_SMALL = 'FACE_TOO_SMALL',          // Face size below minimum threshold
+  FACE_TOO_LARGE = 'FACE_TOO_LARGE',          // Face size above maximum threshold
+  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',      // Face angle not frontal enough
+  FACE_NOT_REAL = 'FACE_NOT_REAL',            // Suspected spoofing detected
+  FACE_NOT_LIVE = 'FACE_NOT_LIVE',            // Liveness score below threshold
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',      // Image quality below minimum
+  FACE_CHECK_PASS = 'FACE_CHECK_PASS'         // All detection checks passed
 }
 ```
 
 ### ErrorCode
 ```typescript
 enum ErrorCode {
-  ENGINE_NOT_INITIALIZED = 'ENGINE_NOT_INITIALIZED',
-  CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',
-  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED',
-  DETECTION_ERROR = 'DETECTION_ERROR',
-  // ... more error codes
+  DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',  // Engine not initialized
+  CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',          // Camera permission denied
+  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED', // Failed to get video stream
+  SUSPECTED_FRAUDS_DETECTED = 'SUSPECTED_FRAUDS_DETECTED'  // Spoofing/fraud suspected
 }
 ```
 
 ## Advanced Usage
 
-### Complete Integration Example with Events
+For comprehensive examples and advanced usage patterns, please refer to the official demo project:
 
-```typescript
-import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
+**👉 [Vue Demo Project](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/)**
 
-const engine = new FaceDetectionEngine({
-  human_model_path: '/models',
-  tensorflow_wasm_path: '/wasm',
-  min_face_ratio: 0.5,
-  max_face_ratio: 0.9,
-  liveness_action_count: 1,
-  liveness_action_list: ['blink']
-})
+The demo includes:
+- Complete Vue 3 integration with TypeScript
+- Real-time detection visualization
+- Configuration panel for experimenting with different settings
+- Event handling examples for all engine events
+- Debug panel showing detailed detection information
+- Responsive UI design for mobile and desktop
+- Error handling and user feedback patterns
+- Result export and image capture examples
 
-// Listen for events
-engine.on('detector-loaded', () => {
-  console.log('Engine is ready')
-})
+To run the demo locally:
 
-engine.on('face-detected', (data) => {
-  console.log('Frame detected:', data)
-})
-
-engine.on('detector-finish', (data) => {
-  console.log('Liveness verification complete:', {
-    success: data.success,
-    qualityScore: data.bestQualityScore,
-    frameImage: data.bestFrameImage,
-    faceImage: data.bestFaceImage
-  })
-})
-
-engine.on('detector-error', (error) => {
-  console.error('Detection error:', error.message)
-})
-
-engine.on('detector-debug', (debug) => {
-  console.log(`[${debug.stage}] ${debug.message}`, debug.details)
-})
-
-// Initialize
-await engine.initialize()
-
-// Start detection with video element
-const videoElement = document.getElementById('video') as HTMLVideoElement
-await engine.startDetection(videoElement)
-
-// Stop detection
-engine.stopDetection()
+```bash
+cd demos/vue-demo
+npm install
+npm run dev
 ```
 
-### Advanced Usage
-
-### Custom Configuration with Local Models
-
-```typescript
-const engine = new FaceDetectionEngine({
-  // Use local model files
-  human_model_path: '/models',
-  tensorflow_wasm_path: '/wasm',
-  
-  // Require higher quality
-  min_face_ratio: 0.6,
-  max_face_ratio: 0.85,
-  min_face_frontal: 0.95,
-  min_image_quality: 0.9,
-  
-  // Multiple actions
-  liveness_action_count: 3,
-  liveness_action_list: ['blink', 'mouth_open', 'nod'],
-  liveness_verify_timeout: 120000,  // 2 minutes
-})
-```
-
-### Dynamic Configuration Updates
-
-```typescript
-engine.on('status-prompt', (data) => {
-  if (data.code === PromptCode.FACE_TOO_SMALL) {
-    // Make requirements more lenient if faces are small
-    engine.updateConfig({ min_face_ratio: 0.4 })
-  }
-})
-```
-
-### Exporting Results
-
-```typescript
-let resultImage = null
-let resultData = null
-
-engine.on('liveness-completed', (data) => {
-  resultImage = data.imageData  // Base64 encoded image
-  resultData = {
-    quality: data.qualityScore,
-    liveness: data.liveness,
-    timestamp: new Date()
-  }
-  
-  // Send to server
-  await fetch('/api/verify-liveness', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      image: resultImage,
-      metadata: resultData
-    })
-  })
-})
-```
+Then open your browser to the displayed local URL to see the detection engine in action.
 
 ## Downloading and Hosting Model Files
 
