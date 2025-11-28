@@ -135,17 +135,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const { cv } = await loadOpenCV(60000) // 1 minute timeout
       if(!cv || !(cv as any).Mat) {
         console.log('[FaceDetectionEngine] Failed to load OpenCV.js: module is null or invalid')
-        this.emit('detector-loaded' as any, {
+        this.emit('detector-error' as any, {
           success: false,
           error: 'Failed to load OpenCV.js: module is null or invalid'
-        })      
+        })
         this.emit('detector-error' as any, {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
           message: 'Failed to load OpenCV.js: module is null or invalid'
         })
         return
       }
-
       const cv_version = getOpenCVVersion()
       this.emitDebug('initialization', 'OpenCV loaded successfully', {
         version: cv_version
@@ -161,9 +160,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path)
       const humanLoadTime = performance.now() - humanStartTime
       
-      if (!human) {
+      if (!this.human) {
         const errorMsg = 'Failed to load Human.js: instance is null'
         console.log('[FaceDetectionEngine] ' + errorMsg)
+        this.emitDebug('initialization', errorMsg, { loadTime: humanLoadTime }, 'error')
         this.emit('detector-loaded' as any, {
           success: false,
           error: errorMsg
@@ -174,9 +174,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         })
         return
       }
-
-      // Store human instance
-      this.human = human
+      
+      this.emitDebug('initialization', 'Human.js loaded successfully', {
+        loadTime: `${humanLoadTime.toFixed(2)}ms`,
+        version: this.human.version
+      })
+      console.log('[FaceDetectionEngine] Human.js loaded successfully', {
+        loadTime: `${humanLoadTime.toFixed(2)}ms`,
+        version: this.human.version
+      })
 
       this.isReady = true
       const loadedData: DetectorLoadedEventData = {
@@ -185,7 +191,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         human_version: this.human.version
       }
       console.log('[FaceDetectionEngine] Engine initialized and ready', {
-        initCostTime: (performance.now() - startLoadTime).toFixed(2),
         opencv_version: loadedData.opencv_version,
         human_version: loadedData.human_version
       })
