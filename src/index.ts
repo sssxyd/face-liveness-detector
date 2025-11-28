@@ -13,6 +13,7 @@ import type {
   StatusPromptEventData,
   ActionPromptEventData,
   EventMap,
+  EventEmitter,
   FaceFrontalFeatures,
   ImageQualityFeatures,
   EventListener,
@@ -1202,6 +1203,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 // Export types
 export type {
   FaceDetectionEngineConfig,
+  ResolvedEngineConfig,
   FaceFrontalFeatures,
   ImageQualityFeatures,
   StatusPromptEventData,
@@ -1210,7 +1212,9 @@ export type {
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
+  DetectorLoadedEventData,
   EventListener,
+  EventEmitter,
   EventMap,
 }
 

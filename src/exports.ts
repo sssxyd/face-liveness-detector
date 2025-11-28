@@ -11,11 +11,11 @@ export { FaceDetectionEngine, FaceDetectionEngine as default } from './index'
 // Export library loader functions
 export { preloadOpenCV, getOpenCVVersion, getCvSync } from './library-loader'
 
-// Export configuration type
-export type { FaceDetectionEngineConfig } from './types'
-
 // Export event-related types for listening
 export type {
+  FaceDetectionEngineConfig,
+  FaceFrontalFeatures,
+  ImageQualityFeatures,  
   StatusPromptEventData,
   ActionPromptEventData,
   FaceDetectedEventData,
@@ -23,7 +23,10 @@ export type {
   DetectorErrorEventData,
   DetectorDebugEventData,
   DetectorLoadedEventData,
-  EventMap
+  EventMap,
+  EventListener,
+  EventEmitter,
+  ResolvedEngineConfig
 } from './types'
 
 // Export enums for event data
@@ -31,5 +34,6 @@ export {
   LivenessAction,
   LivenessActionStatus,
   PromptCode,
-  ErrorCode
+  ErrorCode,
+  DetectionPeriod
 } from './enums'

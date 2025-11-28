@@ -1,15 +1,21 @@
 <template>
   <div class="face-liveness-demo">
     <div class="header">
-      <h1>活体人脸检测演示</h1>
-      <p>Face Liveness Detection Demo - @sssxyd/face-liveness-detector</p>
+      <h1>Face Liveness Detection Demo</h1>
+      <p>
+        Powered by 
+        <a href="https://github.com/sssxyd/face-liveness-detector" target="_blank" rel="noopener noreferrer">
+          @sssxyd/face-liveness-detector
+          <span class="github-stars">⭐</span>
+        </a>
+      </p>
     </div>
 
-    <!-- 配置面板 -->
+    <!-- Configuration Panel -->
     <div class="config-panel">
-      <h3>检测配置</h3>
+      <h3>Detection Configuration</h3>
       <div class="config-item">
-        <label>动作检测数量 (0-3):</label>
+        <label>Action Detection Count (0-3):</label>
         <input 
           type="range" 
           v-model.number="actionCount" 
@@ -21,52 +27,40 @@
         <span>{{ actionCount }} - {{ getActionCountLabel(actionCount) }}</span>
       </div>
       <div class="config-item">
-        <label>最小人脸占比:</label>
+        <label>Minimum Image Quality:</label>
         <input 
           type="range" 
-          v-model.number="minFaceRatio" 
+          v-model.number="minImageQuality" 
           min="0.3" 
-          max="0.7" 
+          max="1" 
           step="0.1"
           :disabled="isDetecting"
         />
-        <span>{{ (minFaceRatio * 100).toFixed(0) }}%</span>
+        <span>{{ (minImageQuality * 100).toFixed(0) }}%</span>
       </div>
       <div class="config-item">
-        <label>最大人脸占比:</label>
-        <input 
-          type="range" 
-          v-model.number="maxFaceRatio" 
-          min="0.7" 
-          max="1.0" 
-          step="0.1"
-          :disabled="isDetecting"
-        />
-        <span>{{ (maxFaceRatio * 100).toFixed(0) }}%</span>
-      </div>
-      <div class="config-item">
-        <label>模型地址:</label>
+        <label>Model Path:</label>
         <input 
           type="text" 
           v-model="humanModelPath"
-          placeholder="输入Human模型路径"
+          placeholder="Enter Human model path"
           :disabled="isDetecting"
           class="config-text-input"
         />
       </div>
       <div class="config-item">
-        <label>Wasm地址:</label>
+        <label>WASM Path:</label>
         <input 
           type="text" 
           v-model="tensorflowWasmPath"
-          placeholder="输入TensorFlow WASM路径"
+          placeholder="Enter TensorFlow WASM path"
           :disabled="isDetecting"
           class="config-text-input"
         />
       </div>
     </div>
 
-    <!-- 控制按钮 -->
+    <!-- Control Panel -->
     <div class="control-panel">
       <button 
         v-if="!isDetecting"
@@ -74,19 +68,19 @@
         :disabled="!isEngineReady"
         class="btn-primary"
       >
-        {{ isEngineReady ? '开始检测' : '初始化中...' }}
+        {{ isEngineReady ? 'Start Detection' : 'Initializing...' }}
       </button>
       <button 
         v-else
         @click="stopDetection"
         class="btn-danger"
       >
-        停止检测
+        Stop Detection
       </button>
     </div>
 
-    <!-- 视频显示区域 -->
-    <div class="video-container">
+    <!-- Video Display Area -->
+    <div :class="['video-container', `border-${borderColor}`]">
       <video
         ref="videoElement"
         width="640"
@@ -104,86 +98,86 @@
       </div>
     </div>
 
-    <!-- 检测信息面板 -->
+    <!-- Detection Info Panel -->
     <div v-if="isDetecting" class="info-panel">
-      <h3>检测信息</h3>
+      <h3>Detection Information</h3>
       <div class="info-grid">
         <div class="info-item">
-          <span class="label">静默检测:</span>
+          <span class="label">Silent Detection:</span>
           <span class="value">{{ silentPassedCount }} / {{ config.silent_detect_count }}</span>
         </div>
         <div class="info-item">
-          <span class="label">动作检测:</span>
+          <span class="label">Action Detection:</span>
           <span class="value">{{ actionPassedCount }} / {{ actionCount }}</span>
         </div>
         <div v-if="faceInfo.size > 0" class="info-item">
-          <span class="label">人脸大小:</span>
+          <span class="label">Face Size:</span>
           <span class="value">{{ (faceInfo.size * 100).toFixed(1) }}%</span>
         </div>
         <div v-if="faceInfo.frontal > 0" class="info-item">
-          <span class="label">正面度:</span>
+          <span class="label">Frontal Degree:</span>
           <span class="value">{{ (faceInfo.frontal * 100).toFixed(1) }}%</span>
         </div>
         <div v-if="faceInfo.quality > 0" class="info-item">
-          <span class="label">图像质量:</span>
+          <span class="label">Image Quality:</span>
           <span class="value">{{ (faceInfo.quality * 100).toFixed(1) }}%</span>
         </div>
         <div v-if="faceInfo.real > 0" class="info-item">
-          <span class="label">真实度:</span>
+          <span class="label">Authenticity Score:</span>
           <span class="value">{{ (faceInfo.real * 100).toFixed(1) }}%</span>
         </div>
         <div v-if="faceInfo.live > 0" class="info-item">
-          <span class="label">活体度:</span>
+          <span class="label">Liveness Score:</span>
           <span class="value">{{ (faceInfo.live * 100).toFixed(1) }}%</span>
         </div>
       </div>
     </div>
 
-    <!-- 结果显示 -->
+    <!-- Result Display -->
     <div v-if="detectionResult" class="result-panel">
-      <h3>{{ detectionResult.success ? '✅ 检测成功' : '❌ 检测失败' }}</h3>
+      <h3>{{ detectionResult.success ? '✅ Detection Successful' : '❌ Detection Failed' }}</h3>
       <div class="result-info">
         <div class="result-item">
-          <span class="label">静默检测通过:</span>
-          <span class="value">{{ detectionResult.silentPassedCount }} 次</span>
+          <span class="label">Silent Detection Passed:</span>
+          <span class="value">{{ detectionResult.silentPassedCount }} times</span>
         </div>
         <div class="result-item">
-          <span class="label">动作检测通过:</span>
-          <span class="value">{{ detectionResult.actionPassedCount }} 个</span>
+          <span class="label">Action Detection Passed:</span>
+          <span class="value">{{ detectionResult.actionPassedCount }} actions</span>
         </div>
         <div class="result-item">
-          <span class="label">图像质量:</span>
+          <span class="label">Image Quality:</span>
           <span class="value">{{ (detectionResult.bestQualityScore * 100).toFixed(1) }}%</span>
         </div>
         <div class="result-item">
-          <span class="label">总耗时:</span>
+          <span class="label">Total Time:</span>
           <span class="value">{{ (detectionResult.totalTime / 1000).toFixed(2) }}s</span>
         </div>
       </div>
       <div class="result-images">
         <div v-if="detectionResult.bestFrameImage" class="image-box">
-          <h4>最佳帧图像</h4>
+          <h4>Best Frame Image</h4>
           <img :src="detectionResult.bestFrameImage" alt="Frame" />
         </div>
         <div v-if="detectionResult.bestFaceImage" class="image-box">
-          <h4>人脸图像</h4>
+          <h4>Face Image</h4>
           <img :src="detectionResult.bestFaceImage" alt="Face" />
         </div>
       </div>
-      <button @click="resetDetection" class="btn-primary">重新检测</button>
+      <button @click="resetDetection" class="btn-primary">Detect Again</button>
     </div>
 
-    <!-- 错误提示 -->
+    <!-- Error Alert -->
     <div v-if="errorMessage" class="error-panel">
       <p>❌ {{ errorMessage }}</p>
-      <button @click="resetDetection" class="btn-primary">重试</button>
+      <button @click="resetDetection" class="btn-primary">Retry</button>
     </div>
 
-    <!-- 调试日志 -->
+    <!-- Debug Logs -->
     <div v-if="showDebugPanel" class="debug-panel">
       <div class="debug-header">
-        <h3>🔍 调试信息</h3>
-        <button @click="showDebugPanel = false" class="close-btn">关闭</button>
+        <h3>🔍 Debug Information</h3>
+        <button @click="showDebugPanel = false" class="close-btn">Close</button>
       </div>
       <div class="debug-content">
         <div 
@@ -208,7 +202,7 @@
       @click="showDebugPanel = true" 
       class="show-debug-btn"
     >
-      显示调试信息 ({{ debugLogs.length }})
+      Show Debug Information ({{ debugLogs.length }})
     </button>
   </div>
 </template>
@@ -217,19 +211,19 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import FaceDetectionEngine, { 
   LivenessAction,
+  type DetectorLoadedEventData,
   type DetectorFinishEventData,
   type FaceDetectedEventData,
   type StatusPromptEventData,
   type ActionPromptEventData,
   type DetectorErrorEventData,
-  type DetectorDebugEventData
+  type DetectorDebugEventData,
+  type FaceDetectionEngineConfig
 } from '@sssxyd/face-liveness-detector'
-import type { DetectorLoadedEventData } from '@sssxyd/face-liveness-detector/types'
 
 // 配置参数
 const actionCount = ref<number>(0)
-const minFaceRatio = ref<number>(0.5)
-const maxFaceRatio = ref<number>(0.8)
+const minImageQuality = ref<number>(0.5)
 const humanModelPath = ref<string>('/models')
 const tensorflowWasmPath = ref<string>('/wasm')
 
@@ -242,6 +236,7 @@ const isEngineReady = ref<boolean>(false)
 const isDetecting = ref<boolean>(false)
 const statusMessage = ref<string>('等待开始检测...')
 const errorMessage = ref<string>('')
+const borderColor = ref<'idle' | 'warn' | 'yes' | 'success' | 'failed'>('idle')
 
 // 当前动作提示
 const currentAction = ref<LivenessAction | null>(null)
@@ -272,11 +267,12 @@ const showDebugPanel = ref<boolean>(false)
 const maxDebugLogs = 100
 
 // 计算配置
-const config = computed(() => ({
+const config = computed<FaceDetectionEngineConfig>(() => ({
   human_model_path: humanModelPath.value,
   tensorflow_wasm_path: tensorflowWasmPath.value,
-  min_face_ratio: minFaceRatio.value,
-  max_face_ratio: maxFaceRatio.value,
+  video_width: 640,
+  video_height: 640,
+  min_image_quality: minImageQuality.value,
   min_face_frontal: 0.9,
   liveness_action_count: actionCount.value,
   liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
@@ -290,7 +286,7 @@ onMounted(async () => {
   try {
     engine = new FaceDetectionEngine(config.value)
     
-    // 监听事件
+    // Listen to events
     engine.on('detector-loaded', handleEngineReady)
     engine.on('status-prompt', handleStatusPrompt)
     engine.on('face-detected', handleFaceDetected)
@@ -299,11 +295,11 @@ onMounted(async () => {
     engine.on('detector-error', handleDetectionError)
     engine.on('detector-debug', handleDebugLog)
     
-    // 初始化
+    // Initialize
     await engine.initialize()
   } catch (error: any) {
-    console.error('引擎初始化失败:', error)
-    errorMessage.value = `引擎初始化失败: ${error.message}`
+    console.error('Engine initialization failed:', error)
+    errorMessage.value = `Engine initialization failed: ${error.message}`
   }
 })
 
@@ -317,18 +313,24 @@ onUnmounted(() => {
 function handleEngineReady(data: DetectorLoadedEventData) {
   isEngineReady.value = data.success
   if (!data.success) {
-    errorMessage.value = '引擎加载失败，' + (data.error || '未知错误')
-    console.error('❌ 引擎加载失败')
+    errorMessage.value = 'Engine loading failed: ' + (data.error || 'Unknown error')
+    console.error('❌ Engine loading failed')
     return
   }
-  statusMessage.value = '引擎已就绪，可以开始检测'
-  console.log(data.opencv_version || '未检测到 OpenCV')
-  console.log(data.human_version || '未检测到 Human.js')
-  console.log('✅ 引擎已就绪')
+  statusMessage.value = 'Engine is ready, you can start detection'
+  console.log(data.opencv_version || 'OpenCV not detected')
+  console.log(data.human_version || 'Human.js not detected')
+  console.log('✅ Engine is ready')
 }
 
 function handleStatusPrompt(data: StatusPromptEventData) {
   statusMessage.value = getPromptMessage(data.code)
+  // Update border color based on prompt code
+  if (data.code === 'FRAME_DETECTED') {
+    borderColor.value = 'yes'
+  } else {
+    borderColor.value = 'warn'
+  }
 }
 
 function handleFaceDetected(data: FaceDetectedEventData) {
@@ -348,13 +350,13 @@ function handleFaceDetected(data: FaceDetectedEventData) {
 function handleActionPrompt(data: ActionPromptEventData) {
   if (data.status === 'started') {
     currentAction.value = data.action
-    statusMessage.value = `请执行动作: ${getActionText(data.action)}`
+    statusMessage.value = `Please perform action: ${getActionText(data.action)}`
   } else if (data.status === 'completed') {
     actionPassedCount.value++
     currentAction.value = null
-    statusMessage.value = '动作识别成功！'
+    statusMessage.value = 'Action recognized successfully!'
   } else if (data.status === 'timeout') {
-    statusMessage.value = '动作识别超时'
+    statusMessage.value = 'Action recognition timeout'
   }
 }
 
@@ -364,16 +366,18 @@ function handleDetectionFinish(data: DetectorFinishEventData) {
   currentAction.value = null
   
   if (data.success) {
-    statusMessage.value = '检测成功完成！'
+    statusMessage.value = 'Detection completed successfully!'
+    borderColor.value = 'success'
   } else {
-    statusMessage.value = '检测未通过'
+    statusMessage.value = 'Detection failed'
+    borderColor.value = 'failed'
   }
 }
 
 function handleDetectionError(error: DetectorErrorEventData) {
   isDetecting.value = false
   errorMessage.value = `${error.code}: ${error.message}`
-  console.error('检测错误:', error)
+  console.error('Detection error:', error)
 }
 
 function handleDebugLog(debug: DetectorDebugEventData) {
@@ -386,20 +390,20 @@ function handleDebugLog(debug: DetectorDebugEventData) {
     details: debug.details
   })
   
-  // 限制日志数量
+  // Limit log quantity
   if (debugLogs.value.length > maxDebugLogs) {
     debugLogs.value.shift()
   }
 }
 
-// 操作函数
+// Operation functions
 async function startDetection() {
   if (!engine || !videoElement.value) {
     return
   }
   
   try {
-    // 重置状态
+    // Reset state
     silentPassedCount.value = 0
     actionPassedCount.value = 0
     currentAction.value = null
@@ -407,16 +411,16 @@ async function startDetection() {
     errorMessage.value = ''
     faceInfo.value = { size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
     
-    // 更新配置
+    // Update configuration
     engine.updateConfig(config.value)
     
-    // 开始检测
+    // Start detection
     await engine.startDetection(videoElement.value)
     isDetecting.value = true
-    statusMessage.value = '正在检测人脸...'
+    statusMessage.value = 'Detecting face...'
   } catch (error: any) {
-    console.error('启动检测失败:', error)
-    errorMessage.value = `启动检测失败: ${error.message}`
+    console.error('Failed to start detection:', error)
+    errorMessage.value = `Failed to start detection: ${error.message}`
   }
 }
 
@@ -425,7 +429,8 @@ function stopDetection() {
     engine.stopDetection(false)
     isDetecting.value = false
     currentAction.value = null
-    statusMessage.value = '检测已停止'
+    statusMessage.value = 'Detection stopped'
+    borderColor.value = 'idle'
   }
 }
 
@@ -435,28 +440,29 @@ function resetDetection() {
   silentPassedCount.value = 0
   actionPassedCount.value = 0
   faceInfo.value = { size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
-  statusMessage.value = '等待开始检测...'
+  statusMessage.value = 'Waiting to start detection...'
+  borderColor.value = 'idle'
 }
 
-// 辅助函数
+// Helper functions
 function getPromptMessage(code: string): string {
   const messages: Record<string, string> = {
-    'NO_FACE': '未检测到人脸，请面对摄像头',
-    'MULTIPLE_FACE': '检测到多张人脸，请确保只有一人',
-    'FACE_TOO_SMALL': '人脸太小，请靠近摄像头',
-    'FACE_TOO_LARGE': '人脸太大，请远离摄像头',
-    'FACE_NOT_FRONTAL': '请正对摄像头',
-    'IMAGE_QUALITY_LOW': '图像质量不足，请保持稳定',
-    'FRAME_DETECTED': '检测到有效帧'
+    'NO_FACE': 'Face not detected, please face the camera',
+    'MULTIPLE_FACE': 'Multiple faces detected, ensure only one person',
+    'FACE_TOO_SMALL': 'Face too small, please move closer to the camera',
+    'FACE_TOO_LARGE': 'Face too large, please move away from the camera',
+    'FACE_NOT_FRONTAL': 'Please face the camera directly',
+    'IMAGE_QUALITY_LOW': 'Image quality is insufficient, please keep steady',
+    'FRAME_DETECTED': 'Valid frame detected'
   }
-  return messages[code] || '检测中...'
+  return messages[code] || 'Detecting...'
 }
 
 function getActionText(action: LivenessAction): string {
   const texts: Record<string, string> = {
-    [LivenessAction.BLINK]: '请眨眼',
-    [LivenessAction.MOUTH_OPEN]: '请张嘴',
-    [LivenessAction.NOD]: '请点头'
+    [LivenessAction.BLINK]: 'Please blink',
+    [LivenessAction.MOUTH_OPEN]: 'Please open your mouth',
+    [LivenessAction.NOD]: 'Please nod'
   }
   return texts[action] || action
 }
@@ -472,12 +478,12 @@ function getActionIcon(action: LivenessAction): string {
 
 function getActionCountLabel(count: number): string {
   const labels: Record<number, string> = {
-    0: '仅静默检测',
-    1: '随机1个动作',
-    2: '随机2个动作',
-    3: '随机3个动作'
+    0: 'Silent detection only',
+    1: 'Random 1 action',
+    2: 'Random 2 actions',
+    3: 'Random 3 actions'
   }
-  return labels[count] || '未知'
+  return labels[count] || 'Unknown'
 }
 </script>
 
@@ -502,6 +508,34 @@ function getActionCountLabel(count: number): string {
 .header p {
   color: #7f8c8d;
   font-size: 14px;
+}
+
+.header a {
+  color: #3498db;
+  text-decoration: none;
+  transition: color 0.3s;
+}
+
+.header a:hover {
+  color: #2980b9;
+  text-decoration: underline;
+}
+
+.github-stars {
+  margin-left: 6px;
+  display: inline-block;
+  animation: star-twinkle 2s ease-in-out infinite;
+}
+
+@keyframes star-twinkle {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
 }
 
 /* 配置面板 */
@@ -604,12 +638,40 @@ function getActionCountLabel(count: number): string {
 .video-container {
   position: relative;
   width: 640px;
-  height: 480px;
+  height: 640px;
   margin: 0 auto 20px;
   background: #000;
-  border-radius: 8px;
+  border-radius: 50%;
   overflow: hidden;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  border: 12px solid #95a5a6;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Border color states */
+.video-container.border-idle {
+  border-color: #95a5a6;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.video-container.border-warn {
+  border-color: #f39c12;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 20px rgba(243, 156, 18, 0.5);
+}
+
+.video-container.border-yes {
+  border-color: #3498db;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 20px rgba(52, 152, 219, 0.5);
+}
+
+.video-container.border-success {
+  border-color: #2ecc71;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 20px rgba(46, 204, 113, 0.8);
+}
+
+.video-container.border-failed {
+  border-color: #e74c3c;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15), 0 0 20px rgba(231, 76, 60, 0.8);
 }
 
 .video-container video {
@@ -623,9 +685,11 @@ function getActionCountLabel(count: number): string {
   top: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 100%);
+  bottom: 0;
+  background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 50%);
   padding: 15px;
   color: white;
+  border-radius: 50%;
 }
 
 .status-info {
@@ -982,9 +1046,11 @@ function getActionCountLabel(count: number): string {
   /* 视频容器响应式 */
   .video-container {
     width: 100%;
+    max-width: 400px;
     height: auto;
-    aspect-ratio: 4/3;
-    margin-bottom: 15px;
+    aspect-ratio: 1/1;
+    margin: 0 auto 15px;
+    border-radius: 50%;
   }
 
   /* 信息面板响应式 */

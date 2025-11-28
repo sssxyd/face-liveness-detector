@@ -27,7 +27,7 @@ export const DEFAULT_CONFIG: FaceDetectionEngineConfig = Object.freeze({
   min_face_ratio: 0.5,
   max_face_ratio: 0.9,
   min_face_frontal: 0.9,
-  min_image_quality: 0.8,
+  min_image_quality: 0.5,
   min_real_score: 0.85,
   min_live_score: 0.5,
   suspected_frauds_count: 3,
