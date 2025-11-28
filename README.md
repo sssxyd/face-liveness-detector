@@ -19,8 +19,7 @@ A framework-agnostic, TypeScript-based npm package for face liveness detection. 
 
 Scan the QR code with your phone to test the detection engine right now:
 
-[![Face Liveness Detection Demo QR Code](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/vue-demo.png)](https://face.lowtechsoft.com/)
-
+[![Face Liveness Detection Demo QR Code](https://raw.githubusercontent.com/sssxyd/face-liveness-detector/main/demos/vue-demo/vue-demo.png)](https://face.lowtechsoft.com/)
 ## Installation
 
 ```bash
@@ -57,7 +56,7 @@ import FaceDetectionEngine, { LivenessAction } from '@sssxyd/face-liveness-detec
 
 // Initialize the engine with custom configuration
 const engine = new FaceDetectionEngine({
-  // Configure resource paths (optional - uses CDN if not provided)
+  // Configure resource paths
   human_model_path: '/models',
   tensorflow_wasm_path: '/wasm',
   
