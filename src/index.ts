@@ -162,21 +162,51 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.human = await loadHuman(this.config.human_model_path, this.config.tensorflow_wasm_path, this.config.tensorflow_backend)
       } catch (humanError) {
         const errorMsg = humanError instanceof Error ? humanError.message : 'Unknown error'
-        console.error('[FaceDetectionEngine] Human.js loading failed with error:', errorMsg)
-        this.emitDebug('initialization', 'Human.js loading failed with exception', {
+        const stack = humanError instanceof Error ? humanError.stack : 'N/A'
+        
+        // 分析错误类型，提供针对性的建议
+        let errorContext: any = {
           error: errorMsg,
-          stack: humanError instanceof Error ? humanError.stack : 'N/A',
+          stack,
           userAgent: navigator.userAgent,
           platform: navigator.platform,
-          browser: this.detectBrowserInfo()
-        }, 'error')
+          browser: this.detectBrowserInfo(),
+          backend: this.config.tensorflow_backend,
+          source: 'human.js'
+        }
+        
+        // 特定错误类型的诊断
+        if (errorMsg.includes('inputs')) {
+          errorContext.diagnosis = 'Human.js internal error: Model structure incomplete'
+          errorContext.rootCause = 'Human.js library issue - models not fully loaded or WASM backend initialization incomplete'
+          errorContext.suggestion = 'This is a Human.js library issue. Models may not have proper executor or inputs structure. Check WASM initialization and model integrity.'
+        } else if (errorMsg.includes('timeout')) {
+          errorContext.diagnosis = 'Model loading timeout'
+          errorContext.suggestion = 'Network issue or model file too large - check network conditions'
+        } else if (errorMsg.includes('Critical models not loaded')) {
+          errorContext.diagnosis = 'Human.js failed to load required models'
+          errorContext.rootCause = 'Models (face, antispoof, liveness) are missing or incomplete'
+          errorContext.suggestion = 'Check model files and ensure WASM backend is properly initialized'
+        } else if (errorMsg.includes('empty')) {
+          errorContext.diagnosis = 'Models object is empty after loading'
+          errorContext.suggestion = 'Model path may be incorrect or HTTP response failed'
+        } else if (errorMsg.includes('incomplete')) {
+          errorContext.diagnosis = 'Models loaded but structure is incomplete'
+          errorContext.rootCause = 'Human.js internal issue - missing executor, inputs, or modelUrl'
+          errorContext.suggestion = 'Ensure all model resources are fully loaded and accessible'
+        }
+        
+        console.error('[FaceDetectionEngine] Human.js loading failed with detailed error:', errorContext)
+        this.emitDebug('initialization', 'Human.js loading failed with exception', errorContext, 'error')
         this.emit('detector-loaded' as any, {
           success: false,
-          error: `Failed to load Human.js: ${errorMsg}`
+          error: `Failed to load Human.js: ${errorMsg}`,
+          details: errorContext
         })
         this.emit('detector-error' as any, {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
-          message: `Human.js loading error: ${errorMsg}`
+          message: `Human.js loading error: ${errorMsg}`,
+          details: errorContext
         })
         return
       }
@@ -185,7 +215,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       
       if (!this.human) {
         const errorMsg = 'Failed to load Human.js: instance is null'
-        console.log('[FaceDetectionEngine] ' + errorMsg)
+        console.error('[FaceDetectionEngine] ' + errorMsg)
         this.emitDebug('initialization', errorMsg, { loadTime: humanLoadTime }, 'error')
         this.emit('detector-loaded' as any, {
           success: false,

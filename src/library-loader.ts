@@ -37,24 +37,28 @@ type BrowserEngine = 'chromium' | 'webkit' | 'gecko' | 'other'
 function _detectBrowserEngine(userAgent: string): BrowserEngine {
   const ua = userAgent.toLowerCase()
   
-  // 检测 Gecko (Firefox)
+  // 1. 检测 Gecko (Firefox)
   if (/firefox/i.test(ua) && !/seamonkey/i.test(ua)) {
     return 'gecko'
   }
   
-  // 检测 WebKit (Safari, iOS browsers)
-  // Safari 的特征：有 Safari 但没有 Chrome
-  if (/safari/i.test(ua) && !/chrome|chromium|crios|edge|edgios|edg|brave|opera|vivaldi|whale|arc|yabrowser|samsung|kiwi|ghostery/i.test(ua)) {
+  // 2. 检测 WebKit
+  // 包括：Safari、iOS 浏览器、以及那些虽然包含 Chrome 标识但实际是 WebKit 的浏览器（Quark、支付宝、微信等）
+  if (/webkit/i.test(ua)) {
+    // WebKit 特征明显，包括以下几种情况：
+    // - 真正的 Safari（有 Safari 标识）
+    // - iOS 浏览器（有 Mobile Safari 标识）
+    // - Quark、支付宝、微信等虽然包含 Chrome 标识但是基于 WebKit 的浏览器
     return 'webkit'
   }
   
-  // 检测 Chromium/Blink
+  // 3. 检测 Chromium/Blink
   // Chrome-based browsers: Chrome, Chromium, Edge, Brave, Opera, Vivaldi, Whale, Arc, etc.
   if (/chrome|chromium|crios|edge|edgios|edg|brave|opera|vivaldi|whale|arc|yabrowser|samsung|kiwi|ghostery/i.test(ua)) {
     return 'chromium'
   }
   
-  // 默认为 other
+  // 4. 其他浏览器 - 保守方案，使用 WASM
   return 'other'
 }
 
@@ -328,8 +332,10 @@ export function getCvSync() {
  * @returns Promise that resolves with Human instance
  */
 export async function loadHuman(modelPath?: string, wasmPath?: string, preferredBackend?: 'auto' | 'webgl' | 'wasm'): Promise<Human> {
+  const selectedBackend = _detectOptimalBackend(preferredBackend)
+  
   const config: any = {
-    backend: _detectOptimalBackend(preferredBackend),
+    backend: selectedBackend,
     face: {
       enabled: true,
       detector: { rotation: false, return: true },
@@ -368,7 +374,13 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
     human = new Human(config)
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error during Human instantiation'
-    console.error('[FaceDetectionEngine] Failed to create Human instance:', errorMsg)
+    const stack = error instanceof Error ? error.stack : 'N/A'
+    console.error('[FaceDetectionEngine] Failed to create Human instance:', {
+      errorMsg,
+      stack,
+      backend: config.backend,
+      userAgent: navigator.userAgent
+    })
     throw new Error(`Human instantiation failed: ${errorMsg}`)
   }
   
@@ -380,6 +392,11 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
     throw new Error('Human instance is null after creation')
   }
 
+  // 验证 Human 实例结构（早期检测 WASM 问题）
+  if (!human.config) {
+    console.warn('[FaceDetectionEngine] Warning: human.config is missing')
+  }
+  
   console.log('[FaceDetectionEngine] Loading Human.js models...')
   const modelLoadStartTime = performance.now()
   
@@ -392,10 +409,28 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
     })
 
     // 竞速：哪个先完成就用哪个
-    await Promise.race([
-      human.load(),
-      loadTimeout
-    ])
+    try {
+      await Promise.race([
+        human.load(),
+        loadTimeout
+      ])
+    } catch (raceError) {
+      // 如果是超时错误，直接抛出
+      if (raceError instanceof Error && raceError.message.includes('timeout')) {
+        throw raceError
+      }
+      // 其他错误，提供更多上下文
+      const raceErrorMsg = raceError instanceof Error ? raceError.message : 'Unknown error'
+      const raceErrorStack = raceError instanceof Error ? raceError.stack : 'N/A'
+      console.error('[FaceDetectionEngine] Error during human.load():', {
+        errorMsg: raceErrorMsg,
+        stack: raceErrorStack,
+        backend: config.backend,
+        hasModels: !!human.models,
+        modelsKeys: human.models ? Object.keys(human.models).length : 0
+      })
+      throw new Error(`Model loading error: ${raceErrorMsg}`)
+    }
 
     const loadTime = performance.now() - modelLoadStartTime
     const totalTime = performance.now() - initStartTime
@@ -416,25 +451,72 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
       console.warn('[FaceDetectionEngine] Human.js loaded but version is missing')
     }
 
+    // 关键验证：检查模型是否真的加载了
+    if (!human.models || Object.keys(human.models).length === 0) {
+      console.error('[FaceDetectionEngine] CRITICAL: human.models is empty after loading!')
+      throw new Error('No models were loaded - human.models is empty')
+    }
+
+    // 详细检查每个关键模型及其结构
+    const criticalModels = ['face', 'antispoof', 'liveness']
+    const missingModels: string[] = []
+    
+    for (const modelName of criticalModels) {
+      const model = (human.models as any)[modelName]
+      if (!model) {
+        missingModels.push(modelName)
+        console.error(`[FaceDetectionEngine] CRITICAL: Model '${modelName}' is missing!`)
+      } else {
+        const isLoaded = model.loaded || model.state === 'loaded' || !!model.model
+        
+        // 检查模型是否有必要的内部结构（防止 "Cannot read properties of undefined (reading 'inputs')" 错误）
+        const hasExecutor = !!model['executor']
+        const hasInputs = !!model.inputs && Array.isArray(model.inputs) && model.inputs.length > 0
+        const hasModelUrl = !!model['modelUrl']
+        
+        console.log(`[FaceDetectionEngine] Model '${modelName}':`, {
+          loaded: isLoaded,
+          state: model.state,
+          hasModel: !!model.model,
+          hasExecutor,
+          hasInputs,
+          hasModelUrl,
+          inputsType: typeof model.inputs,
+          inputsLength: Array.isArray(model.inputs) ? model.inputs.length : 'N/A'
+        })
+        
+        // 严格检查：模型必须有以下结构才能正常工作
+        if (!isLoaded || !hasExecutor || !hasModelUrl) {
+          missingModels.push(`${modelName} (incomplete)`)
+          console.error(`[FaceDetectionEngine] WARNING: Model '${modelName}' may not be fully loaded - missing structure`)
+        }
+        
+        // 如果 inputs 未定义会导致 "Cannot read properties of undefined (reading 'inputs')" 错误
+        if (!hasInputs && modelName !== 'antispoof') {
+          console.warn(`[FaceDetectionEngine] WARNING: Model '${modelName}' has no inputs - may cause errors during detection`)
+          missingModels.push(`${modelName} (no inputs)`)
+        }
+      }
+    }
+
+    if (missingModels.length > 0) {
+      console.error('[FaceDetectionEngine] Some critical models failed to load:', missingModels)
+      throw new Error(`Critical models not loaded: ${missingModels.join(', ')}`)
+    }
+
     // 打印加载的模型信息
     if (human.models) {
       const loadedModels = Object.entries(human.models).map(([name, model]: [string, any]) => ({
         name,
         loaded: model?.loaded || model?.state === 'loaded',
-        type: typeof model
+        type: typeof model,
+        hasModel: !!model?.model
       }))
-      console.log('[FaceDetectionEngine] Loaded models:', {
+      console.log('[FaceDetectionEngine] All loaded models:', {
         totalModels: Object.keys(human.models).length,
         models: loadedModels,
-        allModels: Object.keys(human.models)
+        allModelNames: Object.keys(human.models)
       })
-    } else {
-      console.warn('[FaceDetectionEngine] human.models is not available')
-    }
-
-    // 额外验证：检查模型是否加载成功
-    if (!human.models || Object.keys(human.models).length === 0) {
-      console.warn('[FaceDetectionEngine] Warning: human.models appears to be empty after loading')
     }
 
     return human
@@ -448,8 +530,26 @@ export async function loadHuman(modelPath?: string, wasmPath?: string, preferred
       userAgent: navigator.userAgent,
       platform: navigator.platform,
       humanVersion: human?.version,
-      humanConfig: human?.config
+      humanConfig: human?.config,
+      backend: config.backend
     })
+    
+    // 如果是 WASM 后端失败，尝试降级到 WebGL
+    if (selectedBackend === 'wasm' && !errorMsg.includes('timeout') && _isWebGLAvailable()) {
+      console.warn('[FaceDetectionEngine] WASM backend failed, attempting fallback to WebGL...')
+      config.backend = 'webgl'
+      
+      try {
+        console.log('[FaceDetectionEngine] Retrying with WebGL backend')
+        human = new Human(config)
+        await human.load()
+        console.log('[FaceDetectionEngine] Successfully loaded with WebGL fallback')
+        return human
+      } catch (fallbackError) {
+        const fallbackMsg = fallbackError instanceof Error ? fallbackError.message : 'Unknown error'
+        console.error('[FaceDetectionEngine] WebGL fallback also failed:', fallbackMsg)
+      }
+    }
     
     throw new Error(`Human.js loading failed: ${errorMsg}`)
   }

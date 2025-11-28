@@ -31,53 +31,6 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 > **Note**: `@vladmandic/human` and `@techstark/opencv-js` are peer dependencies and must be installed separately to avoid bundling large libraries. This keeps your final bundle size smaller if you're already using these libraries elsewhere in your project.
 
-## Quick Start - Using Local Model Files (Recommended)
-
-To improve performance and reduce external dependencies, you can download and use local copies of model files:
-
-### Step 1: Download Model Files
-
-```bash
-# Copy Human.js models locally
-node copy-human-models.js
-
-# Download TensorFlow.js WASM files
-node download-tensorflow-wasm.js
-```
-
-This will create:
-- `public/models/` - Human.js face detection models
-- `public/wasm/` - TensorFlow.js WASM backend files
-
-### Step 2: Initialize Engine with Local Files
-
-```typescript
-import FaceDetectionEngine from '@sssxyd/face-liveness-detector'
-
-// Configure to use local model files
-const engine = new FaceDetectionEngine({
-  human_model_path: '/models',      // Path to downloaded models
-  tensorflow_wasm_path: '/wasm',    // Path to WASM files
-  min_face_ratio: 0.5,
-  max_face_ratio: 0.9,
-  liveness_action_count: 1,
-  liveness_action_list: ['blink']
-})
-
-// Initialize and start detection
-await engine.initialize()
-const videoElement = document.getElementById('video') as HTMLVideoElement
-await engine.startDetection(videoElement)
-```
-
-### Step 3: Serve Static Files
-
-Make sure your web server serves the `public/` directory:
-
-```typescript
-// Express.js example
-app.use(express.static('public'))
-```
 
 ## Quick Start - Using Default CDN Files
 
