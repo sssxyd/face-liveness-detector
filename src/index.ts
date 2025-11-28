@@ -525,9 +525,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   private getPerformActionCount(): number{
     if (this.config.liveness_action_count <= 0){
+      this.emitDebug('config', 'liveness_action_count is 0 or negative', { count: this.config.liveness_action_count }, 'warn')
       return 0
     }
-    return Math.min(this.config.liveness_action_count, this.config.liveness_action_list.length)
+    const actionListLength = this.config.liveness_action_list?.length ?? 0
+    if (actionListLength === 0) {
+      this.emitDebug('config', 'liveness_action_list is empty', { actionListLength }, 'warn')
+    }
+    return Math.min(this.config.liveness_action_count, actionListLength)
   }
 
   /**
@@ -591,6 +596,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private validateFaceBox(faceBox: Box | undefined): boolean {
     if (!faceBox) {
       console.warn('[FaceDetector] Face detected but no box/boxRaw property')
+      this.emitDebug('detection', 'Face box is missing - face detected but no box/boxRaw property', {}, 'warn')
       this.scheduleNextDetection(this.config.error_retry_delay)
       return false
     }
@@ -790,20 +796,24 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.detectionState.collectCount++
       return
     }
-    const frameImageData = this.captureFrame()
-    if (!frameImageData) {
-      this.emitDebug('detection', 'Failed to capture current frame image', {}, 'warn')
-      return
+    try {
+      const frameImageData = this.captureFrame()
+      if (!frameImageData) {
+        this.emitDebug('detection', 'Failed to capture current frame image', { frameQuality, bestQualityScore: this.detectionState.bestQualityScore }, 'warn')
+        return
+      }
+      const faceImageData = this.captureFrame(faceBox)
+      if (!faceImageData) {
+        this.emitDebug('detection', 'Failed to capture face image', { faceBox }, 'warn')
+        return
+      }
+      this.detectionState.collectCount++
+      this.detectionState.bestQualityScore = frameQuality
+      this.detectionState.bestFrameImage = frameImageData
+      this.detectionState.bestFaceImage = faceImageData
+    } catch (error) {
+      this.emitDebug('detection', 'Error during image collection', { error: (error as Error).message }, 'error')
     }
-    const faceImageData = this.captureFrame(faceBox)
-    if (!faceImageData) {
-      this.emitDebug('detection', 'Failed to capture face image', {}, 'warn')
-      return
-    }
-    this.detectionState.collectCount++
-    this.detectionState.bestQualityScore = frameQuality
-    this.detectionState.bestFrameImage = frameImageData
-    this.detectionState.bestFaceImage = faceImageData
   }
 
   private emitLivenessDetected(passed: boolean, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
@@ -819,6 +829,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     )
 
     if (availableActions.length === 0) {
+      this.emitDebug('liveness', 'No available actions to perform', { completedActions: Array.from(this.detectionState.completedActions), totalActions: this.config.liveness_action_list?.length ?? 0 }, 'warn')
       return
     }
 
@@ -872,32 +883,41 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Detect specific action
    */
   private detectAction(action: LivenessAction, gestures: GestureResult[]): boolean {
-    if (!gestures || gestures.length === 0) return false
+    if (!gestures || gestures.length === 0) {
+      this.emitDebug('liveness', 'No gestures detected for action verification', { action, gestureCount: gestures?.length ?? 0 }, 'info')
+      return false
+    }
 
-    switch (action) {
-      case LivenessAction.BLINK:
-        return gestures.some(g => {
-          if (!g.gesture) return false
-          return g.gesture.includes('blink')
-        })
-      case LivenessAction.MOUTH_OPEN:
-        return gestures.some(g => {
-          const gestureStr = g.gesture
-          if (!gestureStr || !gestureStr.includes('mouth')) return false
-          const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
-          if (!percentMatch || !percentMatch[1]) return false
-          const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
-          return percent > (this.config.min_mouth_open_percent ?? 0.2)
-        })
-      case LivenessAction.NOD:
-        return gestures.some(g => {
-          if (!g.gesture) return false
-          // Check for continuous head movement (up -> down or down -> up)
-          const headPattern = g.gesture.match(/head\s+(up|down)/i)
-          return !!headPattern && !!headPattern[1]
-        })
-      default:
-        return false
+    try {
+      switch (action) {
+        case LivenessAction.BLINK:
+          return gestures.some(g => {
+            if (!g.gesture) return false
+            return g.gesture.includes('blink')
+          })
+        case LivenessAction.MOUTH_OPEN:
+          return gestures.some(g => {
+            const gestureStr = g.gesture
+            if (!gestureStr || !gestureStr.includes('mouth')) return false
+            const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
+            if (!percentMatch || !percentMatch[1]) return false
+            const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
+            return percent > (this.config.min_mouth_open_percent ?? 0.2)
+          })
+        case LivenessAction.NOD:
+          return gestures.some(g => {
+            if (!g.gesture) return false
+            // Check for continuous head movement (up -> down or down -> up)
+            const headPattern = g.gesture.match(/head\s+(up|down)/i)
+            return !!headPattern && !!headPattern[1]
+          })
+        default:
+          this.emitDebug('liveness', 'Unknown action type in detection', { action }, 'warn')
+          return false
+      }
+    } catch (error) {
+      this.emitDebug('liveness', 'Error during action detection', { action, error: (error as Error).message }, 'error')
+      return false
     }
   }
 
@@ -1036,25 +1056,34 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private captureFrame(box?: Box): string | null {
     if(!this.frameCanvasElement) {
+      this.emitDebug('capture', 'Frame canvas element is null, cannot capture frame', {}, 'error')
       return null
     }
     if (!box) {
       return this.canvasToBase64(this.frameCanvasElement)
     }
-    const x = box[0], y = box[1], width = box[2], height = box[3]
-    // If cached canvas size does not match, recreate it
-    if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
-      this.clearFaceCanvas()
-      this.faceCanvasElement = document.createElement('canvas')
+    try {
+      const x = box[0], y = box[1], width = box[2], height = box[3]
+      // If cached canvas size does not match, recreate it
+      if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
+        this.clearFaceCanvas()
+        this.faceCanvasElement = document.createElement('canvas')
+        this.faceCanvasElement.width = width
+        this.faceCanvasElement.height = height
+        this.faceCanvasContext = this.faceCanvasElement.getContext('2d')
+      }
+      if(!this.faceCanvasContext) {
+        this.emitDebug('capture', 'Failed to get face canvas 2D context', { width, height }, 'error')
+        return null
+      }
       this.faceCanvasElement.width = width
       this.faceCanvasElement.height = height
-      this.faceCanvasContext = this.faceCanvasElement.getContext('2d')
+      this.faceCanvasContext.drawImage(this.frameCanvasElement, x, y, width, height, 0, 0, width, height)
+      return this.canvasToBase64(this.faceCanvasElement)
+    } catch (error) {
+      this.emitDebug('capture', 'Error during face frame capture', { box, error: (error as Error).message }, 'error')
+      return null
     }
-    if(!this.faceCanvasContext) return null
-    this.faceCanvasElement.width = width
-    this.faceCanvasElement.height = height
-    this.faceCanvasContext.drawImage(this.frameCanvasElement, x, y, width, height, 0, 0, width, height)
-    return this.canvasToBase64(this.faceCanvasElement)
   }
 }
 
