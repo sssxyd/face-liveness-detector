@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * 下载 TensorFlow.js WASM 文件到本地
+ * Download TensorFlow.js WASM files to local directory
  * 
- * 使用方法：
+ * Usage:
  *   npm run download-wasm
  */
 
@@ -12,17 +12,39 @@ import path from 'path';
 import https from 'https';
 import { fileURLToPath } from 'url';
 
+/**
+ * Find project root directory (directory containing package.json)
+ */
+function findProjectRoot(startPath) {
+  let currentPath = startPath;
+  
+  // Search upward until finding package.json or reaching filesystem root
+  while (currentPath !== path.dirname(currentPath)) {
+    const packageJsonPath = path.join(currentPath, 'package.json');
+    
+    if (fs.existsSync(packageJsonPath)) {
+      return currentPath;
+    }
+    
+    // Go up one directory level
+    currentPath = path.dirname(currentPath);
+  }
+  
+  // If not found, return the starting directory
+  return startPath;
+}
+
 // 配置
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOCAL_DIR = path.join(__dirname, 'public', 'wasm');
-
+const PROJECT_ROOT = findProjectRoot(__dirname);
+const LOCAL_DIR = path.join(PROJECT_ROOT, 'public', 'wasm');
 /**
- * 从 node_modules 中的 Human.js package.json 读取 TensorFlow 版本
+ * Read TensorFlow version from Human.js package.json in node_modules
  */
 function getTensorFlowVersion() {
   try {
     const humanPackagePath = path.join(
-      __dirname,
+      PROJECT_ROOT,
       'node_modules',
       '@vladmandic',
       'human',
@@ -31,33 +53,33 @@ function getTensorFlowVersion() {
 
     if (!fs.existsSync(humanPackagePath)) {
       throw new Error(
-        '@vladmandic/human 未找到。请运行 npm install 安装依赖。'
+        '@vladmandic/human not found. Please run npm install to install dependencies.'
       );
     }
 
     const humanPackage = JSON.parse(fs.readFileSync(humanPackagePath, 'utf-8'));
     
-    // 从 devDependencies 中查找 TensorFlow 版本
+    // Find TensorFlow version from devDependencies
     const devDeps = humanPackage.devDependencies || {};
     const tfCoreVersion = devDeps['@tensorflow/tfjs-core'];
     const tfWasmVersion = devDeps['@tensorflow/tfjs-backend-wasm'];
 
     if (!tfCoreVersion || !tfWasmVersion) {
       throw new Error(
-        '无法从 @vladmandic/human 的 devDependencies 中找到 TensorFlow 版本。'
+        'TensorFlow.js dependencies not found in @vladmandic/human package.json.'
       );
     }
 
-    // 提取版本号（移除 ^ 或 ~ 等前缀）
+    // Extract version number (remove ^ or ~ and other prefixes)
     const version = tfCoreVersion.replace(/^[\^~>=<]*/, '');
 
-    console.log(`📦 检测到 TensorFlow.js 版本: ${version}`);
+    console.log(`📦 Detected TensorFlow.js version: ${version}`);
     console.log(`   - @tensorflow/tfjs-core: ${tfCoreVersion}`);
     console.log(`   - @tensorflow/tfjs-backend-wasm: ${tfWasmVersion}`);
 
     return version;
   } catch (error) {
-    console.error(`❌ 读取 TensorFlow 版本失败: ${error.message}`);
+    console.error(`❌ Failed to read TensorFlow.js version: ${error.message}`);
     process.exit(1);
   }
 }
@@ -83,17 +105,17 @@ const FILES_TO_DOWNLOAD = [
 ];
 
 /**
- * 创建目录
+ * Create directory
  */
 function ensureDirectory(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
-    console.log(`✓ 创建目录: ${dirPath}`);
+    console.log(`✓ Created directory: ${dirPath}`);
   }
 }
 
 /**
- * 下载文件（带 CDN 回退）
+ * Download file (with CDN fallback)
  */
 function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
   return new Promise((resolve, reject) => {
@@ -103,27 +125,27 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
         file.destroy();
         fs.unlink(destPath, () => {});
         if (retryCount > 0) {
-          console.log(`  ⏱️  超时，重试 (${3 - retryCount + 1}/3)...`);
+          console.log(`  ⏱️  Timeout, retrying (${3 - retryCount + 1}/3)...`);
           attemptDownload(retryCount - 1);
         } else {
-          // 尝试下一个 CDN
+          // Try next CDN
           if (cdnIndex < CDN_SOURCES.length - 1) {
-            console.log(`  🔄 切换到备用 CDN 源...`);
+            console.log(`  🔄 Switching to backup CDN source...`);
             const newCdnIndex = cdnIndex + 1;
             const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
             downloadFile(newUrl, destPath, 3, newCdnIndex)
               .then(resolve)
               .catch(reject);
           } else {
-            reject(new Error(`超时: ${url}`));
+            reject(new Error(`Timeout: ${url}`));
           }
         }
-      }, 30000); // 30秒超时
+      }, 30000); // 30 seconds timeout
       
       https.get(url, (response) => {
         clearTimeout(timeout);
         
-        // 处理重定向
+        // Handle redirects
         if (response.statusCode === 301 || response.statusCode === 302) {
           file.destroy();
           fs.unlink(destPath, () => {});
@@ -137,9 +159,9 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
           file.destroy();
           fs.unlink(destPath, () => {});
           
-          // 如果是 404 或其他错误，尝试下一个 CDN
+          // If 404 or other error, try next CDN
           if (response.statusCode === 404 && cdnIndex < CDN_SOURCES.length - 1) {
-            console.log(`  🔄 当前 CDN 无此文件，切换到备用 CDN 源...`);
+            console.log(`  🔄 Current CDN does not have this file, switching to backup CDN source...`);
             const newCdnIndex = cdnIndex + 1;
             const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
             downloadFile(newUrl, destPath, 3, newCdnIndex)
@@ -157,7 +179,7 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
         response.on('data', (chunk) => {
           downloadedSize += chunk.length;
           const percent = ((downloadedSize / totalSize) * 100).toFixed(1);
-          process.stdout.write(`\r  下载进度: ${percent}%`);
+          process.stdout.write(`\r  Download progress: ${percent}%`);
         });
 
         response.pipe(file);
@@ -165,7 +187,7 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
         file.on('finish', () => {
           clearTimeout(timeout);
           file.close();
-          console.log(`\r✓ 下载完成: ${path.basename(destPath)}`);
+          console.log(`\r✓ Download completed: ${path.basename(destPath)}`);
           resolve();
         });
 
@@ -178,12 +200,12 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
         clearTimeout(timeout);
         fs.unlink(destPath, () => {});
         if (retryCount > 0) {
-          console.log(`  ⚠️  连接错误，重试 (${3 - retryCount + 1}/3)...`);
+          console.log(`  ⚠️  Connection error, retrying (${3 - retryCount + 1}/3)...`);
           attemptDownload(retryCount - 1);
         } else {
-          // 尝试下一个 CDN
+          // Try next CDN
           if (cdnIndex < CDN_SOURCES.length - 1) {
-            console.log(`  🔄 CDN 连接失败，切换到备用源...`);
+            console.log(`  🔄 CDN connection failed, switching to backup source...`);
             const newCdnIndex = cdnIndex + 1;
             const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
             downloadFile(newUrl, destPath, 3, newCdnIndex)
@@ -201,55 +223,55 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
 }
 
 /**
- * 获取文件大小
+ * Get file size in KB
  */
 function getFileSizeKB(bytes) {
   return (bytes / 1024).toFixed(2);
 }
 
 /**
- * 主函数
+ * Main function
  */
 async function main() {
   console.log('='.repeat(60));
-  console.log('TensorFlow.js WASM 文件下载器');
+  console.log('TensorFlow.js WASM Downloader');
   console.log('='.repeat(60));
   
-  // 自动检测版本
-  console.log('\n[0/3] 检测依赖版本...\n');
+  // Auto-detect version
+  console.log('\n[0/3] Detecting dependency versions...\n');
   
-  console.log(`\n📍 源 CDN: 多源回退 (${CDN_SOURCES.length} 个源)`);
-  console.log(`🔗 主 CDN URL: ${CDN_SOURCES[0]}`);
-  console.log(`🔄 备用 CDN: ${CDN_SOURCES.slice(1).join(', ')}`);
-  console.log(`📁 目标目录: ${LOCAL_DIR}`);
-  console.log(`\n需要下载的文件：`);
+  console.log(`\n📍 Source CDN: Multi-source fallback (${CDN_SOURCES.length} sources)`);
+  console.log(`🔗 Primary CDN URL: ${CDN_SOURCES[0]}`);
+  console.log(`🔄 Backup CDN: ${CDN_SOURCES.slice(1).join(', ')}`);
+  console.log(`📁 Target directory: ${LOCAL_DIR}`);
+  console.log(`\nFiles to download:`);
   FILES_TO_DOWNLOAD.forEach((file, index) => {
     console.log(`  ${index + 1}. ${file}`);
   });
 
   try {
-    // 1. 创建目录
-    console.log('\n[1/3] 准备目录...');
+    // 1. Create directory
+    console.log('\n[1/3] Preparing directory...');
     ensureDirectory(LOCAL_DIR);
 
-    // 2. 下载文件 (串行下载，带重试)
-    console.log('\n[2/3] 下载文件...\n');
+    // 2. Download files (sequentially with retries)
+    console.log('\n[2/3] Downloading files...\n');
     const failedFiles = [];
     for (const filename of FILES_TO_DOWNLOAD) {
       const url = `${CDN_URL}/${filename}`;
       const destPath = path.join(LOCAL_DIR, filename);
       
-      console.log(`\n  下载: ${filename}`);
+      console.log(`\n  Downloading: ${filename}`);
       try {
         await downloadFile(url, destPath);
       } catch (err) {
-        console.error(`  ✗ 下载失败: ${err.message}`);
+        console.error(`  ✗ Download failed: ${err.message}`);
         failedFiles.push(filename);
       }
     }
 
-    // 3. 验证文件
-    console.log('\n\n[3/3] 验证文件...\n');
+    // 3. Verify files
+    console.log('\n\n[3/3] Verifying files...\n');
     let totalSize = 0;
     let successCount = 0;
     FILES_TO_DOWNLOAD.forEach((filename) => {
@@ -260,51 +282,51 @@ async function main() {
         totalSize += stats.size;
         successCount++;
       } else {
-        console.log(`  ✗ ${filename} - 未找到`);
+        console.log(`  ✗ ${filename} - Not found`);
       }
     });
 
     console.log('\n' + '='.repeat(60));
     
     if (failedFiles.length === 0) {
-      console.log(`✅ 下载完成！总大小: ${getFileSizeKB(totalSize)} KB`);
+      console.log(`✅ Download complete! Total size: ${getFileSizeKB(totalSize)} KB`);
       console.log('='.repeat(60));
-      console.log('\n📝 现在可以在配置中使用本地 WASM 文件：\n');
+      console.log('\n📝 Now you can use local WASM files in your config:\n');
       console.log('```typescript');
       console.log('const config = {');
       console.log('  human_model_path: "/models",');
-      console.log('  tensorflow_wasm_path: "/wasm"  // ← 使用本地文件');
+      console.log('  tensorflow_wasm_path: "/wasm"  // ← Use local files');
       console.log('}');
       console.log('```\n');
     } else {
-      console.log(`⚠️  下载部分完成 (${successCount}/${FILES_TO_DOWNLOAD.length})`);
-      console.log(`总大小: ${getFileSizeKB(totalSize)} KB`);
+      console.log(`⚠️  Partially complete (${successCount}/${FILES_TO_DOWNLOAD.length})`);
+      console.log(`Total size: ${getFileSizeKB(totalSize)} KB`);
       console.log('='.repeat(60));
-      console.log(`\n❌ 以下文件下载失败 (${failedFiles.length}):`);
+      console.log(`\n❌ Failed to download ${failedFiles.length} file(s):`);
       failedFiles.forEach((file) => {
         console.log(`  - ${file}`);
       });
-      console.log('\n💡 建议:');
-      console.log('  1. 检查网络连接');
-      console.log('  2. 尝试使用 VPN 或代理');
-      console.log('  3. 稍后重试运行: npm run download:tensorflow-wasm');
-      console.log('  4. 或者手动下载文件到 public/wasm/ 目录');
-      console.log('\n📌 不下载 TensorFlow WASM 也可以使用项目，');
-      console.log('只是会使用在线 CDN 资源。\n');
+      console.log('\n💡 Suggestions:');
+      console.log('  1. Check your network connection');
+      console.log('  2. Try using VPN or proxy');
+      console.log('  3. Retry later: npm run download:tensorflow-wasm');
+      console.log('  4. Or manually download files to public/wasm/ directory');
+      console.log('\n📌 You can still use the project without local TensorFlow WASM,');
+      console.log('it will just use online CDN resources.\n');
       
-      // 如果至少下载了一部分文件，不退出
+      // If at least some files were downloaded, don't exit
       if (successCount > 0) {
-        console.log(`✅ 已成功下载 ${successCount} 个文件，可以继续使用项目。\n`);
+        console.log(`✅ Successfully downloaded ${successCount} file(s), project can continue.\n`);
       } else {
         process.exit(1);
       }
     }
 
   } catch (error) {
-    console.error('\n❌ 错误:', error.message);
-    console.log('\n💡 如果持续失败，可以跳过此步骤：');
-    console.log('  运行 npm run setup (仅复制 OpenCV WASM)');
-    console.log('  或 npm run copy:opencv-wasm\n');
+    console.error('\n❌ Error:', error.message);
+    console.log('\n💡 If it continues to fail, you can skip this step:');
+    console.log('  Run npm run setup (copy OpenCV WASM only)');
+    console.log('  Or npm run copy:opencv-wasm\n');
     process.exit(1);
   }
 }

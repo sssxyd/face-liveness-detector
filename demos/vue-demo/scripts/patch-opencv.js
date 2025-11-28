@@ -1,39 +1,62 @@
 #!/usr/bin/env node
 
 /**
- * 修补脚本：修复 opencv.js 在 ES Module 中的 UMD 问题
- * 将 }(this, function() { 替换为 }(globalThis, function() {
- * 参考：https://github.com/TechStark/opencv-js/issues/44
+ * Patch script: Fix opencv.js UMD issue in ES Module
+ * Replace }(this, function() { with }(globalThis, function() {
+ * Reference: https://github.com/TechStark/opencv-js/issues/44
  */
 
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const opencvPath = path.join(__dirname, '../node_modules/@techstark/opencv-js/dist/opencv.js');
+/**
+ * Find project root directory (directory containing package.json)
+ */
+function findProjectRoot(startPath) {
+  let currentPath = startPath;
+  
+  // Search upward until finding package.json or reaching filesystem root
+  while (currentPath !== path.dirname(currentPath)) {
+    const packageJsonPath = path.join(currentPath, 'package.json');
+    
+    if (fs.existsSync(packageJsonPath)) {
+      return currentPath;
+    }
+    
+    // Go up one directory level
+    currentPath = path.dirname(currentPath);
+  }
+  
+  // If not found, return the starting directory
+  return startPath;
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = findProjectRoot(__dirname);
+const opencvPath = path.join(PROJECT_ROOT, 'node_modules/@techstark/opencv-js/dist/opencv.js');
 
 try {
-  if (!fs.existsSync(opencvPath)) {
-    console.warn(`[patch-opencv] opencv.js 文件不存在: ${opencvPath}`);
-    process.exit(0);
-  }
-
-  let content = fs.readFileSync(opencvPath, 'utf-8');
-  const originalContent = content;
-
-  // 替换 UMD 模式中的 this 为 globalThis
-  content = content.replace(
-    /}\(this, function\(\)/g,
-    '}(globalThis, function()'
-  );
-
-  // 检查是否进行了替换
-  if (content === originalContent) {
-    console.warn('[patch-opencv] 没有找到需要替换的模式，文件可能已经被修补');
+  if (fs.existsSync(opencvPath)) {
+    let content = fs.readFileSync(opencvPath, 'utf8');
+    const originalContent = content;
+    
+    // Replace 'this' with 'globalThis' in UMD pattern
+    content = content.replace(
+      /}\s*\(\s*this\s*,\s*function\s*\(\)\s*{/g,
+      `}(globalThis, function () {`
+    );
+    
+    if (content !== originalContent) {
+      fs.writeFileSync(opencvPath, content, 'utf8');
+      console.log('✓ Successfully patched @techstark/opencv-js for ESM compatibility');
+    } else {
+      console.log('ℹ @techstark/opencv-js is already patched or pattern not found');
+    }
   } else {
-    fs.writeFileSync(opencvPath, content, 'utf-8');
-    console.log('[patch-opencv] ✓ 成功修补 opencv.js');
+    console.warn('⚠ @techstark/opencv-js not found, skipping patch');
   }
 } catch (error) {
-  console.error('[patch-opencv] ✗ 修补失败:', error.message);
+  console.error('✗ Error patching opencv.js:', error.message);
   process.exit(1);
 }

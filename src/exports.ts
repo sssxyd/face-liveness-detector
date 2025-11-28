@@ -22,6 +22,7 @@ export type {
   DetectorFinishEventData,
   DetectorErrorEventData,
   DetectorDebugEventData,
+  DetectorLoadedEventData,
   EventMap
 } from './types'
 

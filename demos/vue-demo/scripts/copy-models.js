@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * 从 Human.js 复制模型文件到本地
+ * Copy model files from Human.js to local directory
  * 
- * 使用方法：
+ * Usage:
  *   npm run copy-models
  */
 
@@ -11,18 +11,41 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// 配置
+/**
+ * Find project root directory (directory containing package.json)
+ */
+function findProjectRoot(startPath) {
+  let currentPath = startPath;
+  
+  // Search upward until finding package.json or reaching filesystem root
+  while (currentPath !== path.dirname(currentPath)) {
+    const packageJsonPath = path.join(currentPath, 'package.json');
+    
+    if (fs.existsSync(packageJsonPath)) {
+      return currentPath;
+    }
+    
+    // Go up one directory level
+    currentPath = path.dirname(currentPath);
+  }
+  
+  // If not found, return the starting directory
+  return startPath;
+}
+
+// Config
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const HUMAN_MODELS_DIR = path.join(__dirname, 'node_modules', '@vladmandic', 'human', 'models');
-const LOCAL_MODELS_DIR = path.join(__dirname, 'public', 'models');
+const PROJECT_ROOT = findProjectRoot(__dirname);
+const HUMAN_MODELS_DIR = path.join(PROJECT_ROOT, 'node_modules', '@vladmandic', 'human', 'models');
+const LOCAL_MODELS_DIR = path.join(PROJECT_ROOT, 'public', 'models');
 
 /**
- * 从 node_modules 中的 Human.js package.json 读取使用的模型
+ * Read enabled models from Human.js package.json in node_modules
  */
 function getEnabledModels() {
   try {
     const humanPackagePath = path.join(
-      __dirname,
+      PROJECT_ROOT,
       'node_modules',
       '@vladmandic',
       'human',
@@ -31,28 +54,28 @@ function getEnabledModels() {
 
     if (!fs.existsSync(humanPackagePath)) {
       throw new Error(
-        '@vladmandic/human 未找到。请运行 npm install 安装依赖。'
+        '@vladmandic/human not found. Please run npm install to install dependencies.'
       );
     }
 
     const humanPackage = JSON.parse(fs.readFileSync(humanPackagePath, 'utf-8'));
     
-    console.log(`📦 Human.js 版本: ${humanPackage.version}`);
+    console.log(`📦 Human.js version: ${humanPackage.version}`);
     
     return humanPackage;
   } catch (error) {
-    console.error(`❌ 读取 Human.js 信息失败: ${error.message}`);
+    console.error(`❌ Failed to read Human.js information: ${error.message}`);
     process.exit(1);
   }
 }
 
 /**
- * 获取所有可用的模型文件
+ * Get all available model files
  */
 function getAvailableModels() {
   if (!fs.existsSync(HUMAN_MODELS_DIR)) {
     throw new Error(
-      `Human.js 模型目录不存在: ${HUMAN_MODELS_DIR}\n请确保 @vladmandic/human 已正确安装。`
+      `Human.js model directory not found: ${HUMAN_MODELS_DIR}\nPlease ensure @vladmandic/human is correctly installed.`
     );
   }
 
@@ -65,24 +88,24 @@ function getAvailableModels() {
 }
 
 /**
- * 创建目录
+ * Create directory
  */
 function ensureDirectory(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
-    console.log(`✓ 创建目录: ${dirPath}`);
+    console.log(`✓ Created directory: ${dirPath}`);
   }
 }
 
 /**
- * 获取文件大小
+ * Get file size in KB
  */
 function getFileSizeKB(bytes) {
   return (bytes / 1024).toFixed(2);
 }
 
 /**
- * 复制单个文件
+ * Copy single file
  */
 function copyFile(srcPath, destPath, fileName) {
   try {
@@ -92,30 +115,30 @@ function copyFile(srcPath, destPath, fileName) {
     console.log(`  ✓ ${fileName} (${sizeKB} KB)`);
     return stats.size;
   } catch (error) {
-    console.error(`  ✗ 复制失败: ${fileName} - ${error.message}`);
+    console.error(`  ✗ Copy failed: ${fileName} - ${error.message}`);
     throw error;
   }
 }
 
 /**
- * 主函数
+ * Main function
  */
 async function main() {
   console.log('='.repeat(60));
-  console.log('Human.js 模型文件复制器');
+  console.log('Human.js Model Files Copier');
   console.log('='.repeat(60));
 
   try {
-    // 1. 获取 Human.js 信息
-    console.log('\n[1/4] 检测 Human.js 信息...\n');
+    // 1. Get Human.js information
+    console.log('\n[1/4] Detecting Human.js information...\n');
     const humanPackage = getEnabledModels();
-    console.log(`   版本: ${humanPackage.version}`);
-    console.log(`   源: ${HUMAN_MODELS_DIR}`);
+    console.log(`   Version: ${humanPackage.version}`);
+    console.log(`   Source: ${HUMAN_MODELS_DIR}`);
 
-    // 2. 获取可用的模型
-    console.log('\n[2/4] 扫描可用的模型文件...\n');
+    // 2. Get available models
+    console.log('\n[2/4] Scanning available model files...\n');
     const availableModels = getAvailableModels();
-    console.log(`   找到 ${availableModels.length} 个模型文件：\n`);
+    console.log(`   Found ${availableModels.length} model files:\n`);
     availableModels.forEach((model, index) => {
       const srcPath = path.join(HUMAN_MODELS_DIR, model);
       const stats = fs.statSync(srcPath);
@@ -123,12 +146,12 @@ async function main() {
       console.log(`   ${index + 1}. ${model} (${sizeKB} KB)`);
     });
 
-    // 3. 创建目录
-    console.log('\n[3/4] 准备目录...');
+    // 3. Prepare directory
+    console.log('\n[3/4] Preparing directory...');
     ensureDirectory(LOCAL_MODELS_DIR);
 
-    // 4. 复制文件
-    console.log('\n[4/4] 复制文件...\n');
+    // 4. Copy files
+    console.log('\n[4/4] Copying files...\n');
     let totalSize = 0;
     let copiedCount = 0;
 
@@ -141,12 +164,12 @@ async function main() {
         totalSize += fileSize;
         copiedCount++;
       } catch (error) {
-        console.error(`   复制 ${model} 失败: ${error.message}`);
+        console.error(`   Failed to copy ${model}: ${error.message}`);
         throw error;
       }
     }
 
-    // 5. 处理 README.md
+    // 5. Handle README.md
     const readmeSrcPath = path.join(HUMAN_MODELS_DIR, 'README.md');
     const readmeDestPath = path.join(LOCAL_MODELS_DIR, 'README.md');
     
@@ -154,27 +177,27 @@ async function main() {
       try {
         copyFile(readmeSrcPath, readmeDestPath, 'README.md');
       } catch (error) {
-        console.warn(`⚠️  README.md 复制失败（可选），继续...`);
+        console.warn(`⚠️  README.md copy failed (optional), continuing...`);
       }
     }
 
     console.log('\n' + '='.repeat(60));
-    console.log(`✅ 复制完成！`);
-    console.log(`   总计: ${copiedCount} 个模型文件`);
-    console.log(`   总大小: ${getFileSizeKB(totalSize)} KB`);
+    console.log(`✅ Copy complete!`);
+    console.log(`   Total: ${copiedCount} model files`);
+    console.log(`   Total size: ${getFileSizeKB(totalSize)} KB`);
     console.log('='.repeat(60));
 
-    console.log('\n📝 模型文件已复制到: ' + LOCAL_MODELS_DIR);
-    console.log('\n配置示例：\n');
+    console.log('\n📝 Model files have been copied to: ' + LOCAL_MODELS_DIR);
+    console.log('\nConfiguration example:\n');
     console.log('```typescript');
     console.log('const config = {');
-    console.log('  human_model_path: "/models",  // ← 使用本地文件');
-    console.log('  tensorflow_wasm_path: "/wasm",  // ← 使用本地文件');
+    console.log('  human_model_path: "/models",  // ← Use local files');
+    console.log('  tensorflow_wasm_path: "/wasm",  // ← Use local files');
     console.log('};');
     console.log('```\n');
 
   } catch (error) {
-    console.error('\n❌ 错误:', error.message);
+    console.error('\n❌ Error:', error.message);
     process.exit(1);
   }
 }
