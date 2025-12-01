@@ -79,6 +79,11 @@
       </button>
     </div>
 
+    <!-- Action Message Display (Above Video) -->
+    <div v-if="isDetecting && actionMessage" class="action-message-panel">
+      <div class="action-message">{{ actionMessage }}</div>
+    </div>
+
     <!-- Video Display Area -->
     <div :class="['video-container', `border-${borderColor}`]">
       <video
@@ -89,13 +94,17 @@
         playsinline
         muted
       ></video>
-      <div v-if="isDetecting" class="status-overlay">
-        <div class="status-info">{{ statusMessage }}</div>
+      <div v-if="isDetecting && currentAction" class="status-overlay">
         <div v-if="currentAction" class="action-prompt">
           <span class="action-icon">{{ getActionIcon(currentAction) }}</span>
           <span class="action-text">{{ getActionText(currentAction) }}</span>
         </div>
       </div>
+    </div>
+
+    <!-- Status Message Display (Below Video) -->
+    <div v-if="isDetecting" class="status-message-panel">
+      <div class="status-message">{{ statusMessage }}</div>
     </div>
 
     <!-- Detection Info Panel -->
@@ -239,6 +248,7 @@ const videoElement = ref<HTMLVideoElement | null>(null)
 const isEngineReady = ref<boolean>(false)
 const isDetecting = ref<boolean>(false)
 const statusMessage = ref<string>('等待开始检测...')
+const actionMessage = ref<string>('')
 const errorMessage = ref<string>('')
 const borderColor = ref<'idle' | 'warn' | 'yes' | 'success' | 'failed'>('idle')
 
@@ -321,7 +331,7 @@ function handleEngineReady(data: DetectorLoadedEventData) {
     console.error('❌ Engine loading failed')
     return
   }
-  statusMessage.value = 'Engine is ready, you can start detection'
+  statusMessage.value = 'Engine is ready, Opencv: ' + data.opencv_version + ', Human: ' + data.human_version
   console.log(data.opencv_version || 'OpenCV not detected')
   console.log(data.human_version || 'Human.js not detected')
   console.log('✅ Engine is ready')
@@ -362,13 +372,13 @@ function handleDetectorInfo(data: DetectorInfoEventData) {
 function handleDetectorAction(data: DetectorActionEventData) {
   if (data.status === 'started') {
     currentAction.value = data.action
-    statusMessage.value = `Please perform action: ${getActionText(data.action)}`
+    actionMessage.value = `Please perform action: ${getActionText(data.action)}`
   } else if (data.status === 'completed') {
     actionPassedCount.value++
     currentAction.value = null
-    statusMessage.value = 'Action recognized successfully!'
+    actionMessage.value = 'Action recognized successfully!'
   } else if (data.status === 'timeout') {
-    statusMessage.value = 'Action recognition timeout'
+    actionMessage.value = 'Action recognition timeout'
   }
 }
 
@@ -442,6 +452,7 @@ function stopDetection() {
     isDetecting.value = false
     currentAction.value = null
     statusMessage.value = 'Detection stopped'
+    actionMessage.value = ''
     borderColor.value = 'idle'
   }
 }
@@ -453,6 +464,7 @@ function resetDetection() {
   actionPassedCount.value = 0
   faceInfo.value = { passed: false, size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
   statusMessage.value = 'Waiting to start detection...'
+  actionMessage.value = ''
   borderColor.value = 'idle'
 }
 
@@ -698,16 +710,41 @@ function getActionCountLabel(count: number): string {
   left: 0;
   right: 0;
   bottom: 0;
-  background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, transparent 50%);
+  background: transparent;
   padding: 15px;
   color: white;
   border-radius: 50%;
 }
 
-.status-info {
+.action-message-panel {
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.action-message {
   font-size: 16px;
   font-weight: 600;
-  text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  color: #fff;
+  padding: 12px;
+  background: rgba(66, 185, 131, 0.95);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.status-message-panel {
+  text-align: center;
+  margin-top: 15px;
+  margin-bottom: 20px;
+}
+
+.status-message {
+  font-size: 16px;
+  font-weight: 600;
+  color: #2c3e50;
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #42b983;
 }
 
 .action-prompt {
@@ -1223,6 +1260,25 @@ function getActionCountLabel(count: number): string {
   /* 状态提示 */
   .status-info {
     font-size: 14px;
+  }
+
+  .action-message-panel {
+    margin-bottom: 10px;
+  }
+
+  .action-message {
+    font-size: 14px;
+    padding: 10px;
+  }
+
+  .status-message-panel {
+    margin-top: 12px;
+    margin-bottom: 15px;
+  }
+
+  .status-message {
+    font-size: 14px;
+    padding: 10px;
   }
 
   .action-prompt {

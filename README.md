@@ -1,17 +1,15 @@
 # Face Detection Engine
 
-A framework-agnostic, TypeScript-based npm package for face liveness detection. This engine provides core face detection, liveness verification, and anti-spoofing capabilities without any UI framework dependencies.
+A pure frontend, real-time face liveness detection engine built on **[Human.js](https://github.com/vladmandic/human)** and **[OpenCV.js](https://github.com/TechStark/opencv-js)**. This TypeScript-based npm package provides real-time face detection, dual liveness verification (silent + action-based), automatic best frame selection, and anti-spoofing capabilities - all running 100% in the browser with zero backend dependency.
 
 ## Features
 
-- 🎯 **Framework Agnostic** - Works with any JavaScript framework or vanilla JS
-- 🧠 **Intelligent Liveness Detection** - Action-based and silent liveness detection modes
-- 🔍 **Face Quality Checks** - Comprehensive image quality and face frontality analysis
-- 🚀 **High Performance** - Optimized detection loop with RequestAnimationFrame
-- 📱 **Mobile Friendly** - Built-in mobile device adaptation
-- ♿ **Event-Driven Architecture** - Easy integration with TypeScript/JavaScript applications
-- 🛡️ **Anti-Spoofing** - Real-time anti-spoofing detection
-- 📊 **Detailed Debugging** - Rich debug information for troubleshooting
+- 💯 **Pure Frontend Implementation** - Zero backend dependency, all processing runs locally in the browser
+- 🔬 **Hybrid TensorFlow + OpenCV Solution** - Combines TensorFlow.js for AI detection with OpenCV.js for image processing
+- 🧠 **Dual Detection Modes** - Both silent liveness detection and action-based detection (blink, mouth open, nod) with automatic best frame selection
+- ⚡ **Pure JavaScript & Event-Driven** - 100% TypeScript, reactive event architecture, seamless integration with any frontend framework (Vue, React, Angular, Svelte, or vanilla JS)
+- 🎯 **Comprehensive Face Analysis** - Real-time anti-spoofing, quality assessment, frontality detection, and blur detection
+- 🛡️ **Advanced Anti-Spoofing** - Real-time liveness score and spoofing detection
 
 ## 🚀 Try Online Demo
 
