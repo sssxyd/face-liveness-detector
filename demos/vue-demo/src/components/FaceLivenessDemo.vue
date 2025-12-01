@@ -79,11 +79,6 @@
       </button>
     </div>
 
-    <!-- Action Message Display (Above Video) -->
-    <div v-if="isDetecting" class="action-message-panel">
-      <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
-    </div>
-
     <!-- Video Display Area -->
     <div :class="['video-container', `border-${borderColor}`]">
       <video
@@ -102,9 +97,17 @@
       </div>
     </div>
 
-    <!-- Status Message Display (Below Video) -->
-    <div v-if="isDetecting" class="status-message-panel">
-      <div class="status-message">{{ statusMessage }}</div>
+    <!-- Messages Display (Below Video) -->
+    <div v-if="isDetecting" class="messages-container">
+      <!-- Action Message Display -->
+      <div class="action-message-panel">
+        <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
+      </div>
+      
+      <!-- Status Message Display -->
+      <div class="status-message-panel">
+        <div class="status-message">{{ statusMessage }}</div>
+      </div>
     </div>
 
     <!-- Detection Info Panel -->
@@ -716,14 +719,18 @@ function getActionCountLabel(count: number): string {
   border-radius: 50%;
 }
 
-.action-message-panel {
-  text-align: center;
-  margin-bottom: 15px;
+.messages-container {
   width: 100%;
   max-width: 640px;
-  margin-left: auto;
-  margin-right: auto;
-  min-height: 20px;
+  margin: 20px auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.action-message-panel {
+  text-align: center;
+  width: 100%;
 }
 
 .action-message {
@@ -739,12 +746,7 @@ function getActionCountLabel(count: number): string {
 
 .status-message-panel {
   text-align: center;
-  margin-top: 20px;
-  margin-bottom: 20px;
   width: 100%;
-  max-width: 640px;
-  margin-left: auto;
-  margin-right: auto;
 }
 
 .status-message {
@@ -1273,23 +1275,27 @@ function getActionCountLabel(count: number): string {
     font-size: 14px;
   }
 
+  .messages-container {
+    max-width: calc(100% - 20px);
+    gap: 8px;
+  }
+
   .action-message-panel {
-    margin-bottom: 10px;
+    width: 100%;
   }
 
   .action-message {
     font-size: 14px;
-    padding: 10px;
+    padding: 10px 15px;
   }
 
   .status-message-panel {
-    margin-top: 12px;
-    margin-bottom: 15px;
+    width: 100%;
   }
 
   .status-message {
     font-size: 14px;
-    padding: 10px;
+    padding: 10px 15px;
   }
 
   .action-prompt {
