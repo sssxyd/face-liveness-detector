@@ -843,7 +843,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     // Action completed
-    this.emit('action-prompt' as any, {
+    this.emit('detector-action' as any, {
       action: this.detectionState.currentAction,
       status: LivenessActionStatus.COMPLETED
     })
@@ -935,24 +935,22 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     this.detectionState.currentAction = nextAction
 
-    const promptData: DetectorActionEventData = {
-      action: this.detectionState.currentAction,
+    this.emit('detector-action' as any, {
+      action: nextAction,
       status: LivenessActionStatus.STARTED
-    }
-
-    this.emit('action-prompt' as any, promptData)
+    })
     this.emitDebug('liveness', 'Action selected', { action: this.detectionState.currentAction })
 
     // Start action verification timeout timer
     this.clearActionVerifyTimeout()
     this.detectionState.actionVerifyTimeout = setTimeout(() => {
-      if (this.detectionState.currentAction) {
+      if (nextAction) {
         this.emitDebug('liveness', 'Action verify timeout', {
-          action: this.detectionState.currentAction,
+          action: nextAction,
           timeout: this.config.liveness_verify_timeout
         }, 'warn')
-        this.emit('action-prompt' as any, {
-          action: this.detectionState.currentAction,
+        this.emit('detector-action' as any, {
+          action: nextAction,
           status: LivenessActionStatus.TIMEOUT
         })
         this.resetDetectionState()
