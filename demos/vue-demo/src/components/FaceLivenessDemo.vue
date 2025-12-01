@@ -80,8 +80,8 @@
     </div>
 
     <!-- Action Message Display (Above Video) -->
-    <div v-if="isDetecting && actionMessage" class="action-message-panel">
-      <div class="action-message">{{ actionMessage }}</div>
+    <div v-if="isDetecting" class="action-message-panel">
+      <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
     </div>
 
     <!-- Video Display Area -->
@@ -663,7 +663,7 @@ function getActionCountLabel(count: number): string {
   position: relative;
   width: 640px;
   height: 640px;
-  margin: 0 auto 20px;
+  margin: 0 auto;
   background: #000;
   border-radius: 50%;
   overflow: hidden;
@@ -718,33 +718,44 @@ function getActionCountLabel(count: number): string {
 
 .action-message-panel {
   text-align: center;
-  margin-bottom: 12px;
+  margin-bottom: 15px;
+  width: 100%;
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
+  min-height: 20px;
 }
 
 .action-message {
   font-size: 16px;
   font-weight: 600;
   color: #fff;
-  padding: 12px;
+  padding: 12px 20px;
   background: rgba(66, 185, 131, 0.95);
   border-radius: 6px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  word-break: break-word;
 }
 
 .status-message-panel {
   text-align: center;
-  margin-top: 15px;
+  margin-top: 20px;
   margin-bottom: 20px;
+  width: 100%;
+  max-width: 640px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .status-message {
   font-size: 16px;
   font-weight: 600;
   color: #2c3e50;
-  padding: 12px;
+  padding: 12px 20px;
   background: #f8f9fa;
   border-radius: 6px;
   border-left: 4px solid #42b983;
+  word-break: break-word;
 }
 
 .action-prompt {
