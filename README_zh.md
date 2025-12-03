@@ -1,4 +1,4 @@
-[中文](./README_zh.md) | [English](./README.md)
+> **语言 / Languages:** [中文](#) · [English](./README.md)
 
 # 人脸检测引擎
 

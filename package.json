@@ -85,5 +85,9 @@
   "bugs": {
     "url": "https://github.com/sssxyd/face-liveness-detector/issues"
   },
-  "homepage": "https://github.com/sssxyd/face-liveness-detector#readme"
+  "homepage": "https://github.com/sssxyd/face-liveness-detector#readme",
+  "docs": {
+    "en": "https://github.com/sssxyd/face-liveness-detector/blob/main/README.md",
+    "zh": "https://github.com/sssxyd/face-liveness-detector/blob/main/README_zh.md"
+  }
 }

@@ -1,4 +1,4 @@
-[中文](./README_zh.md) | [English](./README.md)
+> **Languages:** [English](#) · [中文](./README_zh.md)
 
 # Face Detection Engine
 
