@@ -149,51 +149,66 @@ runDetection()
 
 ### FaceDetectionEngineConfig
 
-```typescript
-interface FaceDetectionEngineConfig {
-  // ========== Resource Paths ==========
-  human_model_path?: string        // Path to human.js models (default: undefined)
-  tensorflow_wasm_path?: string    // Path to TensorFlow WASM files (default: undefined)
-  tensorflow_backend?: 'auto' | 'webgl' | 'wasm'  // TensorFlow backend selection (default: 'auto')
+#### Resource Paths
 
-  // ========== Detection Settings ==========
-  video_width?: number             // Width of the video stream (default: 640)
-  video_height?: number            // Height of the video stream (default: 640)
-  video_mirror?: boolean           // Mirror video horizontally (default: true)
-  video_load_timeout?: number      // Timeout for loading video stream in ms (default: 5000)
-  detection_frame_delay?: number   // Delay between detection frames in ms (default: 100)
-  error_retry_delay?: number       // Delay before retrying after an error in ms (default: 200)
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `human_model_path` | `string` | Path to Human.js model files | `undefined` |
+| `tensorflow_wasm_path` | `string` | Path to TensorFlow WASM files | `undefined` |
+| `tensorflow_backend` | `'auto' \| 'webgl' \| 'wasm'` | TensorFlow backend selection | `'auto'` |
 
-  // ========== Collection Settings ==========
-  silent_detect_count?: number     // Number of silent detections to collect (default: 3)
-  min_face_ratio?: number          // Minimum face size ratio (default: 0.5)
-  max_face_ratio?: number          // Maximum face size ratio (default: 0.9)
-  min_face_frontal?: number        // Minimum face frontality (default: 0.9)
-  min_image_quality?: number       // Minimum image quality (default: 0.5)
-  min_live_score?: number          // Minimum live score (default: 0.5)
-  min_real_score?: number          // Minimum anti-spoofing score (default: 0.85)
-  suspected_frauds_count?: number  // Number of suspected frauds to detect (default: 3)
-  face_frontal_features?: {        // Face frontal features
-    yaw_threshold: number          // Yaw angle threshold in degrees (default: 3)
-    pitch_threshold: number        // Pitch angle threshold in degrees (default: 4)
-    roll_threshold: number         // Roll angle threshold in degrees (default: 2)
-  }
-  image_quality_features?: {       // Image quality features
-    require_full_face_in_bounds: boolean    // Require face completely within bounds (default: false)
-    use_opencv_enhancement: boolean         // Use OpenCV enhancement for quality detection (default: true)
-    min_laplacian_variance: number          // Minimum Laplacian variance for blur detection (default: 50)
-    min_gradient_sharpness: number          // Minimum gradient sharpness for blur detection (default: 0.15)
-    min_blur_score: number                  // Minimum blur score for blur detection (default: 0.6)
-  }
+#### Video Detection Settings
 
-  // ========== Liveness Settings ==========
-  liveness_action_list?: LivenessAction[]  // List of liveness actions to detect (default: [BLINK, MOUTH_OPEN, NOD])
-  liveness_action_count?: number           // Number of liveness actions to perform (default: 1)
-  liveness_action_randomize?: boolean      // Whether to randomize liveness actions (default: true)
-  liveness_verify_timeout?: number         // Timeout for liveness verification in ms (default: 60000)
-  min_mouth_open_percent?: number          // Minimum mouth open percentage for detection (default: 0.2)
-}
-```
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `video_width` | `number` | Video stream width in pixels | `640` |
+| `video_height` | `number` | Video stream height in pixels | `640` |
+| `video_mirror` | `boolean` | Mirror video horizontally | `true` |
+| `video_load_timeout` | `number` | Video stream loading timeout in ms | `5000` |
+| `detection_frame_delay` | `number` | Delay between detection frames in ms | `100` |
+| `error_retry_delay` | `number` | Error retry delay in ms | `200` |
+
+#### Detection Quality Settings
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `silent_detect_count` | `number` | Number of silent detections to collect | `3` |
+| `min_face_ratio` | `number` | Minimum face size ratio (0-1) | `0.5` |
+| `max_face_ratio` | `number` | Maximum face size ratio (0-1) | `0.9` |
+| `min_face_frontal` | `number` | Minimum face frontality score (0-1) | `0.9` |
+| `min_image_quality` | `number` | Minimum image quality score (0-1) | `0.5` |
+| `min_live_score` | `number` | Minimum liveness score (0-1) | `0.5` |
+| `min_real_score` | `number` | Minimum anti-spoofing score (0-1) | `0.85` |
+| `suspected_frauds_count` | `number` | Number of frauds to detect before fail | `3` |
+
+#### Face Frontality Features (`face_frontal_features`)
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `yaw_threshold` | `number` | Yaw angle threshold in degrees | `3` |
+| `pitch_threshold` | `number` | Pitch angle threshold in degrees | `4` |
+| `roll_threshold` | `number` | Roll angle threshold in degrees | `2` |
+
+#### Image Quality Features (`image_quality_features`)
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `require_full_face_in_bounds` | `boolean` | Require face completely within bounds | `false` |
+| `use_opencv_enhancement` | `boolean` | Use OpenCV enhancement for quality detection | `true` |
+| `min_laplacian_variance` | `number` | Minimum Laplacian variance for blur detection | `50` |
+| `min_gradient_sharpness` | `number` | Minimum gradient sharpness for blur detection | `0.15` |
+| `min_blur_score` | `number` | Minimum blur score | `0.6` |
+
+#### Liveness Detection Settings
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| `liveness_action_list` | `LivenessAction[]` | List of liveness actions to detect | `[BLINK, MOUTH_OPEN, NOD]` |
+| `liveness_action_count` | `number` | Number of liveness actions to perform | `1` |
+| `liveness_action_randomize` | `boolean` | Randomize liveness actions order | `true` |
+| `liveness_verify_timeout` | `number` | Timeout for liveness verification in ms | `60000` |
+| `min_mouth_open_percent` | `number` | Minimum mouth open percentage (0-1) | `0.2` |
+
 
 ## API Reference
 
