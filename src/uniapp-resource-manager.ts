@@ -4,24 +4,49 @@
  */
 
 /**
- * 获取 UniApp 环境下的资源路径
- * @param relativePath - 相对路径（相对于插件目录）
+ * 获取资源路径（考虑 static 目录）
+ * 支持 UniApp App、H5、小程序等多个平台
+ * @param relativePath - 相对路径（相对于插件的 static 目录）
  * @returns 完整的资源路径
  */
 export function getResourcePath(relativePath: string): string {
-  // UniApp 插件路径规则
-  // 如果是小程序环境，使用相对路径
-  // 如果是 H5 环境，使用插件目录路径
-  
-  const isSmallProgram = /android|ios|windows|mac/i.test(navigator.userAgent.toLowerCase())
-  
-  if (isSmallProgram) {
-    // 小程序环境下的相对路径
-    return `plugin://face-liveness-detector/${relativePath}`
-  } else {
-    // H5 环境下的完整路径
-    return `/uni_modules/face-liveness-detector/${relativePath}`
+  // 优先使用 UniApp 官方方式判断平台
+  try {
+    const uni = (globalThis as any).uni
+    const systemInfo = uni?.getSystemInfoSync?.()
+    
+    if (systemInfo?.uniPlatform) {
+      // 小程序环境
+      if (systemInfo.uniPlatform.startsWith('mp-')) {
+        return `plugin://face-liveness-detector/static/${relativePath}`
+      }
+      
+      // App 环境（Android/iOS）
+      if (systemInfo.uniPlatform === 'app' || systemInfo.uniPlatform === 'app-plus') {
+        // App 环境下使用相对路径或 plus:// 协议
+        return `/uni_modules/face-liveness-detector/static/${relativePath}`
+      }
+      
+      // H5/Web 环境
+      if (systemInfo.uniPlatform === 'h5' || systemInfo.uniPlatform === 'web') {
+        return `/uni_modules/face-liveness-detector/static/${relativePath}`
+      }
+    }
+  } catch (error) {
+    // 如果 uni API 不可用，继续使用 fallback
   }
+  
+  // Fallback：使用 userAgent 判断（备选方案）
+  const userAgent = navigator.userAgent.toLowerCase()
+  
+  // 检测是否在小程序环境中
+  // 小程序的 userAgent 通常包含特定的标识
+  if (/micromessenger|alipay|swan|toutiao|qq|kuaishou/i.test(userAgent)) {
+    return `plugin://face-liveness-detector/static/${relativePath}`
+  }
+  
+  // 默认使用 H5/Web 路径
+  return `/uni_modules/face-liveness-detector/static/${relativePath}`
 }
 
 /**

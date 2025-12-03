@@ -23,7 +23,8 @@ export default [
         tsconfig: './tsconfig.json',
         declaration: true,
         declarationDir: './dist/types',
-        declarationMap: true
+        declarationMap: true,
+        exclude: ['src/uniapp-*.ts']
       })
     ]
   },
@@ -52,7 +53,8 @@ export default [
         tsconfig: './tsconfig.json',
         declaration: false,
         declarationDir: undefined,
-        declarationMap: false
+        declarationMap: false,
+        exclude: ['src/uniapp-*.ts']
       })
     ]
   }

@@ -1,7 +1,6 @@
 import resolve from '@rollup/plugin-node-resolve'
 import commonjs from '@rollup/plugin-commonjs'
 import typescript from '@rollup/plugin-typescript'
-import copy from 'rollup-plugin-copy'
 import terser from '@rollup/plugin-terser'
 
 /**
@@ -11,11 +10,11 @@ import terser from '@rollup/plugin-terser'
  * - Core face detection library
  * - @vladmandic/human (face detection engine)
  * - @techstark/opencv-js (image processing)
- * - All AI models references (copied separately)
- * - All WASM files (copied separately)
+ * 
+ * Note: AI models and WASM files are copied separately by uniapp/build.cjs
+ * using copy-models.cjs and download-wasm.cjs scripts
  * 
  * UniApp plugins expect UMD format only - ESM is not used in plugin distribution.
- * Both bundles are patched after build to fix opencv.js UMD issue.
  */
 
 const isProduction = process.env.NODE_ENV === 'production'
@@ -25,15 +24,15 @@ export default [
   {
     input: 'src/index.ts',
     output: {
-      file: 'dist/uniapp/face-detection-sdk.js',
+      file: 'dist-uniapp/build/face-detection-sdk.js',
       format: 'umd',
       name: 'FaceLivenessDetector',
       sourcemap: !isProduction,
       exports: 'named',
       globals: {}
     },
-    // Bundle everything: human, opencv, models, wasm
-    // Users get a completely self-contained module requiring zero external dependencies
+    // Bundle everything: human, opencv
+    // Models and WASM are handled separately by build.cjs
     external: [],
     plugins: [
       resolve({
@@ -45,17 +44,10 @@ export default [
         include: 'node_modules/**'
       }),
       typescript({
-        tsconfig: './tsconfig.json',
+        tsconfig: './uniapp/tsconfig.json',
         declaration: true,
-        declarationDir: './dist/uniapp/types',
+        declarationDir: './dist-uniapp/build/types',
         declarationMap: true
-      }),
-      // Copy model files to dist
-      copy({
-        targets: [
-          { src: 'demos/vue-demo/public/models/*', dest: 'dist/uniapp/models' },
-          { src: 'demos/vue-demo/public/wasm/*', dest: 'dist/uniapp/wasm' }
-        ]
       }),
       // Minify in production
       isProduction && terser()

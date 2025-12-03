@@ -1,5 +1,3 @@
-> **语言 / Languages:** [中文](#) · [English](./README.md)
-
 # 人脸检测引擎
 
 一个基于 **[Human.js](https://github.com/vladmandic/human)** 和 **[OpenCV.js](https://github.com/TechStark/opencv-js)** 的纯前端实时人脸活体检测引擎。这个基于 TypeScript 的 npm 包提供实时人脸检测、双重活体验证（静默 + 动作检测）、自动最佳帧选择和防欺骗功能 - 所有处理都 100% 在浏览器中运行，零后端依赖。

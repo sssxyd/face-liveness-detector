@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "lib": ["ES2020", "DOM"],
+    "declaration": true,
+    "declarationDir": "../dist-uniapp/build/types",
+    "declarationMap": true,
+    "outDir": "../dist-uniapp/build",
+    "rootDir": "../src",
+    "moduleResolution": "node",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "allowSyntheticDefaultImports": true,
+    "sourceMap": true
+  },
+  "include": ["../src/**/*"],
+  "exclude": ["../node_modules", "../dist", "../dist-uniapp", "../**/*.spec.ts"]
+}
