@@ -1,3 +1,5 @@
+[中文](./README_zh.md) | [English](./README.md)
+
 # Face Detection Engine
 
 A pure frontend, real-time face liveness detection engine built on **[Human.js](https://github.com/vladmandic/human)** and **[OpenCV.js](https://github.com/TechStark/opencv-js)**. This TypeScript-based npm package provides real-time face detection, dual liveness verification (silent + action-based), automatic best frame selection, and anti-spoofing capabilities - all running 100% in the browser with zero backend dependency.
@@ -9,7 +11,6 @@ A pure frontend, real-time face liveness detection engine built on **[Human.js](
 - 🧠 **Dual Detection Modes** - Both silent liveness detection and action-based detection (blink, mouth open, nod) with automatic best frame selection
 - ⚡ **Pure JavaScript & Event-Driven** - 100% TypeScript, reactive event architecture, seamless integration with any frontend framework (Vue, React, Angular, Svelte, or vanilla JS)
 - 🎯 **Comprehensive Face Analysis** - Real-time anti-spoofing, quality assessment, frontality detection, and blur detection
-- 🛡️ **Advanced Anti-Spoofing** - Real-time liveness score and spoofing detection
 
 ## 🚀 Try Online Demo
 
