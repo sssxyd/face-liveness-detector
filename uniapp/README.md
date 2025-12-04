@@ -1,13 +1,13 @@
-# 人脸检测引擎
+# 人脸活体检测 UniApp 插件
 
-一个基于 **[Human.js](https://github.com/vladmandic/human)** 和 **[OpenCV.js](https://github.com/TechStark/opencv-js)** 的纯前端实时人脸活体检测引擎。这个基于 TypeScript 的 npm 包提供实时人脸检测、双重活体验证（静默 + 动作检测）、自动最佳帧选择和防欺骗功能 - 所有处理都 100% 在浏览器中运行，零后端依赖。
+一个针对 **uni-app App 应用** 的人脸活体检测插件，基于 **[Human.js](https://github.com/vladmandic/human)** 和 **[OpenCV.js](https://github.com/TechStark/opencv-js)** 实现。提供实时人脸检测、双重活体验证（静默 + 动作检测）、自动最佳帧选择和防欺骗功能 - 所有处理都 100% 在客户端运行，零后端依赖。
 
 ## 功能特性
 
-- 💯 **纯前端实现** - 零后端依赖，所有处理在浏览器中本地运行
-- 🔬 **混合 TensorFlow + OpenCV 方案** - 结合 TensorFlow.js 进行 AI 检测和 OpenCV.js 进行图像处理
+- 💯 **纯客户端实现** - 零后端依赖，所有处理在客户端本地运行
+- 🔬 **完整的检测能力** - 集成 TensorFlow.js 进行 AI 检测和 OpenCV.js 进行图像处理
 - 🧠 **双检测模式** - 支持静默活体检测和动作检测（眨眼、张嘴、点头），自动选择最佳帧
-- ⚡ **纯 JavaScript 和事件驱动** - 100% TypeScript，响应式事件架构，与任何前端框架（Vue、React、Angular、Svelte 或原生 JS）无缝集成
+- ⚡ **开箱即用** - 所有依赖和资源已打包，无需额外配置
 - 🎯 **全面的人脸分析** - 实时防欺骗、质量评估、正面度检测和模糊检测
 - 🛡️ **高级防欺骗** - 实时活体分数和欺骗检测
 
@@ -21,141 +21,117 @@
 
 ## 安装
 
-```bash
-npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
-```
+### 从 DCloud 插件市场安装（推荐）
+1. 打开 HBuilderX
+2. 进入 `工具 → 插件市场`
+3. 搜索 `sssxyd-facedetection`
+4. 点击 `导入` 将插件导入到项目的 `uni_modules` 目录
 
-或使用 yarn：
-```bash
-yarn add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
-```
+### 手动安装
+将 `sssxyd-facedetection` 文件夹复制到项目的 `uni_modules` 目录
 
-或使用 pnpm：
-```bash
-pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
-```
-
-> **注意**：`@vladmandic/human` 和 `@techstark/opencv-js` 是对等依赖，必须单独安装以避免捆绑大型库。如果您在项目的其他地方已经使用这些库，这样做可以减小最终的打包大小。
-
-## 快速开始 - 使用本地资源
-
-> ⚠️ **重要提示**：`@techstark/opencv-js` 包含一个 ESM 不兼容的 UMD 格式 OpenCV.js 库，**会导致加载失败**。您必须应用补丁脚本。
-> - **问题链接**：https://github.com/TechStark/opencv-js/issues/44
-> - **补丁脚本**：[patch-opencv.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/patch-opencv.js)
-> - **设置方法**：添加到 `package.json` 的脚本中作为 `postinstall` 钩子，在依赖安装后自动应用
-
-> ⚠️ **重要提示**：`@vladmandic/human` 需要下载大型模型文件和 TensorFlow WASM 后端文件。**没有这些资源组件将无法加载**。下载它们到您的项目目录并配置路径。
-> - **模型下载脚本**：[copy-models.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/copy-models.js)
-> - **WASM 下载脚本**：[download-wasm.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/download-wasm.js)
-> - **设置方法**：运行两个脚本作为 `postinstall` 钩子，然后在引擎配置中配置路径
+## 快速开始
 
 ```typescript
-import FaceDetectionEngine, { LivenessAction } from '@sssxyd/face-liveness-detector'
+import { FaceLivenessDetectorSDK } from 'uni_modules/sssxyd-facedetection/js_sdk/face-detection-sdk.js'
+import { LivenessAction } from 'uni_modules/sssxyd-facedetection/js_sdk/face-detection-sdk.js'
 
-// 使用自定义配置初始化引擎
-const engine = new FaceDetectionEngine({
-  // 配置资源路径
-  human_model_path: '/models',
-  tensorflow_wasm_path: '/wasm',
-  
+export default {
+  data() {
+    return {
+      detector: null
+    }
+  },
+  async mounted() {
+    // 创建检测器实例（资源路径自动获取）
+    this.detector = new FaceLivenessDetectorSDK({    
+      min_face_ratio: 0.5,
+      max_face_ratio: 0.9,
+      liveness_action_count: 1,
+      liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD]
+    })
+    
+    // 监听事件
+    this.detector.on('detector-loaded', (data) => {
+      console.log('✅ 检测器已准备')
+      console.log(`OpenCV: ${data.opencv_version}`)
+      console.log(`Human.js: ${data.human_version}`)
+    })
+    
+    this.detector.on('detector-info', (data) => {
+      // 实时检测信息
+      console.log({
+        quality: (data.quality * 100).toFixed(1) + '%',
+        frontal: (data.frontal * 100).toFixed(1) + '%',
+        liveness: (data.live * 100).toFixed(1) + '%',
+        realness: (data.real * 100).toFixed(1) + '%'
+      })
+    })
+    
+    this.detector.on('detector-action', (data) => {
+      // 动作活体提示
+      if (data.status === 'started') {
+        console.log(`请执行动作: ${data.action}`)
+      } else if (data.status === 'completed') {
+        console.log(`✅ 动作识别成功: ${data.action}`)
+      }
+    })
+    
+    this.detector.on('detector-finish', (data) => {
+      if (data.success) {
+        console.log('✅ 活体验证通过！')
+        console.log({
+          silentDetections: data.silentPassedCount,
+          actionsCompleted: data.actionPassedCount,
+          imageQuality: (data.bestQualityScore * 100).toFixed(1) + '%',
+          totalTime: (data.totalTime / 1000).toFixed(2) + 's',
+          bestFrame: data.bestFrameImage,  // Base64 编码
+          bestFace: data.bestFaceImage     // Base64 编码
+        })
+      } else {
+        console.log('❌ 活体验证失败')
+      }
+    })
+    
+    this.detector.on('detector-error', (error) => {
+      console.error(`错误 [${error.code}]: ${error.message}`)
+    })
+    
+    // 初始化检测器
+    await this.detector.initialize()
+  },
+  methods: {
+    async startDetection() {
+      const video = document.getElementById('face-detection-video') as HTMLVideoElement
+      await this.detector.startDetection(video)
+    }
+  }
+}
+```
+
+## 配置说明
+
+所有配置都有默认值，无强制配置。常用配置：
+
+```typescript
+const detector = new FaceLivenessDetectorSDK({
   // 检测设置
   video_width: 640,
   video_height: 640,
+  video_mirror: true,
   
   // 质量设置
-  min_image_quality: 0.5,
-  min_face_frontal: 0.9,
+  min_face_ratio: 0.3,      // 最小人脸占比
+  max_face_ratio: 0.9,      // 最大人脸占比
+  min_face_frontal: 0.9,    // 最小人脸正对度
+  min_image_quality: 0.5,   // 最小图像质量
   
-  // 活体设置 - 选择您偏好的动作
-  liveness_action_count: 1,  // 0 表示仅静默检测，1-3 表示动作检测
+  // 活体设置
+  silent_detect_count: 3,       // 静默检测次数
+  liveness_action_count: 1,     // 动作检测次数（0-3）
   liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD]
 })
-
-// 监听事件
-engine.on('detector-loaded', (data) => {
-  console.log('✅ 引擎已就绪')
-  console.log(`OpenCV: ${data.opencv_version}`)
-  console.log(`Human.js: ${data.human_version}`)
-})
-
-engine.on('detector-info', (data) => {
-  // 实时检测信息
-  console.log({
-    quality: (data.quality * 100).toFixed(1) + '%',
-    frontal: (data.frontal * 100).toFixed(1) + '%',
-    liveness: (data.live * 100).toFixed(1) + '%',
-    realness: (data.real * 100).toFixed(1) + '%'
-  })
-})
-
-engine.on('detector-action', (data) => {
-  // 动作活体提示
-  if (data.status === 'started') {
-    console.log(`请执行动作: ${data.action}`)
-  } else if (data.status === 'completed') {
-    console.log(`✅ 动作识别成功: ${data.action}`)
-  }
-})
-
-engine.on('detector-finish', (data) => {
-  if (data.success) {
-    console.log('✅ 活体验证通过！')
-    console.log({
-      silentDetections: data.silentPassedCount,
-      actionsCompleted: data.actionPassedCount,
-      imageQuality: (data.bestQualityScore * 100).toFixed(1) + '%',
-      totalTime: (data.totalTime / 1000).toFixed(2) + 's',
-      bestFrame: data.bestFrameImage,  // Base64 编码
-      bestFace: data.bestFaceImage     // Base64 编码
-    })
-  } else {
-    console.log('❌ 活体验证失败')
-  }
-})
-
-engine.on('detector-error', (error) => {
-  console.error(`错误 [${error.code}]: ${error.message}`)
-})
-
-engine.on('detector-debug', (debug) => {
-  console.log(`[${debug.stage}] ${debug.message}`)
-})
-
-// 初始化并开始检测
-async function runDetection() {
-  try {
-    // 初始化库（模型、TensorFlow WASM 等）
-    await engine.initialize()
-    
-    // 获取视频元素
-    const videoElement = document.getElementById('video') as HTMLVideoElement
-    
-    // 在视频流上开始检测
-    await engine.startDetection(videoElement)
-    
-    // 检测一直运行到完成或出错
-    // 如需停止可手动调用:
-    // engine.stopDetection(true)  // true 表示显示最佳图像
-  } catch (error) {
-    console.error('检测启动失败:', error)
-  }
-}
-
-// 就绪时调用
-runDetection()
 ```
-
-## 配置
-
-### FaceDetectionEngineConfig
-
-#### 资源路径
-
-| 属性 | 类型 | 描述 | 默认值 |
-|-----|------|------|--------|
-| `human_model_path` | `string` | Human.js 模型文件路径 | `undefined` |
-| `tensorflow_wasm_path` | `string` | TensorFlow WASM 文件路径 | `undefined` |
-| `tensorflow_backend` | `'auto' \| 'webgl' \| 'wasm'` | TensorFlow 后端选择 | `'auto'` |
 
 #### 视频检测设置
 
@@ -556,76 +532,8 @@ enum ErrorCode {
 演示包括：
 - 完整的 Vue 3 与 TypeScript 集成
 - 实时检测可视化
-- 配置面板用于尝试不同设置
 - 所有引擎事件的事件处理示例
-- 显示详细检测信息的调试面板
-- 移动端和桌面端响应式 UI 设计
 - 错误处理和用户反馈模式
-- 结果导出和图像捕获示例
-
-本地运行演示：
-
-```bash
-cd demos/vue-demo
-npm install
-npm run dev
-```
-
-然后在浏览器中打开显示的本地 URL 查看检测引擎运行情况。
-
-## 下载并托管模型文件
-
-为了避免 CDN 依赖并提高性能，您可以在本地下载模型文件：
-
-### 可用的下载脚本
-
-根目录提供了两个脚本：
-
-#### 1. 复制 Human.js 模型
-
-```bash
-node copy-human-models.js
-```
-
-**功能：**
-- 从 `node_modules/@vladmandic/human/models` 复制人脸检测模型
-- 保存到 `public/models/` 目录
-- 下载 `.json` 和 `.bin` 模型文件
-- 显示文件大小和进度
-
-#### 2. 下载 TensorFlow.js WASM 文件
-
-```bash
-node download-tensorflow-wasm.js
-```
-
-**功能：**
-- 下载 TensorFlow.js WASM 后端文件
-- 保存到 `public/wasm/` 目录
-- 下载 4 个关键文件：
-  - `tf-backend-wasm.min.js`
-  - `tfjs-backend-wasm.wasm`
-  - `tfjs-backend-wasm-simd.wasm`
-  - `tfjs-backend-wasm-threaded-simd.wasm`
-- **支持多个 CDN 源**，并自动回退：
-  1. unpkg.com（主要）
-  2. cdn.jsdelivr.net（备用）
-  3. esm.sh（备选）
-  4. cdn.esm.sh（最后选择）
-
-### 配置使用本地文件
-
-下载完成后，配置引擎使用这些本地文件：
-
-```typescript
-const engine = new FaceDetectionEngine({
-  // 使用本地文件而不是 CDN
-  human_model_path: '/models',
-  tensorflow_wasm_path: '/wasm',
-  
-  // 其他配置...
-})
-```
 
 ## 浏览器需求
 
@@ -633,61 +541,36 @@ const engine = new FaceDetectionEngine({
 - getUserMedia 需要 HTTPS（开发环境可用 localhost）
 - WebGL 或 WASM 后端支持
 
-## 性能优化建议
+## 常见问题
 
-1. **调整检测帧延迟** - 延迟越大 = CPU 使用越低，但检测越慢
-   ```typescript
-   engine.updateConfig({ detection_frame_delay: 200 })
-   ```
+### Q: 如何在应用启动时预加载模型文件？
+A: 在应用入口调用 `preloadResources()`：
+```typescript
+import { preloadResources } from 'uni_modules/sssxyd-facedetection/js_sdk/face-detection-sdk.js'
+await preloadResources()
+```
 
-2. **减小画布尺寸** - 更小的画布处理更快
-   ```typescript
-   engine.updateConfig({ 
-     video_width: 480,
-     video_height: 480
-   })
-   ```
+### Q: 如何查看实时检测信息？
+A: 监听 `detector-info` 事件：
+```typescript
+detector.on('detector-info', (data) => {
+  console.log('人脸占比:', (data.size * 100).toFixed(1) + '%')
+  console.log('正对度:', (data.frontal * 100).toFixed(1) + '%')
+  console.log('图像质量:', (data.quality * 100).toFixed(1) + '%')
+})
+```
 
-3. **优化光线条件** - 更好的光线 = 更好的检测
-   - 避免背光
-   - 确保人脸光线充足
+### Q: 如何停止检测？
+A: 调用 `stopDetection()`：
+```typescript
+detector.stopDetection(true)  // true 表示显示最佳图像
+```
 
-4. **监控调试输出** - 使用调试事件识别瓶颈
-   ```typescript
-   engine.on('detector-debug', (debug) => {
-     if (debug.stage === 'detection') {
-       console.time(debug.message)
-     }
-   })
-   ```
+### Q: 如何保证用户隐私？
+A: 所有检测都在客户端完成，图像数据不会上传到服务器，完全保护用户隐私。
 
-## 故障排除
+## 获取帮助
 
-### "摄像头访问被拒"
-- 确保使用 HTTPS（开发环境可用 localhost）
-- 检查浏览器权限
-- 用户必须授予摄像头访问权限
-
-### "视频加载超时"
-- 检查网络连接
-- 验证模型文件是否可访问
-- 增加 `video_load_timeout`
-
-### 检测精度不佳
-- 确保光线充足
-- 保持人脸在画面中居中
-- 人脸应占画面的 50-90%
-- 人脸应正面（不倾斜）
-
-### CPU 使用率过高
-- 增加 `detection_frame_delay`
-- 减小 `video_width` 和 `video_height`
-- 禁用 `show_action_prompt`（如不需要）
-
-## 许可证
-
-MIT
-
-## 支持
-
-如有问题，请访问：https://github.com/sssxyd/face-liveness-detector/issues
+- **查看完整文档**：[INSTALL.md](./INSTALL.md)
+- **提交问题**：https://github.com/sssxyd/face-liveness-detector/issues
+- **DCloud 官方文档**：https://uniapp.dcloud.net.cn/

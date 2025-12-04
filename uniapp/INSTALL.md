@@ -1,27 +1,34 @@
 # DCloud 插件安装指南
 
+## 适用场景
+
+本插件针对 **App 应用开发**（iOS、Android、HarmonyOS），提供统一的人脸活体检测能力。
+
+> **提示**：
+> - **Web/H5 开发**：建议直接使用 npm 包 `@sssxyd/face-liveness-detector`，无需通过 uni-app 插件
+> - **App 开发**：推荐使用本插件，获得更好的集成体验
+
 ## 系统要求
 
 ### 开发环境
 - HBuilderX 3.0+ (推荐 4.0+)
 - Node.js 14+
 
-### 运行环境
+### 运行环境（App 应用）
 
 #### uni-app
-- **H5 平台**：现代浏览器（Chrome、Firefox、Safari、Edge）
-- **App 平台**：
-  - iOS 12+
-  - Android 5.0+ (API 21+)
+- **iOS**：iOS 12+
+- **Android**：Android 5.0+ (API 21+)
   - 需要 WASM 和 WebGL 支持
 
 #### uni-app x（推荐）
 - 最低版本：4.0+
 - 支持平台：HarmonyOS、Android、iOS
+- 特点：原生引擎，完整的 WASM 和 GPU 支持
 
-### 浏览器需求
-- 支持 WebGL 的现代浏览器
+### 技术要求
 - 支持 WebAssembly (WASM)
+- 支持 WebGL 或硬件加速
 - 支持 getUserMedia (摄像头权限)
 
 ## 安装步骤
@@ -115,26 +122,33 @@ const detector = new FaceLivenessDetectorSDK({
 
 ## 平台支持
 
-| 平台 | 支持 | 说明 |
-|------|------|------|
-| iOS App | ✅ | iOS 12+ (uni-app 或 uni-app x) |
-| Android App | ✅ | Android 5.0+ (uni-app 或 uni-app x) |
-| H5/Web | ✅ | 需要 HTTPS 或 localhost |
-| HarmonyOS | ✅ | uni-app x 4.0+ (推荐) |
-| 微信小程序 | ❌ | 不支持 WASM 和 WebGL |
-| 支付宝小程序 | ❌ | 不支持 WASM 和 WebGL |
-| 抖音/头条小程序 | ❌ | 不支持 WASM 和 WebGL |
-| 其他小程序 | ❌ | 不支持 WASM 和 WebGL |
-| 快应用-华为 | ❌ | 不支持 WASM 和完整 WebGL |
-| 快应用-联盟 | ❌ | 不支持 WASM 和完整 WebGL |
+| 平台 | 支持 | 版本要求 |
+|------|------|---------|
+| iOS App | ✅ | iOS 12+ (uni-app 3.0+ 或 uni-app x 4.0+) |
+| Android App | ✅ | Android 5.0+ (API 21+) (uni-app 3.0+ 或 uni-app x 4.0+) |
+| HarmonyOS App | ✅ | uni-app x 4.0+ (推荐) |
 
-### 不支持的平台说明
+### 不支持的平台
 
-#### 小程序平台（微信、支付宝、抖音/头条等）
-本插件依赖 WebAssembly、WebGL 和标准摄像头 API (getUserMedia)，这些在小程序沙箱环境中不可用。
+| 平台 | 原因 |
+|------|------|
+| H5/Web | ✅ 建议直接使用 npm 包，无需 uni-app 插件 |
+| 微信小程序 | ❌ 不支持 WASM 和 WebGL |
+| 支付宝小程序 | ❌ 不支持 WASM 和 WebGL |
+| 抖音/头条小程序 | ❌ 不支持 WASM 和 WebGL |
+| 其他小程序 | ❌ 不支持 WASM 和 WebGL |
+| 快应用-华为 | ❌ 不支持 WASM 和完整 WebGL |
+| 快应用-联盟 | ❌ 不支持 WASM 和完整 WebGL |
 
-#### 快应用平台（华为、OPPO、小米、vivo 等）
-快应用使用轻量级 JavaScript 引擎，不支持 WebAssembly，无法加载 OpenCV.js 和 TensorFlow.js WASM 后端，且 WebGL 支持不完整。
+### Web/H5 开发建议
+
+如果你的项目是 **Web/H5 应用**，请直接使用 npm 包：
+
+```bash
+npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
+```
+
+参考完整文档：[GitHub README](https://github.com/sssxyd/face-liveness-detector#readme)
 
 ## 常见问题
 

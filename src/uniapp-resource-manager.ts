@@ -177,38 +177,106 @@ export function initializeUniAppResources(): void {
 
 /**
  * 预加载资源文件（可选，用于提前缓存）
+ * 加载所有必需的模型文件和 WASM 后端
  */
 export async function preloadResources(): Promise<boolean> {
   const env = detectUniAppEnvironment()
   
   if (!env.isUniApp || !env.modelPath || !env.wasmPath) {
+    console.warn('[FaceDetectionEngine] Cannot preload: UniApp environment not detected or paths not available')
     return false
   }
   
   try {
-    // 尝试预加载关键资源
-    const criticalFiles = [
-      'models.json',
-      'tf-backend-wasm.min.js'
+    console.log('[FaceDetectionEngine] Starting resource preload...')
+    
+    // 需要预加载的关键资源列表
+    const resourcesLoads = [
+      // 1. 模型索引文件
+      fetch(`${env.modelPath}models.json`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load models.json: ${r.statusText}`)
+        return r.json()
+      }),
+      
+      // 2. 人脸检测模型（必需）
+      fetch(`${env.modelPath}blazeface.json`).then(r => r.json()),
+      fetch(`${env.modelPath}blazeface.bin`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load blazeface.bin: ${r.statusText}`)
+        return r.arrayBuffer()
+      }),
+      
+      // 3. 人脸网格模型（必需）
+      fetch(`${env.modelPath}facemesh.json`).then(r => r.json()),
+      fetch(`${env.modelPath}facemesh.bin`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load facemesh.bin: ${r.statusText}`)
+        return r.arrayBuffer()
+      }),
+      
+      // 4. 虹膜检测模型（可选但推荐）
+      fetch(`${env.modelPath}iris_landmark.json`).catch(() => null),
+      fetch(`${env.modelPath}iris_landmark.bin`).catch(() => null),
+      
+      // 5. 活体检测模型（推荐）
+      fetch(`${env.modelPath}liveness.json`).then(r => r.json()),
+      fetch(`${env.modelPath}liveness.bin`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load liveness.bin: ${r.statusText}`)
+        return r.arrayBuffer()
+      }),
+      
+      // 6. 防欺骗检测模型（推荐）
+      fetch(`${env.modelPath}antispoof.json`).then(r => r.json()),
+      fetch(`${env.modelPath}antispoof.bin`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load antispoof.bin: ${r.statusText}`)
+        return r.arrayBuffer()
+      }),
+      
+      // 7. WASM 后端 JavaScript
+      fetch(`${env.wasmPath}tf-backend-wasm.min.js`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load tf-backend-wasm.min.js: ${r.statusText}`)
+        return r.text()
+      }),
+      
+      // 8. WASM 二进制文件
+      fetch(`${env.wasmPath}tfjs-backend-wasm.wasm`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load tfjs-backend-wasm.wasm: ${r.statusText}`)
+        return r.arrayBuffer()
+      }),
+      
+      // 9. WASM SIMD 版本（性能优化）
+      fetch(`${env.wasmPath}tfjs-backend-wasm-simd.wasm`).catch(() => null),
+      
+      // 10. WASM 多线程版本（性能优化）
+      fetch(`${env.wasmPath}tfjs-backend-wasm-threaded-simd.wasm`).catch(() => null)
     ]
     
-    const results = await Promise.allSettled(
-      criticalFiles.map(file => 
-        checkResourceExists(
-          file.includes('.json') 
-            ? `${env.modelPath}${file}`
-            : `${env.wasmPath}${file}`
-        )
-      )
-    )
+    const results = await Promise.allSettled(resourcesLoads)
     
-    const allExist = results.every(r => r.status === 'fulfilled' && r.value)
+    // 统计加载结果
+    const successful = results.filter(r => r.status === 'fulfilled' && r.value !== null).length
+    const failed = results.filter(r => r.status === 'rejected' || (r.status === 'fulfilled' && r.value === null)).length
     
-    if (allExist) {
-      console.log('[FaceDetectionEngine] All critical resources are available')
+    console.log(`[FaceDetectionEngine] Resource preload completed: ${successful} succeeded, ${failed} failed/optional`)
+    
+    // 记录失败的资源
+    if (failed > 0) {
+      results.forEach((r, index) => {
+        if (r.status === 'rejected') {
+          console.warn(`[FaceDetectionEngine] Failed to preload resource ${index}:`, r.reason)
+        }
+      })
+    }
+    
+    // 只要关键资源加载成功就返回 true
+    // 关键资源：models.json, blazeface, facemesh, liveness, antispoof, wasm
+    const criticalLoads = results.slice(0, 12)
+    const criticalSuccessful = criticalLoads.filter(r => r.status === 'fulfilled' && r.value !== null).length
+    const allCriticalLoaded = criticalSuccessful >= 10 // 至少加载主要的模型和 WASM
+    
+    if (allCriticalLoaded) {
+      console.log('[FaceDetectionEngine] All critical resources preloaded successfully')
       return true
     } else {
-      console.warn('[FaceDetectionEngine] Some resources are missing')
+      console.error('[FaceDetectionEngine] Some critical resources failed to preload')
       return false
     }
   } catch (error) {
