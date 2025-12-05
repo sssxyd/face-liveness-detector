@@ -22,17 +22,6 @@ const PLUGIN_DIR = path.join(ROOT_DIR, 'dist-uniapp', PLUGIN_ID)
 
 console.log('🚀 Building UniApp SDK Plugin...\n')
 
-// Step 0: Patch opencv.js for ESM compatibility
-console.log('📦 Step 0: Patching opencv.js...')
-try {
-  execSync(`node "${path.join(__dirname, 'patch-opencv.cjs')}"`, { stdio: 'inherit' })
-  console.log('✅ OpenCV patch completed\n')
-} catch (error) {
-  console.error('⚠️  OpenCV patch failed, continuing anyway:', error.message)
-  console.log('⚠️  Note: ESM bundle may have compatibility issues\n')
-  // Don't exit, patch is optional
-}
-
 // Step 1: Clean previous builds
 console.log('📦 Step 1: Cleaning previous builds...')
 try {
@@ -58,19 +47,13 @@ try {
 console.log('📦 Step 2.5: Verifying build output...')
 try {
   const umdBundlePath = path.join(BUILD_DIR, 'face-detection-sdk.js')
-  const esmBundlePath = path.join(BUILD_DIR, 'face-detection-sdk.esm.js')
   
   if (!fs.existsSync(umdBundlePath)) {
     throw new Error(`UMD Bundle not found at ${umdBundlePath}`)
   }
-  if (!fs.existsSync(esmBundlePath)) {
-    throw new Error(`ESM Bundle not found at ${esmBundlePath}`)
-  }
   
   const umdSize = (fs.statSync(umdBundlePath).size / 1024).toFixed(2)
-  const esmSize = (fs.statSync(esmBundlePath).size / 1024).toFixed(2)
-  console.log(`✅ UMD Bundle verified (${umdSize} KB)`)
-  console.log(`✅ ESM Bundle verified (${esmSize} KB)\n`)
+  console.log(`✅ UMD Bundle verified (${umdSize} KB)\n`)
 } catch (error) {
   console.error('❌ Bundle verification failed:', error.message)
   process.exit(1)
@@ -85,15 +68,10 @@ try {
   fs.ensureDirSync(path.join(PLUGIN_DIR, 'static', 'wasm'))
   fs.ensureDirSync(path.join(PLUGIN_DIR, 'changelog'))
 
-  // Copy SDK files (both UMD and ESM)
+  // Copy SDK file (UMD)
   fs.copySync(
     path.join(BUILD_DIR, 'face-detection-sdk.js'),
     path.join(PLUGIN_DIR, 'js_sdk', 'face-detection-sdk.js')
-  )
-  
-  fs.copySync(
-    path.join(BUILD_DIR, 'face-detection-sdk.esm.js'),
-    path.join(PLUGIN_DIR, 'js_sdk', 'face-detection-sdk.esm.js')
   )
 
   // Copy types if available

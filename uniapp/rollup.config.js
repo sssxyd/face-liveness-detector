@@ -54,36 +54,5 @@ export default [
       // Minify in production
       isProduction && terser()
     ].filter(Boolean)
-  },
-  // ESM Bundle - Modern module format
-  {
-    input: 'src/index.ts',
-    output: {
-      file: 'dist-uniapp/build/face-detection-sdk.esm.js',
-      format: 'esm',
-      sourcemap: !isProduction,
-      exports: 'named'
-    },
-    // Don't bundle Node.js modules that opencv.js tries to import
-    // These will be handled gracefully by opencv in browser environment
-    external: ['fs', 'path', 'util', 'stream'],
-    plugins: [
-      resolve({
-        browser: true,
-        preferBuiltins: false,
-        extensions: ['.mjs', '.js', '.json', '.node']
-      }),
-      commonjs({
-        include: 'node_modules/**',
-        // Ignore warnings about circular dependencies and Node.js modules
-        ignore: ['fs', 'path', 'util', 'stream']
-      }),
-      typescript({
-        tsconfig: './uniapp/tsconfig.json',
-        declaration: false
-      }),
-      // Minify in production
-      isProduction && terser()
-    ].filter(Boolean)
   }
 ]
