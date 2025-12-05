@@ -3,6 +3,8 @@ dist/
 dist-*/
 types/
 *.tsbuildinfo
+unpackage/
+uni_modules/
 
 # Logs
 logs

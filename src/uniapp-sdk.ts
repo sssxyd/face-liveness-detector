@@ -41,7 +41,7 @@ import {
  * UniApp Face Liveness Detection SDK
  * Wrapper around FaceDetectionEngine optimized for UniApp
  */
-export class FaceLivenessDetectorSDK extends FaceDetectionEngine {
+export class UniAppFaceDetectionEngine extends FaceDetectionEngine {
   private resourcesInitialized: boolean = false
   private resourcesPreloaded: boolean = false
 
@@ -153,8 +153,8 @@ export class FaceLivenessDetectorSDK extends FaceDetectionEngine {
  * })
  * ```
  */
-export function createSDK(config?: Partial<FaceDetectionEngineConfig>): FaceLivenessDetectorSDK {
-  return new FaceLivenessDetectorSDK(config)
+export function createSDK(config?: Partial<FaceDetectionEngineConfig>): UniAppFaceDetectionEngine {
+  return new UniAppFaceDetectionEngine(config)
 }
 
 /**
@@ -216,4 +216,4 @@ export {
   preloadResources
 } from './uniapp-resource-manager'
 
-export default FaceLivenessDetectorSDK
+export default UniAppFaceDetectionEngine

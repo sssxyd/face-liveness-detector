@@ -1190,4 +1190,6 @@ export { preloadOpenCV, getCvSync, getOpenCVVersion, detectBrowserEngine } from 
 
 export { SimpleEventEmitter } from './event-emitter'
 
+export { UniAppFaceDetectionEngine, createSDK, checkEnvironmentSupport } from './uniapp-sdk'
+
 export default FaceDetectionEngine

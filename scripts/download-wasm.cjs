@@ -49,17 +49,18 @@ const SCRIPT_DIR = getScriptDir();
 const PROJECT_ROOT = findProjectRoot(SCRIPT_DIR);
 
 // Get output directory from command line argument
-const outputDirArg = process.argv[2];
+const outputDirArg = process.argv[2]
 if (!outputDirArg) {
   console.error('❌ Error: Output directory argument is required');
   console.error('Usage: node scripts/download-wasm.cjs <output-directory>');
   console.error('Example: node scripts/download-wasm.cjs ../uniapp/wasm');
-  process.exit(1);
+  process.exit(1)
 }
 
+// Support both absolute and relative paths
 const LOCAL_DIR = path.isAbsolute(outputDirArg) 
   ? outputDirArg 
-  : path.join(PROJECT_ROOT, outputDirArg);
+  : path.join(PROJECT_ROOT, outputDirArg)
 
 /**
  * Read TensorFlow version from Human.js package.json in node_modules
@@ -116,8 +117,6 @@ const CDN_SOURCES = [
   `https://esm.sh/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
   `https://cdn.esm.sh/@tensorflow/tfjs-backend-wasm@${WASM_VERSION}/dist`,
 ];
-
-let CDN_URL = CDN_SOURCES[0];
 
 // 需要下载的文件列表
 const FILES_TO_DOWNLOAD = [
@@ -182,9 +181,10 @@ function downloadFile(url, destPath, retries = 3, cdnIndex = 0) {
           file.destroy();
           fs.unlink(destPath, () => {});
           
-          // If 404 or other error, try next CDN
-          if (response.statusCode === 404 && cdnIndex < CDN_SOURCES.length - 1) {
-            console.log(`  🔄 Current CDN does not have this file, switching to backup CDN source...`);
+          // Try next CDN on any error (404, 500, etc.)
+          if (cdnIndex < CDN_SOURCES.length - 1) {
+            const statusDescr = response.statusCode === 404 ? 'file not found' : `error ${response.statusCode}`;
+            console.log(`  🔄 Current CDN has ${statusDescr}, switching to backup CDN source...`);
             const newCdnIndex = cdnIndex + 1;
             const newUrl = url.replace(CDN_SOURCES[cdnIndex], CDN_SOURCES[newCdnIndex]);
             downloadFile(newUrl, destPath, 3, newCdnIndex)
@@ -281,12 +281,12 @@ async function main() {
     console.log('\n[2/3] Downloading files...\n');
     const failedFiles = [];
     for (const filename of FILES_TO_DOWNLOAD) {
-      const url = `${CDN_URL}/${filename}`;
+      const url = `${CDN_SOURCES[0]}/${filename}`;
       const destPath = path.join(LOCAL_DIR, filename);
       
       console.log(`\n  Downloading: ${filename}`);
       try {
-        await downloadFile(url, destPath);
+        await downloadFile(url, destPath, 3, 0);
       } catch (err) {
         console.error(`  ✗ Download failed: ${err.message}`);
         failedFiles.push(filename);

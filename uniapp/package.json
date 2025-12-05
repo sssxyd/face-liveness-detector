@@ -1,0 +1,39 @@
+{
+  "name": "xuydap-facedetection",
+  "version": "0.3.5",
+  "description": "纯前端实现的活体人脸静默/动作检测APP端JS-SDK",
+  "main": "js_sdk/face-detection-sdk.js",
+  "types": "js_sdk/types/index.d.ts",
+  "files": [
+    "js_sdk",
+    "static",
+    "plugin.json",
+    "README.md",
+    "INSTALL.md",
+    "changelog"
+  ],
+  "keywords": [
+    "face-detection",
+    "liveness-detection",
+    "uniapp",
+    "anti-spoofing"
+  ],
+  "author": "xuyd <sssxyd@gmail.com>",
+  "license": "MIT",
+  "plugin": {
+    "permissions": [
+      {
+        "name": "CAMERA",
+        "reason": "Used for face detection and liveness verification"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sssxyd/face-liveness-detector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sssxyd/face-liveness-detector/issues"
+  },
+  "homepage": "https://github.com/sssxyd/face-liveness-detector#readme"
+}

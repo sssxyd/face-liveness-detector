@@ -24,7 +24,6 @@ export default [
         declaration: true,
         declarationDir: './dist/types',
         declarationMap: true,
-        exclude: ['src/uniapp-*.ts']
       })
     ]
   },
@@ -54,7 +53,6 @@ export default [
         declaration: false,
         declarationDir: undefined,
         declarationMap: false,
-        exclude: ['src/uniapp-*.ts']
       })
     ]
   }

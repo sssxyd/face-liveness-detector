@@ -36,18 +36,18 @@
 ### 1. 从 DCloud 插件市场安装（推荐）
 1. 打开 HBuilderX
 2. 进入 `工具 → 插件市场`
-3. 搜索 `sssxyd-facedetection`
+3. 搜索 `xuydap-facedetection`
 4. 点击`导入`将插件导入到项目的 `uni_modules` 目录
 
 ### 2. 手动安装
-将整个 `sssxyd-facedetection` 文件夹复制到项目的 `uni_modules` 目录
+将整个 `xuydap-facedetection` 文件夹复制到项目的 `uni_modules` 目录
 
 ### 3. 在项目中使用
 
 #### 在 Vue 3 + TypeScript 中使用
 
 ```typescript
-import { FaceLivenessDetectorSDK } from 'uni_modules/sssxyd-facedetection/js_sdk/face-detection-sdk.js'
+import { FaceLivenessDetectorSDK } from 'uni_modules/xuydap-facedetection/js_sdk/face-detection-sdk.js'
 
 export default {
   data() {
@@ -100,8 +100,8 @@ export default {
 ```typescript
 const detector = new FaceLivenessDetectorSDK({
   // 资源路径（自动检测）
-  human_model_path: '/uni_modules/sssxyd-facedetection/static/models/',
-  tensorflow_wasm_path: '/uni_modules/sssxyd-facedetection/static/wasm/',
+  human_model_path: '/uni_modules/xuydap-facedetection/static/models/',
+  tensorflow_wasm_path: '/uni_modules/xuydap-facedetection/static/wasm/',
   
   // 检测设置
   video_width: 640,
@@ -155,7 +155,7 @@ npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-j
 ### Q: 如何在应用启动时预加载模型文件？
 A: 在应用入口调用 `preloadResources()`：
 ```typescript
-import { preloadResources } from 'uni_modules/sssxyd-facedetection/js_sdk/face-detection-sdk.js'
+import { preloadResources } from 'uni_modules/xuydap-facedetection/js_sdk/face-detection-sdk.js'
 await preloadResources()
 ```
 

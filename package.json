@@ -33,6 +33,8 @@
     "build:watch": "rollup -c rollup.config.js -w",
     "build:uniapp": "rollup -c uniapp/rollup.config.js",
     "package:uniapp": "node uniapp/build.cjs",
+    "download-wasm:plugin": "node uniapp/download-wasm-plugin.cjs",
+    "install:uniapp": "node uniapp/install-plugin.cjs",
     "dev": "npm run build:watch",
     "clean": "rm -rf dist types",
     "type-check": "tsc --noEmit",

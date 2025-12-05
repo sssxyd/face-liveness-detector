@@ -13,9 +13,25 @@ const { execSync } = require('child_process')
 
 const ROOT_DIR = path.join(__dirname, '..')
 const BUILD_DIR = path.join(ROOT_DIR, 'dist-uniapp', 'build')
-const PLUGIN_DIR = path.join(ROOT_DIR, 'dist-uniapp', 'sssxyd-facedetection')
+
+// Read plugin name from uniapp/package.json
+const uniappPackageJson = fs.readJsonSync(path.join(__dirname, 'package.json'))
+const PLUGIN_ID = uniappPackageJson.name
+const PLUGIN_VERSION = uniappPackageJson.version
+const PLUGIN_DIR = path.join(ROOT_DIR, 'dist-uniapp', PLUGIN_ID)
 
 console.log('🚀 Building UniApp SDK Plugin...\n')
+
+// Step 0: Patch opencv.js for ESM compatibility
+console.log('📦 Step 0: Patching opencv.js...')
+try {
+  execSync(`node "${path.join(__dirname, 'patch-opencv.cjs')}"`, { stdio: 'inherit' })
+  console.log('✅ OpenCV patch completed\n')
+} catch (error) {
+  console.error('⚠️  OpenCV patch failed, continuing anyway:', error.message)
+  console.log('⚠️  Note: ESM bundle may have compatibility issues\n')
+  // Don't exit, patch is optional
+}
 
 // Step 1: Clean previous builds
 console.log('📦 Step 1: Cleaning previous builds...')
@@ -41,11 +57,20 @@ try {
 // Step 2.5: Verify build output exists
 console.log('📦 Step 2.5: Verifying build output...')
 try {
-  const bundlePath = path.join(BUILD_DIR, 'face-detection-sdk.js')
-  if (!fs.existsSync(bundlePath)) {
-    throw new Error(`Bundle not found at ${bundlePath}`)
+  const umdBundlePath = path.join(BUILD_DIR, 'face-detection-sdk.js')
+  const esmBundlePath = path.join(BUILD_DIR, 'face-detection-sdk.esm.js')
+  
+  if (!fs.existsSync(umdBundlePath)) {
+    throw new Error(`UMD Bundle not found at ${umdBundlePath}`)
   }
-  console.log(`✅ Bundle verified (${(fs.statSync(bundlePath).size / 1024).toFixed(2)} KB)\n`)
+  if (!fs.existsSync(esmBundlePath)) {
+    throw new Error(`ESM Bundle not found at ${esmBundlePath}`)
+  }
+  
+  const umdSize = (fs.statSync(umdBundlePath).size / 1024).toFixed(2)
+  const esmSize = (fs.statSync(esmBundlePath).size / 1024).toFixed(2)
+  console.log(`✅ UMD Bundle verified (${umdSize} KB)`)
+  console.log(`✅ ESM Bundle verified (${esmSize} KB)\n`)
 } catch (error) {
   console.error('❌ Bundle verification failed:', error.message)
   process.exit(1)
@@ -60,10 +85,15 @@ try {
   fs.ensureDirSync(path.join(PLUGIN_DIR, 'static', 'wasm'))
   fs.ensureDirSync(path.join(PLUGIN_DIR, 'changelog'))
 
-  // Copy SDK files
+  // Copy SDK files (both UMD and ESM)
   fs.copySync(
     path.join(BUILD_DIR, 'face-detection-sdk.js'),
     path.join(PLUGIN_DIR, 'js_sdk', 'face-detection-sdk.js')
+  )
+  
+  fs.copySync(
+    path.join(BUILD_DIR, 'face-detection-sdk.esm.js'),
+    path.join(PLUGIN_DIR, 'js_sdk', 'face-detection-sdk.esm.js')
   )
 
   // Copy types if available
@@ -92,38 +122,36 @@ try {
   process.exit(1)
 }
 
-// Step 3.6: Download WASM using download-wasm.cjs
+// Step 3.6: Download WASM using download-wasm-plugin.cjs
 console.log('📦 Step 3.6: Downloading TensorFlow.js WASM files...')
+console.log('   (This step can be retried later if it fails)\n')
 try {
   const wasmOutputDir = path.join(PLUGIN_DIR, 'static', 'wasm')
-  execSync(`node "${path.join(ROOT_DIR, 'scripts', 'download-wasm.cjs')}" "${wasmOutputDir}"`, {
+  execSync(`node "${path.join(__dirname, 'download-wasm-plugin.cjs')}" "${wasmOutputDir}"`, {
     stdio: 'inherit',
     cwd: ROOT_DIR
   })
   console.log('✅ WASM files downloaded\n')
 } catch (error) {
-  console.error('❌ Error downloading WASM:', error.message)
-  console.log('⚠️  Continuing build without WASM files...\n')
+  console.error('⚠️  Error downloading WASM:', error.message)
+  console.log('⚠️  You can retry later with: npm run download-wasm:plugin\n')
+  console.log('ℹ️  Continuing build without WASM files...')
+  console.log('    The plugin will use online CDN resources instead.\n')
   // Don't exit, WASM is optional - can use CDN fallback
 }
 
 // Step 4: Create plugin.json (DCloud format)
 console.log('📦 Step 4: Creating plugin configuration...')
 try {
-  const packageJson = fs.readJsonSync(path.join(ROOT_DIR, 'package.json'))
+  const uniappPackageJson = fs.readJsonSync(path.join(ROOT_DIR, 'uniapp', 'package.json'))
   
   const pluginConfig = {
-    name: 'sssxyd-facedetection',
-    version: packageJson.version,
-    description: packageJson.description,
-    author: packageJson.author,
-    license: packageJson.license,
-    permissions: [
-      {
-        'name': 'CAMERA',
-        'reason': 'Used for face detection and liveness verification'
-      }
-    ]
+    name: PLUGIN_ID,
+    version: PLUGIN_VERSION,
+    description: uniappPackageJson.description,
+    author: uniappPackageJson.author,
+    license: uniappPackageJson.license,
+    ...uniappPackageJson.plugin
   }
 
   fs.writeJsonSync(
@@ -155,50 +183,20 @@ try {
   process.exit(1)
 }
 
-// Step 6: Create package manifest
-console.log('📦 Step 6: Creating package manifest...')
+// Step 6: Copy package manifest
+console.log('📦 Step 6: Copying package manifest...')
 try {
-  const mainPkg = fs.readJsonSync(path.join(ROOT_DIR, 'package.json'))
+  const pkgSourcePath = path.join(ROOT_DIR, 'uniapp', 'package.json')
+  const pkgDestPath = path.join(PLUGIN_DIR, 'package.json')
   
-  const packageJson = {
-    name: 'sssxyd-facedetection',
-    version: mainPkg.version,
-    description: mainPkg.description,
-    main: 'js_sdk/face-detection-sdk.js',
-    types: 'js_sdk/types/index.d.ts',
-    files: [
-      'js_sdk',
-      'static',
-      'plugin.json',
-      'README.md',
-      'changelog'
-    ],
-    keywords: mainPkg.keywords || [
-      'face-detection',
-      'liveness-detection',
-      'uniapp',
-      'anti-spoofing'
-    ],
-    author: mainPkg.author,
-    license: mainPkg.license,
-    peerDependencies: mainPkg.peerDependencies || {
-      '@vladmandic/human': '^3.3.0',
-      '@techstark/opencv-js': '^4.12.0-release.1'
-    },
-    repository: mainPkg.repository,
-    bugs: mainPkg.bugs,
-    homepage: mainPkg.homepage
+  if (!fs.existsSync(pkgSourcePath)) {
+    throw new Error(`uniapp/package.json not found at ${pkgSourcePath}`)
   }
-
-  fs.writeJsonSync(
-    path.join(PLUGIN_DIR, 'package.json'),
-    packageJson,
-    { spaces: 2 }
-  )
-
-  console.log('✅ Package manifest created\n')
+  
+  fs.copyFileSync(pkgSourcePath, pkgDestPath)
+  console.log('✅ Package manifest copied\n')
 } catch (error) {
-  console.error('❌ Error creating package manifest:', error.message)
+  console.error('❌ Error copying package manifest:', error.message)
   process.exit(1)
 }
 
@@ -244,12 +242,23 @@ try {
 }
 
 console.log('✅ UniApp SDK Plugin build completed!')
-console.log(`\n📁 Plugin ID: sssxyd-facedetection`)
-console.log(`📁 Output directory: ${PLUGIN_DIR}\n`)
+
+try {
+  const uniappPackageJson = fs.readJsonSync(path.join(ROOT_DIR, 'uniapp', 'package.json'))
+  const pluginName = uniappPackageJson.name
+  
+  console.log(`\n📁 Plugin ID: ${pluginName}`)
+  console.log(`📁 Output directory: ${PLUGIN_DIR}\n`)
+} catch (error) {
+  console.error('⚠️  Could not read plugin ID from uniapp/package.json')
+  console.log(`📁 Output directory: ${PLUGIN_DIR}\n`)
+}
+
 
 console.log('📋 Package contents:')
 console.log('  ├── js_sdk/')
 console.log('  │   ├── face-detection-sdk.js (UMD bundle - complete & self-contained)')
+console.log('  │   ├── face-detection-sdk.esm.js (ESM bundle - modern module format)')
 console.log('  │   └── types/ (TypeScript definitions)')
 console.log('  ├── static/')
 console.log('  │   ├── models/ (AI models)')
@@ -261,20 +270,8 @@ console.log('  ├── INSTALL.md (installation guide)')
 console.log('  └── changelog/ (update logs)\n')
 
 console.log('🚀 Next steps:')
-console.log('  1. Review the generated plugin in dist-uniapp/sssxyd-facedetection')
+console.log(`  1. Review the generated plugin in dist-uniapp/${PLUGIN_ID}`)
 console.log('  2. Update changelog with release notes')
 console.log('  3. Compress the folder and upload to DCloud plugin marketplace')
 console.log('  4. Plugin marketplace: https://ext.dcloud.net.cn/')
-console.log('  5. Plugin ID: sssxyd-facedetection\n')
-
-/**
- * Get version from package.json
- */
-function getPackageVersion() {
-  try {
-    const pkg = fs.readJsonSync(path.join(ROOT_DIR, 'package.json'))
-    return pkg.version || '0.0.0'
-  } catch (error) {
-    return '0.0.0'
-  }
-}
+console.log(`  5. Plugin ID: ${PLUGIN_ID}\n`)
