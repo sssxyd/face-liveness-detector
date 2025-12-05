@@ -30,27 +30,25 @@
 	</view>
 </template>
 
-<script lang="ts">
-import { defineComponent } from 'vue'
-
-export default defineComponent({
+<script>
+export default {
 	data() {
 		return {
 		}
 	},
 	
-	onLoad(): void {
+	onLoad() {
 		console.log('Main page loaded')
 	},
 	
 	methods: {
-		navigateToFaceDetection(): void {
+		navigateToFaceDetection() {
 			uni.navigateTo({
 				url: '/pages/face-detection/index'
 			})
 		}
 	}
-})
+}
 </script>
 
 <style>
