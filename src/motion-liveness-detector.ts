@@ -1,30 +1,30 @@
 /**
- * Motion and Liveness Detection - Photo Attack Prevention
- * Detects subtle facial movements and motion patterns to distinguish real faces from high-quality photos
+ * 运动和活体检测 - 防止照片攻击
+ * 检测微妙的面部运动和运动模式，以区分真实面孔和高质量照片
  */
 
 import type { FaceResult, GestureResult } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
 
 /**
- * Motion detection result
+ * 运动检测结果
  */
 export interface MotionDetectionResult {
-  // Overall motion score (0-1)
+  // 总体运动评分 (0-1)
   motionScore: number
-  // Optical flow magnitude in face region
+  // 人脸区域的光流幅度
   opticalFlowMagnitude: number
-  // Keypoint stability score (0 = stable like photo, 1 = natural movement)
+  // 关键点稳定性评分 (0 = 像照片一样稳定, 1 = 自然运动)
   keypointVariance: number
-  // Eye region motion intensity
+  // 眼睛区域运动强度
   eyeMotionScore: number
-  // Mouth region motion intensity
+  // 嘴巴区域运动强度
   mouthMotionScore: number
-  // Detected motion type ('none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression')
+  // 检测到的运动类型 ('none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression')
   motionType: MotionType
-  // Overall liveness verdict based on motion
+  // 基于运动的总体活体性判断
   isLively: boolean
-  // Detailed debug info
+  // 详细调试信息
   details: {
     frameCount: number
     avgKeypointDistance: number
@@ -38,36 +38,36 @@ export interface MotionDetectionResult {
 export type MotionType = 'none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression'
 
 /**
- * Motion liveness detector options
+ * 运动活体检测选项
  */
 export interface MotionLivenessDetectorOptions {
-  // Minimum motion score threshold for liveness detection (0-1)
+  // 活体检测的最小运动评分阈值 (0-1)
   minMotionThreshold?: number
-  // Minimum keypoint variance threshold (0-1)
+  // 最小关键点方差阈值 (0-1)
   minKeypointVariance?: number
-  // Frame buffer size for motion history analysis
+  // 运动历史分析的帧缓冲区大小
   frameBufferSize?: number
-  // Eye aspect ratio threshold for blink detection (0-1)
+  // 眨眼检测的眼睛宽高比阈值 (0-1)
   eyeAspectRatioThreshold?: number
 }
 
 /**
- * Internal face keypoints interface
+ * 内部面部关键点接口
  */
 interface FaceKeypoints {
-  // 468 face landmarks from face mesh
+  // 来自面部网格的 468 个面部标志点
   landmarks?: any[][]
-  // Left eye keypoints
+  // 左眼关键点
   leftEye?: any[][]
-  // Right eye keypoints
+  // 右眼关键点
   rightEye?: any[][]
-  // Mouth keypoints
+  // 嘴巴关键点
   mouth?: any[][]
 }
 
 /**
- * Motion liveness detector
- * Uses optical flow, keypoint tracking, and facial feature analysis
+ * 运动活体检测器
+ * 使用光流、关键点跟踪和面部特征分析
  */
 export class MotionLivenessDetector {
   // Configuration with default values
@@ -98,6 +98,10 @@ export class MotionLivenessDetector {
     this.cv = cvInstance
   }
 
+  isReady(): boolean {
+    return this.frameBuffer.length >= this.frameBufferSize
+  }
+
   /**
    * Reset motion detection state
    */
@@ -117,13 +121,13 @@ export class MotionLivenessDetector {
    * Analyze motion and liveness from current frame and history
    */
   analyzeMotion(
-    currentFrame: HTMLCanvasElement,
+    currentFrameMat: any,
     currentFace: FaceResult,
     faceBox: Box
   ): MotionDetectionResult {
     try {
       // Add current frame to buffer
-      this.addFrameToBuffer(currentFrame)
+      this.addFrameToBuffer(currentFrameMat)
 
       // Extract keypoints from current face
       const currentKeypoints = this.extractKeypoints(currentFace)
@@ -214,17 +218,10 @@ export class MotionLivenessDetector {
   /**
    * Add frame to circular buffer
    */
-  private addFrameToBuffer(frame: HTMLCanvasElement): void {
-    if (!this.cv) {
-      console.warn('OpenCV not available, skipping frame buffer')
-      return
-    }
+  private addFrameToBuffer(frameMat: any): void {
 
     try {
-      const mat = this.cv.imread(frame)
-      const gray = new this.cv.Mat()
-      this.cv.cvtColor(mat, gray, this.cv.COLOR_RGBA2GRAY)
-      mat.delete() // 立即释放原始 Mat
+      const gray = frameMat.clone()
       
       this.frameBuffer.push(gray)
       
@@ -239,19 +236,24 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Extract face keypoints from Human.js face result
+   * 从 Human.js 面部检测结果中提取面部关键点
+   * 使用网格标志点（来自 MediaPipe Face Mesh 模型的 468 个点）
    */
   private extractKeypoints(face: FaceResult): FaceKeypoints {
     const keypoints: FaceKeypoints = {}
 
-    // Extract landmarks (468 points from face mesh)
-    if ((face as any).landmarks && Array.isArray((face as any).landmarks)) {
-      keypoints.landmarks = (face as any).landmarks
+    // 提取网格标志点（来自面部网格的 468 个点）
+    if (face.mesh && Array.isArray(face.mesh)) {
+      keypoints.landmarks = face.mesh
     }
 
-    // Extract eye regions (simplified detection from face mesh landmarks)
+    // 从网格标志点中提取眼睛和嘴巴区域
+    // MediaPipe Face Mesh 标志点索引：
+    // 左眼：362, 385, 387, 390, 25, 55, 154, 133
+    // 右眼：33, 160, 158, 133, 153, 144
+    // 嘴巴：61, 185, 40, 39, 37, 0, 267, 269, 270, 409
     if (keypoints.landmarks && keypoints.landmarks.length >= 468) {
-      // Left eye: landmarks around indices 362, 385, 387, 390, 25, 55, 154, 133
+      // 左眼关键点
       keypoints.leftEye = [
         keypoints.landmarks[362],
         keypoints.landmarks[385],
@@ -259,9 +261,9 @@ export class MotionLivenessDetector {
         keypoints.landmarks[390],
         keypoints.landmarks[25],
         keypoints.landmarks[55]
-      ]
+      ].filter(point => point !== undefined)
 
-      // Right eye: landmarks around indices 33, 160, 158, 133, 153, 144
+      // 右眼关键点
       keypoints.rightEye = [
         keypoints.landmarks[33],
         keypoints.landmarks[160],
@@ -269,9 +271,9 @@ export class MotionLivenessDetector {
         keypoints.landmarks[133],
         keypoints.landmarks[153],
         keypoints.landmarks[144]
-      ]
+      ].filter(point => point !== undefined)
 
-      // Mouth: landmarks around indices 61, 185, 40, 39, 37, 0, 267, 269, 270, 409
+      // 嘴巴关键点
       keypoints.mouth = [
         keypoints.landmarks[61],
         keypoints.landmarks[185],
@@ -283,15 +285,15 @@ export class MotionLivenessDetector {
         keypoints.landmarks[269],
         keypoints.landmarks[270],
         keypoints.landmarks[409]
-      ]
+      ].filter(point => point !== undefined)
     }
 
     return keypoints
   }
 
   /**
-   * Calculate optical flow magnitude (requires OpenCV)
-   * Detects pixel movement between frames
+   * 计算光流幅度（需要 OpenCV）
+   * 检测帧之间的像素运动
    */
   private analyzeOpticalFlow(): number {
     if (!this.cv || this.frameBuffer.length < 2) {
@@ -302,7 +304,7 @@ export class MotionLivenessDetector {
       const prevFrame = this.frameBuffer[this.frameBuffer.length - 2]
       const currFrame = this.frameBuffer[this.frameBuffer.length - 1]
 
-      // 直接使用已经是灰度的 Mat，无需转换
+      // 直接使用已经是灰度图的 Mat，无需转换
       const flow = new this.cv.Mat()
       this.cv.calcOpticalFlowFarneback(
         prevFrame,
@@ -322,7 +324,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Convert canvas to OpenCV Mat with optional grayscale conversion
+   * 将 canvas 转换为 OpenCV Mat，支持可选的灰度转换
    */
   private canvasToMat(canvas: HTMLCanvasElement, type?: 'gray'): any {
     if (!this.cv) return null
@@ -343,7 +345,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate average magnitude of optical flow
+   * 计算光流的平均幅度
    */
   private calculateFlowMagnitude(flowMat: any): number {
     if (!flowMat || flowMat.empty()) {
@@ -355,7 +357,7 @@ export class MotionLivenessDetector {
       let sumMagnitude = 0
       let count = 0
 
-      // Process flow vectors (2 values per pixel: x and y components)
+      // 处理光流向量（每个像素 2 个值：x 和 y 分量）
       for (let i = 0; i < flowData.length; i += 2) {
         const fx = flowData[i]
         const fy = flowData[i + 1]
@@ -364,7 +366,7 @@ export class MotionLivenessDetector {
         count++
       }
 
-      // Normalize to 0-1 range (max expected flow is around 20 pixels/frame)
+      // 归一化到 0-1 范围（最大预期光流约为 20 像素/帧）
       const avgMagnitude = count > 0 ? sumMagnitude / count : 0
       return Math.min(avgMagnitude / 20, 1)
     } catch (error) {
@@ -374,9 +376,9 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate variance in keypoint positions across frames
-   * High variance = natural movement (lively)
-   * Low variance = static like a photo
+   * 计算关键点位置在帧间的方差
+   * 高方差 = 自然运动（活跃）
+   * 低方差 = 静止如照片
    */
   private calculateKeypointVariance(): number {
     if (this.keypointHistory.length < 2) {
@@ -386,7 +388,7 @@ export class MotionLivenessDetector {
     try {
       const distances: number[] = []
 
-      // Compare consecutive frames
+      // 比较连续的帧
       for (let i = 1; i < this.keypointHistory.length; i++) {
         const prevKeypoints = this.keypointHistory[i - 1]
         const currKeypoints = this.keypointHistory[i]
@@ -404,12 +406,12 @@ export class MotionLivenessDetector {
         return 0
       }
 
-      // Calculate variance of distances
+      // 计算距离的方差
       const mean = distances.reduce((a, b) => a + b, 0) / distances.length
       const variance = distances.reduce((a, d) => a + (d - mean) ** 2, 0) / distances.length
       const stdDev = Math.sqrt(variance)
 
-      // Normalize to 0-1 range (normalize by expected natural variation ~5 pixels)
+      // 归一化到 0-1 范围（按预期的自然变化 ~5 像素归一化）
       return Math.min(stdDev / 5, 1)
     } catch (error) {
       console.warn('[MotionLivenessDetector] Keypoint variance calculation failed:', error)
@@ -418,7 +420,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate average distance between corresponding landmarks in two frames
+   * 计算两帧中对应标志点之间的平均距离
    */
   private calculateLandmarkDistance(landmarks1: any[][], landmarks2: any[][]): number {
     if (!landmarks1 || !landmarks2 || landmarks1.length !== landmarks2.length) {
@@ -445,7 +447,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate average keypoint distance across all frames
+   * 计算所有帧中的平均关键点距离
    */
   private calculateAvgKeypointDistance(): number {
     if (this.keypointHistory.length < 2) {
@@ -473,7 +475,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate maximum keypoint distance across frames
+   * 计算帧间的最大关键点距离
    */
   private calculateMaxKeypointDistance(): number {
     if (this.keypointHistory.length < 2) {
@@ -499,8 +501,8 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate eye aspect ratio (EAR)
-   * Used to detect blinking and eye opening variations
+   * 计算眼睛宽高比 (EAR)
+   * 用于检测眨眼和眼睛开度变化
    */
   private calculateEyeAspectRatio(eyeKeypoints: any[][]): number {
     if (!eyeKeypoints || eyeKeypoints.length < 6) {
@@ -508,8 +510,8 @@ export class MotionLivenessDetector {
     }
 
     try {
-      // Eye keypoints: [left-corner, upper-1, upper-2, right-corner, lower-2, lower-1]
-      // Distance between vertical points divided by horizontal distance
+      // 眼睛关键点：[左角, 上-1, 上-2, 右角, 下-2, 下-1]
+      // 垂直点之间的距离除以水平距离
       const leftCorner = eyeKeypoints[0]
       const rightCorner = eyeKeypoints[3]
       const upperLeft = eyeKeypoints[1]
@@ -517,7 +519,7 @@ export class MotionLivenessDetector {
       const lowerLeft = eyeKeypoints[5]
       const lowerRight = eyeKeypoints[4]
 
-      // Euclidean distances
+      // 欧氏距离
       const verticalLeft = this.pointDistance(upperLeft, lowerLeft)
       const verticalRight = this.pointDistance(upperRight, lowerRight)
       const horizontal = this.pointDistance(leftCorner, rightCorner)
@@ -533,8 +535,8 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate mouth aspect ratio (MAR)
-   * Used to detect mouth opening variations
+   * 计算嘴巴宽高比 (MAR)
+   * 用于检测嘴巴张开的变化
    */
   private calculateMouthAspectRatio(mouthKeypoints: any[][]): number {
     if (!mouthKeypoints || mouthKeypoints.length < 6) {
@@ -542,8 +544,8 @@ export class MotionLivenessDetector {
     }
 
     try {
-      // Simple mouth opening detection
-      // Use vertical distance between upper and lower lips
+      // 简单的嘴巴张开检测
+      // 使用上唇和下唇之间的垂直距离
       const upperLipY = mouthKeypoints.slice(0, 5).reduce((sum, p) => sum + (p?.[1] || 0), 0) / 5
       const lowerLipY = mouthKeypoints.slice(5).reduce((sum, p) => sum + (p?.[1] || 0), 0) / 5
       const mouthWidth = this.pointDistance(mouthKeypoints[0], mouthKeypoints[5])
@@ -559,7 +561,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate distance between two points
+   * 计算两个点之间的距离
    */
   private pointDistance(p1: any[], p2: any[]): number {
     if (!p1 || !p2 || p1.length < 2 || p2.length < 2) {
@@ -571,7 +573,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate eye motion score based on eye aspect ratio changes
+   * 基于眼睛宽高比变化计算眼睛运动评分
    */
   private calculateEyeMotionScore(): number {
     if (this.eyeAspectRatioHistory.length < 2) {
@@ -579,17 +581,17 @@ export class MotionLivenessDetector {
     }
 
     const variance = this.calculateVariance(this.eyeAspectRatioHistory)
-    // Check if variance exceeds eye aspect ratio threshold for blink detection
+    // 检查方差是否超过眨眼检测的眼睛宽高比阈值
     if (variance < this.eyeAspectRatioThreshold) {
       return 0
     }
 
-    // Normalize: expected variance for blinking is around 0.05
+    // 归一化：眨眼的预期方差约为 0.05
     return Math.min(variance / 0.05, 1)
   }
 
   /**
-   * Calculate mouth motion score based on mouth aspect ratio changes
+   * 基于嘴巴宽高比变化计算嘴巴运动评分
    */
   private calculateMouthMotionScore(): number {
     if (this.mouthAspectRatioHistory.length < 2) {
@@ -597,19 +599,19 @@ export class MotionLivenessDetector {
     }
 
     const variance = this.calculateVariance(this.mouthAspectRatioHistory)
-    // Normalize: expected variance for mouth movement is around 0.02
+    // 归一化：嘴巴运动的预期方差约为 0.02
     return Math.min(variance / 0.02, 1)
   }
 
   /**
-   * Calculate face area variance
+   * 计算人脸区域方差
    */
   private calculateFaceAreaVariance(): number {
     return this.calculateVariance(this.faceAreaHistory)
   }
 
   /**
-   * Calculate variance of an array of numbers
+   * 计算数字数组的方差
    */
   private calculateVariance(values: number[]): number {
     if (values.length < 2) {
@@ -622,7 +624,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Detect type of motion based on analysis
+   * 基于分析检测运动类型
    */
   private detectMotionType(opticalFlow: number, keypointVariance: number): MotionType {
     if (keypointVariance < 0.01 && opticalFlow < 0.1) {
@@ -630,7 +632,7 @@ export class MotionLivenessDetector {
     }
 
     if (keypointVariance > opticalFlow * 2) {
-      // More keypoint movement than optical flow suggests rotation or expression
+      // 关键点运动多于光流表明旋转或表情变化
       if (
         this.eyeAspectRatioHistory.length >= 2 &&
         this.calculateVariance(this.eyeAspectRatioHistory) > this.eyeAspectRatioThreshold
@@ -644,7 +646,7 @@ export class MotionLivenessDetector {
       return 'translation'
     }
 
-    // Breathing-like motion: consistent small variations
+    // 呼吸运动：一致的小变化
     if (
       this.faceAreaHistory.length >= 2 &&
       this.calculateVariance(this.faceAreaHistory) > 0.001
@@ -656,7 +658,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Calculate overall motion score from multiple sources
+   * 从多个来源计算总体运动评分
    */
   private calculateOverallMotionScore(
     opticalFlow: number,
@@ -664,7 +666,7 @@ export class MotionLivenessDetector {
     eyeMotion: number,
     mouthMotion: number
   ): number {
-    // Weighted combination of different motion indicators
+    // 不同运动指标的加权组合
     const weights = {
       opticalFlow: 0.3,
       keypointVariance: 0.4,
@@ -681,29 +683,29 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Determine if face is lively based on motion analysis
+   * 根据运动分析确定面部是否活跃
    */
   private determineLiveness(
     motionScore: number,
     keypointVariance: number,
     motionType: MotionType
   ): boolean {
-    // Photo characteristics:
-    // - Almost zero motion score (< 0.15)
-    // - Very low keypoint variance (< 0.02)
-    // - Motion type = 'none'
+    // 照片特征：
+    // - 运动评分几乎为零 (< 0.15)
+    // - 关键点方差很低 (< 0.02)
+    // - 运动类型 = 'none'
 
-    // Must have meaningful motion
+    // 必须有有意义的运动
     if (motionScore < this.minMotionThreshold) {
       return false
     }
 
-    // Must have keypoint variation (natural movement)
+    // 必须有关键点变化（自然运动）
     if (keypointVariance < this.minKeypointVariance) {
       return false
     }
 
-    // Motion type 'none' indicates a static photo
+    // 运动类型 'none' 表示静态照片
     if (motionType === 'none') {
       return false
     }
@@ -712,7 +714,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Create empty result when analysis fails
+   * 分析失败时创建空结果
    */
   private createEmptyResult(): MotionDetectionResult {
     return {
@@ -735,7 +737,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Get motion detection results (for debugging)
+   * 获取运动检测结果（用于调试）
    */
   getStatistics(): any {
     return {

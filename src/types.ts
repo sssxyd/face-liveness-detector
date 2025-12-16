@@ -67,11 +67,10 @@ export interface FaceDetectionEngineOptions {
   min_mouth_open_percent?: number // Minimum mouth open percentage for detection
 
   // ========== Motion Liveness Settings (Photo Attack Prevention) ==========
-  enable_motion_liveness?: boolean // Enable motion-based liveness detection
   min_motion_score?: number // Minimum motion score to pass liveness check (0-1)
   min_keypoint_variance?: number // Minimum keypoint variance for natural movement (0-1)
   motion_frame_buffer_size?: number // Number of frames to buffer for motion analysis
-
+  eye_aspect_ratio_threshold?: number // Eye aspect ratio threshold for blink detection
 }
 
 /**
@@ -102,11 +101,13 @@ export interface DetectorActionEventData {
 export interface DetectorInfoEventData {
   passed: boolean  // Whether silent liveness detection passed
   code: DetectionCode // Prompt code
-  size: number     // Face size percentage (0-1)
-  frontal: number  // Face frontality percentage (0-1)
-  quality: number  // Image quality score (0-1)
-  real: number     // Anti-spoofing score (0-1)
-  live: number     // Liveness score (0-1)
+  faceCount: number   // Number of faces detected
+  faceRatio: number     // Face size percentage (0-1)
+  faceFrontal: number  // Face frontality percentage (0-1)
+  imageQuality: number  // Image quality score (0-1)
+  motionScore: number // Motion score (0-1)
+  keypointVariance: number  // Keypoint variance score (0-1)
+  motionType: string  // Type of motion detected
 }
 
 /**

@@ -24,6 +24,21 @@ import { MotionLivenessDetector } from './motion-liveness-detector'
 import { drawCanvasToMat } from './browser_utils'
 
 /**
+ * Detector info parameters
+ */
+interface DetectorInfoParams {
+  passed?: boolean
+  code: DetectionCode
+  faceCount?: number
+  faceRatio?: number
+  faceFrontal?: number
+  imageQuality?: number
+  motionScore?: number
+  keypointVariance?: number
+  motionType?: string
+}
+
+/**
  * Internal detection state interface
  */
 class DetectionState {
@@ -42,6 +57,11 @@ class DetectionState {
 
   constructor(options: Partial<DetectionState>) {
     Object.assign(this, options)
+  }
+
+  reset(): void {
+    this.motionDetector?.reset()
+    Object.assign(this, new DetectionState({}))
   }
 
   // 默认方法
@@ -109,6 +129,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     super()
     this.options = mergeOptions(options)
     this.detectionState = new DetectionState({})
+    this.detectionState.motionDetector = new MotionLivenessDetector({
+      minMotionThreshold: this.options.min_motion_score,
+      minKeypointVariance: this.options.min_keypoint_variance,
+      frameBufferSize: this.options.motion_frame_buffer_size,
+      eyeAspectRatioThreshold: this.options.eye_aspect_ratio_threshold
+    })
   }
 
   /**
@@ -515,7 +541,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Reset detection state
    */
   private resetDetectionState(): void {
-    this.detectionState = new DetectionState({})
+    this.detectionState.reset()
     this.actualVideoWidth = 0
     this.actualVideoHeight = 0
     this.clearFrameCanvas()
@@ -642,16 +668,51 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     const matImage = drawCanvasToMat(this.cv, frameCanvas, true)
 
+    if (!matImage) {
+      this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
+      this.scheduleNextDetection(this.options.error_retry_delay)
+      return
+    }
+
+    if(!this.detectionState.motionDetector){
+      this.emitDebug('detection', 'Motion detector is not initialized', {}, 'warn')
+      this.scheduleNextDetection(this.options.error_retry_delay)
+      return
+    }
+
     try{
+      const motionResult = this.detectionState.motionDetector.analyzeMotion(matImage, face, faceBox)
+      if(this.detectionState.motionDetector.isReady()){
+        // 运动检测器已经准备就绪，其验证结果可信
+        if (!motionResult.isLively) {
+          this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
+            motionScore: motionResult.motionScore,
+            keypointVariance: motionResult.keypointVariance,
+            motionType: motionResult.motionType,
+            minMotionScore: this.options.min_motion_score,
+            minKeypointVariance: this.options.min_keypoint_variance
+          }, 'warn')
+          this.emitDetectorInfo({
+            code: DetectionCode.FACE_NOT_LIVE,
+            motionScore: motionResult.motionScore,
+            keypointVariance: motionResult.keypointVariance,
+            motionType: motionResult.motionType
+          })
+          this.resetDetectionState()
+          this.scheduleNextDetection(this.options.error_retry_delay)
+          return
+        }
+      }
+
       // 计算面部大小比例，不达标则跳过当前帧
       const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
       if (faceRatio <= this.options.min_face_ratio!) {
-        this.emitDetectorInfo(false, DetectionCode.FACE_TOO_SMALL, faceRatio)
+        this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_SMALL, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.options.min_face_ratio!, maxRatio: this.options.max_face_ratio! }, 'info')
         this.scheduleNextDetection(this.options.error_retry_delay)
       }
       if (faceRatio >= this.options.max_face_ratio!) {
-        this.emitDetectorInfo(false, DetectionCode.FACE_TOO_LARGE, faceRatio)
+        this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_LARGE, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.min_face_ratio!, maxRatio: this.options.max_face_ratio! }, 'info')
         this.scheduleNextDetection(this.options.error_retry_delay)
       }
@@ -663,7 +724,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.detectionState.lastFrontalScore = frontal
 
         if (frontal < this.options.min_face_frontal) {
-          this.emitDetectorInfo(false, DetectionCode.FACE_NOT_FRONTAL, faceRatio, frontal)
+          this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_FRONTAL, faceRatio: faceRatio, faceFrontal: frontal})
           this.emitDebug('detection', 'Face is not frontal to camera', { frontal: frontal.toFixed(4), minFrontal: this.options.min_face_frontal! }, 'info')
           this.scheduleNextDetection(this.options.error_retry_delay)
           return
@@ -673,13 +734,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // 计算面部质量，不达标则跳过当前帧
       const qualityResult = calcImageQuality(this.cv, matImage, face, this.actualVideoWidth, this.actualVideoHeight, this.options.image_quality_features, this.options.min_image_quality)
       if (!qualityResult.passed || qualityResult.score < this.options.min_image_quality) {
-        this.emitDetectorInfo(false, DetectionCode.FACE_LOW_QUALITY, faceRatio, frontal, qualityResult.score)
+        this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
         this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.options.min_image_quality }, 'info')
         this.scheduleNextDetection(this.options.error_retry_delay)
         return
       }
 
-      // this.emitDetectorInfo(true, DetectionCode.FACE_CHECK_PASS, faceRatio, frontal, qualityResult.score, face.real || 0, face.live || 0)
+      // 当前帧通过常规检查
+      this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_CHECK_PASS, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
 
       // 处理不同检测阶段的逻辑
       // 检测阶段，图像各方面合规，进入采集阶段
@@ -690,6 +752,29 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // 采集阶段，采集当前帧图像，记录采集次数, 达到指定次数后进入验证阶段
       if (this.detectionState.period === DetectionPeriod.COLLECT) {
         this.handleCollectPhase(qualityResult.score, faceBox, face, frameCanvas)
+      }
+
+      if(this.detectionState.motionDetector.isReady()){
+        // 运动检测器已准备就绪，其验证结果可信
+        // 未通过运动检测器验证，重置状态并跳过当前帧
+        if (!motionResult.isLively) {
+          this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_LIVE, motionScore: motionResult.motionScore, keypointVariance: motionResult.keypointVariance, motionType: motionResult.motionType })
+          this.resetDetectionState()
+          this.scheduleNextDetection(this.options.error_retry_delay)
+          return
+        }
+      } else { // 运动检测器未准备就绪，等待其准备完成
+        this.scheduleNextDetection()
+        return
+      }
+
+      if (this.detectionState.collectCount >= this.options.silent_detect_count) {
+        if (this.getPerformActionCount() > 0) {
+          this.detectionState.period = DetectionPeriod.VERIFY
+          this.emitDebug('detection', 'Entering action verification phase')
+        } else {
+          this.stopDetection(true)
+        }
       }
 
       if (this.detectionState.period === DetectionPeriod.VERIFY) {
@@ -725,45 +810,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Handle collect phase
    */
   private handleCollectPhase(qualityScore: number, faceBox: Box, face: FaceResult, frameCanvas: HTMLCanvasElement): void {
-    // Check motion liveness if enabled
-    if (this.options.enable_motion_liveness && this.detectionState.motionDetector) {
-      const motionResult = this.detectionState.motionDetector.analyzeMotion(frameCanvas, face, faceBox)
-      
-      // Emit motion detection debug info
-      this.emitDebug('motion-detection', 'Motion analysis result', {
-        motionScore: motionResult.motionScore.toFixed(4),
-        keypointVariance: motionResult.keypointVariance.toFixed(4),
-        motionType: motionResult.motionType,
-        isLively: motionResult.isLively,
-        details: motionResult.details
-      })
-
-      // Check if motion liveness passes
-      if (!motionResult.isLively) {
-        this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
-          motionScore: motionResult.motionScore,
-          keypointVariance: motionResult.keypointVariance,
-          motionType: motionResult.motionType,
-          minMotionScore: this.options.min_motion_score,
-          minKeypointVariance: this.options.min_keypoint_variance
-        }, 'warn')
-        
-        // Don't increment collect count if motion check fails
-        this.scheduleNextDetection(this.options.error_retry_delay)
-        return
-      }
-    }
-
     this.collectHighQualityImage(qualityScore, faceBox)
-
-    if (this.detectionState.collectCount >= this.options.silent_detect_count) {
-      if (this.getPerformActionCount() > 0) {
-        this.detectionState.period = DetectionPeriod.VERIFY
-        this.emitDebug('detection', 'Entering action verification phase')
-      } else {
-        this.stopDetection(true)
-      }
-    }
   }
 
   /**
@@ -810,9 +857,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private handleMultipleFaces(faceCount: number): void {
     if (faceCount === 0) {
-      this.emitDetectorInfo(false, DetectionCode.VIDEO_NO_FACE, 0)
+      this.emitDetectorInfo({ code: DetectionCode.VIDEO_NO_FACE, faceCount: 0 })
     } else if (faceCount > 1) {
-      this.emitDetectorInfo(false, DetectionCode.MULTIPLE_FACE, faceCount)
+      this.emitDetectorInfo({ code: DetectionCode.MULTIPLE_FACE, faceCount: faceCount })
     }
 
     if (this.detectionState.period !== DetectionPeriod.DETECT){
@@ -851,8 +898,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
   }
 
-  private emitDetectorInfo(passed: boolean, code: DetectionCode, size: number, frontal: number = 0, quality: number = 0, real: number = 0, live: number = 0): void {
-    this.emit('detector-info' as any, {passed, code, size, frontal, quality, real, live} as DetectorInfoEventData)
+  private emitDetectorInfo(params: DetectorInfoParams): void {
+    this.emit('detector-info' as any, {
+      passed: params.passed ?? false,
+      code: params.code,
+      faceCount: params.faceCount ?? 1,
+      faceRatio: params.faceRatio ?? 0,
+      faceFrontal: params.faceFrontal ?? 0,
+      imageQuality: params.imageQuality ?? 0,
+      motionScore: params.motionScore ?? 0,
+      keypointVariance: params.keypointVariance ?? 0,
+      motionType: params.motionType ?? ''
+    } as DetectorInfoEventData)
   }  
 
   /**

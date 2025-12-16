@@ -52,10 +52,10 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   min_mouth_open_percent: 0.2,
 
   // Motion Liveness Settings
-  enable_motion_liveness: true,
   min_motion_score: 0.15,
   min_keypoint_variance: 0.02,
   motion_frame_buffer_size: 5,
+  eye_aspect_ratio_threshold: 0.15,
 }
 
 /**
