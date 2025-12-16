@@ -33,7 +33,7 @@ export interface ImageQualityFeatures {
  * Main configuration interface for FaceDetectionEngine
  * All settings are flattened as individual properties
  */
-export interface FaceDetectionEngineConfig {
+export interface FaceDetectionEngineOptions {
   // resource paths
   human_model_path?: string
   tensorflow_wasm_path?: string
@@ -66,42 +66,20 @@ export interface FaceDetectionEngineConfig {
   liveness_verify_timeout?: number // Timeout for liveness verification (ms)
   min_mouth_open_percent?: number // Minimum mouth open percentage for detection
 
-}
-
-export interface ResolvedEngineConfig {
-  // resource paths
-  human_model_path: string
-  tensorflow_wasm_path: string
-  tensorflow_backend: 'auto' | 'webgl' | 'wasm'
-
-  // ========== Detection Settings ==========
-  video_width: number
-  video_height: number
-  video_mirror: boolean // Mirror video horizontally (like a mirror)
-  video_load_timeout: number
-  detection_frame_delay: number
-  error_retry_delay: number
-
-  // ========== Collection Settings ==========
-  silent_detect_count: number
-  min_face_ratio: number
-  max_face_ratio: number
-  min_face_frontal: number
-  min_image_quality: number
-  min_real_score: number
-  min_live_score: number
-  suspected_frauds_count: number
-  face_frontal_features: FaceFrontalFeatures
-  image_quality_features: ImageQualityFeatures
-
-  // ========== Liveness Settings ==========
-  liveness_action_list: LivenessAction[]
-  liveness_action_count: number
-  liveness_action_randomize: boolean
-  liveness_verify_timeout: number
-  min_mouth_open_percent: number
+  // ========== Motion Liveness Settings (Photo Attack Prevention) ==========
+  enable_motion_liveness?: boolean // Enable motion-based liveness detection
+  min_motion_score?: number // Minimum motion score to pass liveness check (0-1)
+  min_keypoint_variance?: number // Minimum keypoint variance for natural movement (0-1)
+  motion_frame_buffer_size?: number // Number of frames to buffer for motion analysis
 
 }
+
+/**
+ * Resolved configuration after merging with defaults
+ * All properties are guaranteed to be non-undefined
+ * Used internally as the return type of mergeOptions()
+ */
+export type ResolvedEngineOptions = Required<FaceDetectionEngineOptions>
 
 // ==================== Event Data Interfaces ====================
 

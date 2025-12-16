@@ -88,14 +88,6 @@ const REQUIRED_MODELS = [
   'liveness.json',
   'liveness.bin',
   
-  // Gesture recognition (hand landmarks)
-  'handlandmark-lite.json',
-  'handlandmark-lite.bin',
-
-  // Iris landmark (used by face mesh, but not enabled)
-  'iris_landmark.json',
-  'iris_landmark.bin',
-  
   // Model manifest (required)
   'models.json',
 ];

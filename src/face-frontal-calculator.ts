@@ -11,7 +11,6 @@
  */
 
 import { FaceResult, GestureResult } from '@vladmandic/human'
-import { getCvSync } from './library-loader'
 import { FaceFrontalFeatures } from './types'
 
 
@@ -26,91 +25,67 @@ export interface AngleAnalysisResult {
 }
 
 /**
- * 混合多尺度检测的详细结果
- */
-export interface FrontalDetectionDetails {
-  // 各个维度的检测评分
-  featureSymmetry: number         // 特征点对称性 (0-1)
-  contourSymmetry: number         // 轮廓对称性 (0-1)
-  angleAnalysis: number           // 角度分析评分 (0-1)
-  gestureValidation: number       // 手势验证评分 (0-1)
-  
-  // 综合评分
-  overall: number                 // 综合正对度评分 (0-1)
-  
-  // 详细信息
-  landmarks?: {
-    leftEyeX: number
-    rightEyeX: number
-    eyeSymmetry: number           // 眼睛对称性 (0-1)
-    noseX: number
-    noseCenterScore: number       // 鼻子中心对齐评分 (0-1)
-    mouthLeftX: number
-    mouthRightX: number
-    mouthSymmetry: number         // 嘴角对称性 (0-1)
-  }
-  
-  contour?: {
-    leftEdgeCount: number
-    rightEdgeCount: number
-    symmetryScore: number         // 轮廓对称性评分 (0-1)
-  }
-  
-  angles: {
-    yaw: number
-    pitch: number
-    roll: number
-  }
-}
-
-/**
  * 检查人脸是否正对摄像头 - 主函数（混合多尺度版本）
  * 
  * 使用四层混合检测策略：
  * 1. 特征点对称性检测 (40%) - 最准确
  * 2. 轮廓对称性检测 (35%) - 快速且鲁棒
  * 3. 角度融合分析 (25%) - 补充验证
- * 4. 手势识别验证 - 额外验证
+ * 4. 手势识别验证 - 额外验证（如果提供手势数据）
  * 
- * 直接使用 CONFIG.FACE_FRONTAL 中的参数，不支持运行时覆盖
- * 
- * @param {FaceResult} face - 人脸检测结果（包含 rotation 信息）
- * @param {Array<GestureResult>} gestures - 检测到的手势/表情数组
- * @param {HTMLCanvasElement} canvas - 画布元素（用于 OpenCV 分析）
+ * @param {any} cv - OpenCV 实例（用于轮廓对称性检测）
+ * @param {FaceResult} face - 人脸检测结果（包含 rotation 和 annotations 信息）
+ * @param {Array<GestureResult>} gestures - 检测到的手势/表情数组（可选）
+ * @param {any} matImage - OpenCV Mat 对象（图像数据，用于轮廓检测）
+ * @param {FaceFrontalFeatures} config - 正对度配置参数（包含角度阈值）
  * @returns {number} 正对度评分 (0-1)，1 表示完全正对
  * 
  * @example
- * const score = checkFaceFrontal(face, gestures, canvas)
+ * const mat = drawVideoToMat()
+ * const score = calcFaceFrontal(cv, face, gestures, mat, config)
  * if (score > 0.9) {
  *   console.log('人脸足够正对')
  * }
+ * mat.delete()
  */
-export function checkFaceFrontal(
+export function calcFaceFrontal(
+  cv: any,
   face: FaceResult,
   gestures: Array<GestureResult>,
-  canvas: HTMLCanvasElement,
+  matImage: any,
   config: FaceFrontalFeatures,
 ): number {
-  // 如果有 canvas，使用混合多尺度算法
-  if (canvas) {
-    try {
-      const result = getHybridFrontalDetection(face, gestures, canvas, config)
-      return result.overall
-    } catch (error) {
-      console.warn('[FaceFrontal] Hybrid detection failed, falling back to angle analysis:', error)
-      return checkFaceFrontalWithAngles(face, config)
-    }
-  }
+  try {
+    // 层 1：特征点对称性检测 (40%)
+    const featureResult = detectFeatureSymmetry(face)
+    const featureSymmetry = featureResult.score
 
-  // 无 canvas 时，使用简化版（手势 + 角度）
-  if (gestures && gestures.length > 0) {
-    const frontalScore = checkFaceFrontalWithGestures(gestures)
-    if (frontalScore > 0) {
-      return frontalScore
-    }
-  }
+    // 层 2：轮廓对称性检测 (35%)
+    const contourResult = detectContourSymmetry(cv, face, matImage)
+    const contourSymmetry = contourResult.score
 
-  return checkFaceFrontalWithAngles(face, config)
+    // 层 3：角度融合分析 (25%)
+    const angleAnalysis = checkFaceFrontalWithAngles(face, config)
+
+    // 层 4：手势验证 (全局系数)
+    let gestureValidation = 1.0
+    if (gestures && gestures.length > 0) {
+      const hasFacingCenter = checkFaceFrontalWithGestures(gestures)
+      gestureValidation = hasFacingCenter ? 1 : 0.75  // 手势验证未通过时，降低评分
+    }
+
+    // 综合评分：特征点(40%) + 轮廓(35%) + 角度(25%)
+    // 然后与手势验证(额外验证)相乘以确保手势验证通过
+    const overall =
+      (featureSymmetry * 0.4 +
+      contourSymmetry * 0.35 +
+      angleAnalysis * 0.25) * gestureValidation
+
+    return Math.min(1, overall)
+  } catch (error) {
+    console.warn('[FaceFrontal] Hybrid detection failed, falling back to angle analysis:', error)
+    return checkFaceFrontalWithAngles(face, config)
+  }
 }
 
 /**
@@ -124,23 +99,16 @@ export function checkFaceFrontal(
  * @example
  * const score = checkFaceFrontalWithGestures(result.gesture)
  */
-export function checkFaceFrontalWithGestures(gestures: Array<GestureResult>): number {
+export function checkFaceFrontalWithGestures(gestures: Array<GestureResult>): boolean {
   if (!gestures) {
-    return 0
+    return false
   }
   
   // 检查是否有 facing center 手势
-  const hasFacingCenter = gestures.some((g: GestureResult) => {
+  return gestures.some((g: GestureResult) => {
     if (!g || !g.gesture) return false
     return g.gesture.includes('facing center') || g.gesture.includes('facing camera')
   })
-  
-  // 如果检测到正对手势，返回高分
-  if (hasFacingCenter) {
-    return 0.95  // 手势识别的准确度高，给予较高分
-  }
-  
-  return 0  // 未检测到相关手势
 }
 
 /**
@@ -354,74 +322,6 @@ export function getAdjustmentSuggestions(face: FaceResult, config: FaceFrontalFe
   return suggestions
 }
 
-// ==================== 混合多尺度检测 ====================
-
-/**
- * 获取混合多尺度检测的完整结果
- * 
- * 综合使用四层检测策略：
- * 1. 特征点对称性 (40%)
- * 2. 轮廓对称性 (35%)
- * 3. 角度分析 (25%)
- * 4. 手势验证 (额外)
- */
-export function getHybridFrontalDetection(
-  face: FaceResult,
-  gestures: Array<GestureResult> | undefined,
-  canvas: HTMLCanvasElement,
-  config: FaceFrontalFeatures
-): FrontalDetectionDetails {
-  const details: FrontalDetectionDetails = {
-    featureSymmetry: 1.0,
-    contourSymmetry: 1.0,
-    angleAnalysis: 1.0,
-    gestureValidation: 1.0,
-    overall: 1.0,
-    angles: {
-      yaw: 0,
-      pitch: 0,
-      roll: 0
-    }
-  }
-
-  try {
-    // 层 1：特征点对称性检测 (40%)
-    const featureResult = detectFeatureSymmetry(face)
-    details.featureSymmetry = featureResult.score
-    details.landmarks = featureResult.landmarks
-
-    // 层 2：轮廓对称性检测 (35%)
-    const contourResult = detectContourSymmetry(face, canvas)
-    details.contourSymmetry = contourResult.score
-    details.contour = contourResult.contour
-
-    // 层 3：角度融合分析 (25%)
-    const angleScore = checkFaceFrontalWithAngles(face, config)
-    details.angleAnalysis = angleScore
-    const angles = extractFaceAngles(face)
-    details.angles = { yaw: angles.yaw, pitch: angles.pitch, roll: angles.roll }
-
-    // 层 4：手势验证 (额外验证)
-    if (gestures && gestures.length > 0) {
-      const gestureScore = checkFaceFrontalWithGestures(gestures)
-      details.gestureValidation = gestureScore > 0 ? 0.95 : 0.7
-    }
-
-    // 综合评分
-    const score =
-      details.featureSymmetry * 0.4 +
-      details.contourSymmetry * 0.35 +
-      details.angleAnalysis * 0.25
-
-    details.overall = Math.min(1, score)
-  } catch (error) {
-    console.warn('[FaceFrontal] Hybrid detection calculation failed:', error)
-    details.overall = checkFaceFrontalWithAngles(face, config)
-  }
-
-  return details
-}
-
 // ==================== 层 1：特征点对称性检测 ====================
 
 /**
@@ -432,11 +332,6 @@ function detectFeatureSymmetry(
   face: FaceResult
 ): { score: number; landmarks: any } {
   try {
-    const cv = getCvSync()
-    if (!cv) {
-      return { score: 1.0, landmarks: undefined }
-    }
-
     // 获取人脸的关键点（如果可用）
     const landmarks = extractFaceLandmarks(face)
 
@@ -480,31 +375,44 @@ function detectFeatureSymmetry(
  */
 function extractFaceLandmarks(face: FaceResult): any {
   try {
-    // Human.js 的 FaceResult 可能包含关键点信息
-    // 但结构可能不同，所以这里提供最小实现
-    const lmks = (face as any).landmarks || (face as any).keypoints || []
-
-    if (!lmks || lmks.length < 10) {
+    // Human.js FaceResult 的 annotations 包含各个特征的关键点
+    // FaceLandmark 类型包括: 'leftEye', 'rightEye', 'nose', 'mouth', 等等
+    const annotations = (face as any).annotations
+    
+    if (!annotations) {
       return null
     }
 
-    // 解析关键点
-    let landmarks: any = {
-      leftEye: null,
-      rightEye: null,
-      nose: null,
-      mouthLeft: null,
-      mouthRight: null
+    // 从 annotations 中提取关键点
+    const leftEyePoints = annotations.leftEye || annotations.leftEyeUpper0 || []
+    const rightEyePoints = annotations.rightEye || annotations.rightEyeUpper0 || []
+    const nosePoints = annotations.nose || annotations.noseTip || []
+    const mouthPoints = annotations.mouth || annotations.lipsUpperOuter || []
+
+    // 计算平均位置
+    const getAveragePoint = (points: any[][]): { x: number; y: number } | null => {
+      if (!points || points.length === 0) return null
+      let sumX = 0, sumY = 0
+      for (const point of points) {
+        if (point && point.length >= 2) {
+          sumX += point[0]
+          sumY += point[1]
+        }
+      }
+      return { x: sumX / points.length, y: sumY / points.length }
     }
 
-    // 假设关键点顺序：
-    // 0-1: 左眼, 2-3: 右眼, 4-5: 鼻子, 6-7: 左嘴角, 8-9: 右嘴角
-    if (lmks.length >= 10) {
-      landmarks.leftEye = { x: lmks[0], y: lmks[1] }
-      landmarks.rightEye = { x: lmks[2], y: lmks[3] }
-      landmarks.nose = { x: lmks[4], y: lmks[5] }
-      landmarks.mouthLeft = { x: lmks[6], y: lmks[7] }
-      landmarks.mouthRight = { x: lmks[8], y: lmks[9] }
+    const landmarks: any = {
+      leftEye: getAveragePoint(leftEyePoints),
+      rightEye: getAveragePoint(rightEyePoints),
+      nose: getAveragePoint(nosePoints),
+      mouthLeft: mouthPoints.length > 0 ? { x: mouthPoints[0][0], y: mouthPoints[0][1] } : null,
+      mouthRight: mouthPoints.length > 0 ? { x: mouthPoints[mouthPoints.length - 1][0], y: mouthPoints[mouthPoints.length - 1][1] } : null
+    }
+
+    // 检查是否至少有一些关键点
+    if (Object.values(landmarks).every(v => v === null)) {
+      return null
     }
 
     return landmarks
@@ -584,37 +492,28 @@ function calculateMouthSymmetry(landmarks: any): number {
  * 使用 Sobel 边缘检测分析人脸轮廓的对称性
  */
 function detectContourSymmetry(
+  cv: any,
   face: FaceResult,
-  canvas: HTMLCanvasElement
+  matImage: any
 ): { score: number; contour: any } {
   try {
-    const cv = getCvSync()
-    if (!cv) {
-      return { score: 1.0, contour: undefined }
-    }
-
     if (!face.box) {
       return { score: 1.0, contour: undefined }
     }
 
-    const img = cv.imread(canvas)
     const [x, y, w, h] = face.box
     const x_int = Math.max(0, Math.floor(x))
     const y_int = Math.max(0, Math.floor(y))
-    const w_int = Math.min(w, canvas.width - x_int)
-    const h_int = Math.min(h, canvas.height - y_int)
+    const w_int = Math.min(w, matImage.cols - x_int)
+    const h_int = Math.min(h, matImage.rows - y_int)
 
     if (w_int <= 0 || h_int <= 0) {
-      img.delete()
       return { score: 1.0, contour: undefined }
     }
 
-    const faceRegion = img.roi(new cv.Rect(x_int, y_int, w_int, h_int))
-    const gray = new cv.Mat()
+    const gray = matImage.roi(new cv.Rect(x_int, y_int, w_int, h_int))
 
     try {
-      cv.cvtColor(faceRegion, gray, cv.COLOR_RGBA2GRAY)
-
       // Sobel 边缘检测
       const sobelX = new cv.Mat()
       const sobelY = new cv.Mat()
@@ -637,8 +536,6 @@ function detectContourSymmetry(
             rightEdgeCount: Math.floor(symmetryScore * 1000),
             symmetryScore: symmetryScore
           }
-
-          edgeMap.delete()
           return { score: symmetryScore, contour: contourData }
         } finally {
           edgeMap.delete()
@@ -648,9 +545,7 @@ function detectContourSymmetry(
         sobelY.delete()
       }
     } finally {
-      faceRegion.delete()
       gray.delete()
-      img.delete()
     }
   } catch (error) {
     console.warn('[FaceFrontal] Contour symmetry detection failed:', error)

@@ -23,7 +23,7 @@
 
 import FaceDetectionEngine from './index'
 import type { 
-  FaceDetectionEngineConfig, 
+  FaceDetectionEngineOptions, 
   EventEmitter,
   DetectorFinishEventData,
   DetectorErrorEventData,
@@ -49,11 +49,11 @@ export class UniAppFaceDetectionEngine extends FaceDetectionEngine {
    * Constructor
    * @param config - Configuration object
    */
-  constructor(config?: Partial<FaceDetectionEngineConfig>) {
+  constructor(config?: Partial<FaceDetectionEngineOptions>) {
     // Auto-configure paths for UniApp environment
     const uniAppConfig = detectUniAppEnvironment()
     
-    const finalConfig: Partial<FaceDetectionEngineConfig> = {
+    const finalConfig: Partial<FaceDetectionEngineOptions> = {
       ...config,
       human_model_path: config?.human_model_path || getModelBasePath(),
       tensorflow_wasm_path: config?.tensorflow_wasm_path || getWasmPath()
@@ -153,7 +153,7 @@ export class UniAppFaceDetectionEngine extends FaceDetectionEngine {
  * })
  * ```
  */
-export function createSDK(config?: Partial<FaceDetectionEngineConfig>): UniAppFaceDetectionEngine {
+export function createSDK(config?: Partial<FaceDetectionEngineOptions>): UniAppFaceDetectionEngine {
   return new UniAppFaceDetectionEngine(config)
 }
 
@@ -193,7 +193,7 @@ export function checkEnvironmentSupport(): {
 
 // Export all types and enums from parent
 export type {
-  FaceDetectionEngineConfig,
+  FaceDetectionEngineOptions,
   EventEmitter,
   DetectorFinishEventData,
   DetectorErrorEventData,

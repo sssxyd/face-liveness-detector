@@ -10,7 +10,6 @@
  */
 
 import { FaceResult } from '@vladmandic/human'
-import { getCvSync } from './library-loader'
 import { ImageQualityFeatures } from './types'
 
 // ==================== 接口定义 ====================
@@ -51,37 +50,39 @@ export interface ImageQualityResult {
 // ==================== 主入口函数 ====================
 
 /**
- * 检测图像质量（完整度 + 清晰度）
+ * 计算图像质量（完整度 + 清晰度）
  * 
  * 综合检测：
  * - 人脸完整度（Human.js边界 + OpenCV轮廓）
  * - 图像清晰度（拉普拉斯方差 + Sobel梯度）
  * 
- * @param canvas - 图像源（画布元素）
- * @param face - 人脸检测结果
- * @param imageWidth - 图片宽度
- * @param imageHeight - 图片高度
- * @param config - 检测配置（可选）
- * @returns 综合质量检测结果
- * 
- * @example
- * const result = checkImageQuality(canvas, face, 640, 640)
- * if (result.passed) {
- *   console.log('图像质量良好')
- * } else {
- *   console.log('质量问题：', {
- *     completeness: result.completenessReasons,
- *     blur: result.blurReasons
- *   })
- * }
+ * @param cv - OpenCV.js 对象，用于执行图像处理操作
+ * @param matImage - OpenCV Mat 对象，包含灰度图像数据
+ * @param face - 人脸检测结果，包含人脸框位置和其他检测信息
+ * @param imageWidth - 图片宽度（像素），用于边界检查和完整度计算
+ * @param imageHeight - 图片高度（像素），用于边界检查和完整度计算
+ * @param config - 检测配置对象，包含：
+ *   - require_full_face_in_bounds: 是否要求人脸完全在边界内
+ *   - use_opencv_enhancement: 是否使用 OpenCV 增强检测
+ *   - min_laplacian_variance: 拉普拉斯方差最小阈值
+ *   - min_gradient_sharpness: 梯度清晰度最小阈值
+ * @param threshold - 综合质量评分阈值 (0-1)，大于等于此值判定为通过
+ * @returns 综合质量检测结果，包含：
+ *   - passed: 是否通过质量检测
+ *   - score: 综合质量评分 (0-1)
+ *   - completenessReasons: 完整度不通过原因列表
+ *   - blurReasons: 清晰度不通过原因列表
+ *   - metrics: 各维度详细指标（完整度、拉普拉斯方差、梯度清晰度、综合质量）
+ *   - suggestions: 改进建议列表
  */
-export function checkImageQuality(
-  canvas: HTMLCanvasElement,
+export function calcImageQuality(
+  cv: any,
+  matImage: any,
   face: FaceResult,
   imageWidth: number,
   imageHeight: number,
   config: ImageQualityFeatures,
-  minQuality: number
+  threshold: number
 ): ImageQualityResult {
   const metrics: Record<string, QualityMetricResult> = {}
   const completenessReasons: string[] = []
@@ -89,7 +90,8 @@ export function checkImageQuality(
 
   // ===== 第一部分：完整度检测 =====
   const completenessResult = checkFaceCompletenessInternal(
-    canvas,
+    cv,
+    matImage,
     face,
     imageWidth,
     imageHeight,
@@ -101,7 +103,7 @@ export function checkImageQuality(
   }
 
   // ===== 第二部分：清晰度检测 =====
-  const blurResult = checkImageSharpness(canvas, face, config)
+  const blurResult = checkImageSharpness(cv, matImage, face, config)
   metrics.laplacianVariance = blurResult.laplacianVariance
   metrics.gradientSharpness = blurResult.gradientSharpness
   if (!blurResult.laplacianVariance.passed) {
@@ -120,13 +122,13 @@ export function checkImageQuality(
   const overallMetric: QualityMetricResult = {
     name: '综合图像质量',
     value: overallScore,
-    threshold: minQuality,
-    passed: overallScore >= minQuality,
+    threshold: threshold,
+    passed: overallScore >= threshold,
     description: `综合质量评分 ${(overallScore * 100).toFixed(1)}% (完整度: ${(completenessScore * 100).toFixed(0)}% | 清晰度: ${(sharpnessScore * 100).toFixed(0)}%)`
   }
   metrics.overallQuality = overallMetric
 
-  const passed = overallScore >= minQuality
+  const passed = overallScore >= threshold
 
   const suggestions: string[] = []
   if (!completenessResult.passed) {
@@ -164,7 +166,8 @@ export function checkImageQuality(
  * @returns 完整度评分 (0-1)
  */
 function checkFaceCompletenessInternal(
-  canvas: HTMLCanvasElement,
+  cv: any,
+  matImage: any,
   face: any,
   imageWidth: number,
   imageHeight: number,
@@ -178,11 +181,11 @@ function checkFaceCompletenessInternal(
   let opencvContourScore = 1.0
   let opencvSharpnessScore = 1.0
 
-  if (config.use_opencv_enhancement && canvas) {
+  if (config.use_opencv_enhancement && matImage) {
     try {
       if (face?.box) {
-        opencvContourScore = detectFaceCompletenessOpenCVContour(canvas, face.box)
-        opencvSharpnessScore = detectFaceCompletenessOpenCVSharpness(canvas, face.box)
+        opencvContourScore = detectFaceCompletenessOpenCVContour(cv, matImage, face.box)
+        opencvSharpnessScore = detectFaceCompletenessOpenCVSharpness(cv, matImage, face.box)
       }
     } catch (error) {
       console.warn('[ImageQuality] OpenCV enhancement failed:', error)
@@ -247,62 +250,50 @@ function calculateHumanCompleteness(
  * OpenCV 轮廓检测 (30%)
  */
 function detectFaceCompletenessOpenCVContour(
-  canvas: HTMLCanvasElement,
+  cv: any,
+  matImage: any,
   faceBox: [number, number, number, number]
 ): number {
+  let gray = matImage.clone()
   try {
-    const cv = getCvSync()
-    if (!cv) {
-      console.warn('[ImageQuality] OpenCV not available')
-      return 1.0
-    }
-    
-    const img = cv.imread(canvas)
-    const gray = new cv.Mat()
+    const edges = new cv.Mat()
+    cv.Canny(gray, edges, 50, 150)
 
     try {
-      cv.cvtColor(img, gray, cv.COLOR_RGBA2GRAY)
+      const [x, y, w, h] = faceBox
+      const x_int = Math.max(0, Math.floor(x))
+      const y_int = Math.max(0, Math.floor(y))
+      const w_int = Math.min(w, matImage.cols - x_int)
+      const h_int = Math.min(h, matImage.rows - y_int)
 
-      const edges = new cv.Mat()
-      cv.Canny(gray, edges, 50, 150)
-
-      try {
-        const [x, y, w, h] = faceBox
-        const x_int = Math.max(0, Math.floor(x))
-        const y_int = Math.max(0, Math.floor(y))
-        const w_int = Math.min(w, canvas.width - x_int)
-        const h_int = Math.min(h, canvas.height - y_int)
-
-        if (w_int <= 0 || h_int <= 0) {
-          return 0
-        }
-
-        const roi = edges.roi(new cv.Rect(x_int, y_int, w_int, h_int))
-        const nonZeroCount = cv.countNonZero(roi)
-        const regionPixels = w_int * h_int
-
-        const edgeRatio = nonZeroCount / regionPixels
-        const referencedEdgeRatio = 0.3
-        let completenessScore = Math.min(1, edgeRatio / referencedEdgeRatio)
-
-        if (edgeRatio < 0.05) {
-          completenessScore = 0
-        } else if (edgeRatio > 0.7) {
-          completenessScore = Math.max(0.3, 1 - (edgeRatio - 0.3) / 2)
-        }
-
-        roi.delete()
-        return completenessScore
-      } finally {
-        edges.delete()
+      if (w_int <= 0 || h_int <= 0) {
+        return 0
       }
+
+      const roi = edges.roi(new cv.Rect(x_int, y_int, w_int, h_int))
+      const nonZeroCount = cv.countNonZero(roi)
+      const regionPixels = w_int * h_int
+
+      const edgeRatio = nonZeroCount / regionPixels
+      const referencedEdgeRatio = 0.3
+      let completenessScore = Math.min(1, edgeRatio / referencedEdgeRatio)
+
+      if (edgeRatio < 0.05) {
+        completenessScore = 0
+      } else if (edgeRatio > 0.7) {
+        completenessScore = Math.max(0.3, 1 - (edgeRatio - 0.3) / 2)
+      }
+
+      roi.delete()
+      return completenessScore
     } finally {
-      img.delete()
-      gray.delete()
+      edges.delete()
     }
   } catch (error) {
     console.warn('[ImageQuality] OpenCV contour detection failed:', error)
     return 1.0
+  } finally {
+    gray.delete()
   }
 }
 
@@ -310,65 +301,51 @@ function detectFaceCompletenessOpenCVContour(
  * OpenCV 边界清晰度检测 (10%)
  */
 function detectFaceCompletenessOpenCVSharpness(
-  canvas: HTMLCanvasElement,
+  cv: any,
+  matImage: any,
   faceBox: [number, number, number, number]
 ): number {
+
+  const [x, y, w, h] = faceBox
+  const x_int = Math.max(0, Math.floor(x))
+  const y_int = Math.max(0, Math.floor(y))
+  const w_int = Math.min(w, matImage.cols - x_int)
+  const h_int = Math.min(h, matImage.rows - y_int)
+
+  if (w_int <= 0 || h_int <= 0) {
+    return 0
+  }  
+
+  let gray = matImage.roi(new cv.Rect(x_int, y_int, w_int, h_int))
   try {
-    const cv = getCvSync()
-    if (!cv) {
-      console.warn('[ImageQuality] OpenCV not available')
-      return 1.0
-    }
+    const sobelX = new cv.Mat()
+    const sobelY = new cv.Mat()
+    cv.Sobel(gray, sobelX, cv.CV_32F, 1, 0, 3)
+    cv.Sobel(gray, sobelY, cv.CV_32F, 0, 1, 3)
 
-    const img = cv.imread(canvas)
-    const [x, y, w, h] = faceBox
-    const x_int = Math.max(0, Math.floor(x))
-    const y_int = Math.max(0, Math.floor(y))
-    const w_int = Math.min(w, canvas.width - x_int)
-    const h_int = Math.min(h, canvas.height - y_int)
-
-    if (w_int <= 0 || h_int <= 0) {
-      return 0
-    }
-
-    const faceRegion = img.roi(new cv.Rect(x_int, y_int, w_int, h_int))
-    const gray = new cv.Mat()
-
+    const gradient = new cv.Mat()
     try {
-      cv.cvtColor(faceRegion, gray, cv.COLOR_RGBA2GRAY)
-
-      const sobelX = new cv.Mat()
-      const sobelY = new cv.Mat()
-
       try {
-        cv.Sobel(gray, sobelX, cv.CV_32F, 1, 0, 3)
-        cv.Sobel(gray, sobelY, cv.CV_32F, 0, 1, 3)
+        cv.magnitude(sobelX, sobelY, gradient)
 
-        const gradient = new cv.Mat()
+        const mean = cv.mean(gradient)
+        const meanValue = mean[0]
 
-        try {
-          cv.magnitude(sobelX, sobelY, gradient)
+        const sharpnessScore = Math.min(1, meanValue / 100)
 
-          const mean = cv.mean(gradient)
-          const meanValue = mean[0]
-
-          const sharpnessScore = Math.min(1, meanValue / 100)
-
-          return sharpnessScore
-        } finally {
-          gradient.delete()
-        }
+        return sharpnessScore
       } finally {
-        sobelX.delete()
-        sobelY.delete()
+        gradient.delete()
       }
     } finally {
-      faceRegion.delete()
-      gray.delete()
+      sobelX.delete()
+      sobelY.delete()
     }
   } catch (error) {
     console.warn('[ImageQuality] OpenCV sharpness detection failed:', error)
     return 1.0
+  } finally {
+      gray.delete()
   }
 }
 
@@ -382,7 +359,8 @@ function detectFaceCompletenessOpenCVSharpness(
  * 2. Sobel 梯度清晰度 - 40%
  */
 function checkImageSharpness(
-  canvas: HTMLCanvasElement,
+  cv: any,
+  matImage: any,
   face: any,
   config: ImageQualityFeatures
 ): {
@@ -390,70 +368,36 @@ function checkImageSharpness(
   gradientSharpness: QualityMetricResult
   overallScore: number
 } {
+  let roi = matImage
   try {
-    const cv = getCvSync()
-    if (!cv) {
-      console.warn('[ImageQuality] OpenCV not available for sharpness check')
-      return {
-        laplacianVariance: {
-          name: '拉普拉斯方差',
-          value: 1,
-          threshold: config.min_laplacian_variance,
-          passed: true,
-          description: '无法检测（OpenCV不可用），跳过检查'
-        },
-        gradientSharpness: {
-          name: '梯度清晰度',
-          value: 1,
-          threshold: config.min_gradient_sharpness,
-          passed: true,
-          description: '无法检测（OpenCV不可用），跳过检查'
-        },
-        overallScore: 1.0
-      }
+    // 提取人脸区域（如果可用）
+    if (face?.box && face.box.length >= 4) {
+      const [x, y, w, h] = face.box
+      const padding = Math.min(w, h) * 0.1
+
+      const x1 = Math.max(0, Math.floor(x - padding))
+      const y1 = Math.max(0, Math.floor(y - padding))
+      const x2 = Math.min(matImage.cols, Math.floor(x + w + padding))
+      const y2 = Math.min(matImage.rows, Math.floor(y + h + padding))
+
+      roi = matImage.roi(new cv.Rect(x1, y1, x2 - x1, y2 - y1))
     }
 
-    const img = cv.imread(canvas)
+    // 方法 1：拉普拉斯方差
+    const laplacianResult = calculateLaplacianVariance(cv, roi, config.min_laplacian_variance)
 
-    try {
-      // 提取人脸区域（如果可用）
-      let roi = img
-      if (face?.box && face.box.length >= 4) {
-        const [x, y, w, h] = face.box
-        const padding = Math.min(w, h) * 0.1
+    // 方法 2：梯度清晰度
+    const gradientResult = calculateGradientSharpness(cv, roi, config.min_gradient_sharpness)
 
-        const x1 = Math.max(0, Math.floor(x - padding))
-        const y1 = Math.max(0, Math.floor(y - padding))
-        const x2 = Math.min(img.cols, Math.floor(x + w + padding))
-        const y2 = Math.min(img.rows, Math.floor(y + h + padding))
+    // 综合评分
+    const laplacianScore = Math.min(1, laplacianResult.value / 150)
+    const gradientScore = gradientResult.value
+    const overallScore = 0.4 * laplacianScore + 0.6 * gradientScore
 
-        roi = img.roi(new cv.Rect(x1, y1, x2 - x1, y2 - y1))
-      }
-
-      try {
-        // 方法 1：拉普拉斯方差
-        const laplacianResult = calculateLaplacianVariance(roi, config.min_laplacian_variance)
-
-        // 方法 2：梯度清晰度
-        const gradientResult = calculateGradientSharpness(roi, config.min_gradient_sharpness)
-
-        // 综合评分
-        const laplacianScore = Math.min(1, laplacianResult.value / 150)
-        const gradientScore = gradientResult.value
-        const overallScore = 0.4 * laplacianScore + 0.6 * gradientScore
-
-        return {
-          laplacianVariance: laplacianResult,
-          gradientSharpness: gradientResult,
-          overallScore: Math.min(1, overallScore)
-        }
-      } finally {
-        if (roi !== img) {
-          roi.delete()
-        }
-      }
-    } finally {
-      img.delete()
+    return {
+      laplacianVariance: laplacianResult,
+      gradientSharpness: gradientResult,
+      overallScore: Math.min(1, overallScore)
     }
   } catch (error) {
     console.error('[ImageQuality] Sharpness check error:', error)
@@ -474,6 +418,10 @@ function checkImageSharpness(
       },
       overallScore: 0
     }
+  } finally {
+    if (roi !== matImage) {
+      roi.delete()
+    }
   }
 }
 
@@ -481,11 +429,11 @@ function checkImageSharpness(
  * 计算拉普拉斯方差
  */
 function calculateLaplacianVariance(
+  cv: any,
   roi: any,
   minThreshold: number
 ): QualityMetricResult {
   try {
-    const cv = getCvSync()
     if (!cv) {
       return {
         name: '拉普拉斯方差',
@@ -546,11 +494,11 @@ function calculateLaplacianVariance(
  * 计算 Sobel 梯度清晰度
  */
 function calculateGradientSharpness(
+  cv: any,
   roi: any,
   minThreshold: number
 ): QualityMetricResult {
   try {
-    const cv = getCvSync()
     if (!cv) {
       return {
         name: '梯度清晰度',
