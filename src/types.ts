@@ -69,29 +69,22 @@ export interface FaceDetectionEngineOptions {
 
   // ========== 屏幕采集检测设置 ==========
   screen_capture_confidence_threshold?: number // 屏幕采集的置信度阈值（0-1，默认 0.6）
-  screen_capture_min_frames_required?: number // 检测器准备就绪所需的最小帧数（默认 5）
 
   // 莫尔纹检测参数
-  screen_capture_moire_threshold?: number // 莫尔纹强度阈值（0-1，默认 0.65）
-  screen_capture_fft_size?: number // 频率域分析的 FFT 大小（默认 256）
-  
-  // 频闪检测参数
-  screen_capture_flicker_max_history?: number // 最大亮度历史样本数（约 10 秒 @ 30fps，默认 300）
-  screen_capture_flicker_min_samples?: number // 频闪分析所需的最小样本数（默认 60）
-  screen_capture_flicker_min_period?: number // 最小频率周期（帧数，默认 5）
-  screen_capture_flicker_max_period?: number // 最大频率周期（帧数，默认 50）
-  screen_capture_flicker_strength_threshold?: number // 频闪强度阈值（0-1，默认 0.3）
+  screen_moire_pattern_threshold?: number // 综合莫尔纹置信度阈值（0-1，默认 0.65）
+  screen_moire_pattern_enable_dct?: boolean // 是否启用 DCT 分析（默认 true）
+  screen_moire_pattern_enable_edge_detection?: boolean // 是否启用边缘检测（默认 true）
   
   // 像素网格检测参数
-  screen_capture_grid_high_freq_threshold?: number // 高频能量阈值（0-1，默认 0.15）
-  screen_capture_grid_strength_threshold?: number // 网格强度阈值（0-1，默认 0.6）
+  screen_pixel_grid_high_freq_threshold?: number // 高频能量阈值（0-1，默认 0.15）
+  screen_pixel_grid_strength_threshold?: number // 网格强度阈值（0-1，默认 0.6）
   
-  // 色彩异常检测参数
-  screen_capture_chromatic_shift_threshold?: number // 色彩通道偏移阈值（像素数，默认 0.5）
-  
-  // 帧重复检测参数
-  screen_capture_duplication_max_history?: number // 最大帧历史（默认 30）
-  screen_capture_duplication_similarity_threshold?: number // 帧相似度阈值（0-1，默认 0.98）
+  // 屏幕色彩特征参数
+  screen_color_saturation_threshold?: number   // 色彩饱和度阈值（0-100%，屏幕图像通常 < 40%）
+  screen_color_rgb_correlation_threshold?: number  // RGB通道相关性阈值（0-1，屏幕通常 > 0.85）
+  screen_color_pixel_entropy_threshold?: number  // 像素值熵阈值（0-8，屏幕通常 < 6.5）
+  screen_color_gradient_smoothness_threshold?: number    // 梯度平滑性阈值（0-1，屏幕通常 > 0.7）
+  screen_color_confidence_threshold?: number // 综合置信度阈值（0-1，用于判定是否为屏幕拍摄）
 }
 
 /**

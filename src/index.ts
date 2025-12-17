@@ -9,7 +9,7 @@ import { FaceDetectionEngine } from './face-detection-engine'
 export type {
   FaceDetectionEngineOptions,
   FaceFrontalFeatures,
-  ImageQualityFeatures,  
+  ImageQualityFeatures,
   DetectorInfoEventData,
   DetectorFinishEventData,
   DetectorErrorEventData,
@@ -21,16 +21,13 @@ export type {
   EventListener,
 } from './types'
 
-export { LivenessAction, ErrorCode, DetectionCode, LivenessActionStatus, DetectionPeriod } from './enums'
+export { LivenessAction, ErrorCode, DetectionCode, LivenessActionStatus, DetectionPeriod, EngineState } from './enums'
 
 export { preloadOpenCV, getCvSync, getOpenCVVersion, detectBrowserEngine } from './library-loader'
 
 export { SimpleEventEmitter } from './event-emitter'
 
 export { UniAppFaceDetectionEngine, createSDK, checkEnvironmentSupport } from './uniapp-sdk'
-
-export { MotionLivenessDetector } from './motion-liveness-detector'
-export type { MotionDetectionResult, MotionType } from './motion-liveness-detector'
 
 export { FaceDetectionEngine }
 

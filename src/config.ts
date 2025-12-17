@@ -55,19 +55,19 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
 
   // Screen Capture Detection Settings
   screen_capture_confidence_threshold: 0.6,
-  screen_capture_min_frames_required: 5,
-  screen_capture_moire_threshold: 0.65,
-  screen_capture_fft_size: 256,
-  screen_capture_flicker_max_history: 300,
-  screen_capture_flicker_min_samples: 60,
-  screen_capture_flicker_min_period: 5,
-  screen_capture_flicker_max_period: 50,
-  screen_capture_flicker_strength_threshold: 0.3,
-  screen_capture_grid_high_freq_threshold: 0.15,
-  screen_capture_grid_strength_threshold: 0.6,
-  screen_capture_chromatic_shift_threshold: 0.5,
-  screen_capture_duplication_max_history: 30,
-  screen_capture_duplication_similarity_threshold: 0.98,
+
+  screen_pixel_grid_high_freq_threshold: 0.15,
+  screen_pixel_grid_strength_threshold: 0.6,
+
+  screen_moire_pattern_threshold: 0.65,
+  screen_moire_pattern_enable_dct: true,
+  screen_moire_pattern_enable_edge_detection: true,
+
+  screen_color_saturation_threshold: 40,
+  screen_color_rgb_correlation_threshold: 0.85,
+  screen_color_pixel_entropy_threshold: 6.5,
+  screen_color_gradient_smoothness_threshold: 0.7,
+  screen_color_confidence_threshold: 0.6,
 }
 
 /**
