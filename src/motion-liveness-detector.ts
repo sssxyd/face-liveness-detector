@@ -9,7 +9,7 @@ import type { Box } from '@vladmandic/human'
 /**
  * 运动检测结果
  */
-export interface MotionDetectionResult {
+export class MotionDetectionResult {
   // 总体运动评分 (0-1)
   motionScore: number
   // 人脸区域的光流幅度
@@ -33,6 +33,67 @@ export interface MotionDetectionResult {
     eyeAspectRatioVariance: number
     mouthAspectRatioVariance: number
   }
+
+  constructor(
+    motionScore: number,
+    opticalFlowMagnitude: number,
+    keypointVariance: number,
+    eyeMotionScore: number,
+    mouthMotionScore: number,
+    motionType: MotionType,
+    isLively: boolean,
+    details: {
+      frameCount: number
+      avgKeypointDistance: number
+      maxKeypointDistance: number
+      faceAreaVariance: number
+      eyeAspectRatioVariance: number
+      mouthAspectRatioVariance: number
+    }
+  ) {
+    this.motionScore = motionScore
+    this.opticalFlowMagnitude = opticalFlowMagnitude
+    this.keypointVariance = keypointVariance
+    this.eyeMotionScore = eyeMotionScore
+    this.mouthMotionScore = mouthMotionScore
+    this.motionType = motionType
+    this.isLively = isLively
+    this.details = details
+  }
+
+  /**
+   * Get liveness detection result message
+   * Returns empty string if lively, otherwise returns reasons for non-liveness detection
+   */
+  getMessage(minMotionScore: number, minKeypointVariance: number): string {
+    if (this.isLively) {
+      return ''
+    }
+
+    const reasons: string[] = []
+
+    // Check motion score
+    if (this.motionScore < minMotionScore) {
+      reasons.push(`Insufficient motion detected (motion score: ${(this.motionScore * 100).toFixed(1)}%)`)
+    }
+
+    // Check keypoint variance
+    if (this.keypointVariance < minKeypointVariance) {
+      reasons.push(`Low keypoint variance (${(this.keypointVariance * 100).toFixed(1)}%), indicating static/photo-like face`)
+    }
+
+    // Check motion type
+    if (this.motionType === 'none') {
+      reasons.push('No motion detected, face appears to be static or from a photo')
+    }
+
+    // If no specific reasons found but still not lively, provide generic message
+    if (reasons.length === 0) {
+      reasons.push('Face does not meet liveness requirements')
+    }
+
+    return reasons.join('; ')
+  }
 }
 
 export type MotionType = 'none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression'
@@ -42,13 +103,13 @@ export type MotionType = 'none' | 'rotation' | 'translation' | 'breathing' | 'mi
  */
 export interface MotionLivenessDetectorOptions {
   // 活体检测的最小运动评分阈值 (0-1)
-  minMotionThreshold?: number
+  minMotionThreshold: number
   // 最小关键点方差阈值 (0-1)
-  minKeypointVariance?: number
+  minKeypointVariance: number
   // 运动历史分析的帧缓冲区大小
-  frameBufferSize?: number
+  frameBufferSize: number
   // 眨眼检测的眼睛宽高比阈值 (0-1)
-  eyeAspectRatioThreshold?: number
+  eyeAspectRatioThreshold: number
 }
 
 /**
@@ -86,12 +147,12 @@ export class MotionLivenessDetector {
   // OpenCV instance
   private cv: any = null
 
-  constructor(options?: MotionLivenessDetectorOptions) {
+  constructor(options: MotionLivenessDetectorOptions) {
     // Set configuration with provided options or defaults
-    this.minMotionThreshold = options?.minMotionThreshold ?? 0.15
-    this.minKeypointVariance = options?.minKeypointVariance ?? 0.02
-    this.frameBufferSize = options?.frameBufferSize ?? 5
-    this.eyeAspectRatioThreshold = options?.eyeAspectRatioThreshold ?? 0.15
+    this.minMotionThreshold = options.minMotionThreshold
+    this.minKeypointVariance = options.minKeypointVariance
+    this.frameBufferSize = options.frameBufferSize
+    this.eyeAspectRatioThreshold = options.eyeAspectRatioThreshold
   }
 
   setCVInstance(cvInstance: any): void {
@@ -192,15 +253,15 @@ export class MotionLivenessDetector {
       // Determine liveness
       const isLively = this.determineLiveness(motionScore, keypointVariance, motionType)
 
-      return {
+      return new MotionDetectionResult(
         motionScore,
-        opticalFlowMagnitude: opticalFlowResult,
+        opticalFlowResult,
         keypointVariance,
         eyeMotionScore,
         mouthMotionScore,
         motionType,
         isLively,
-        details: {
+        {
           frameCount: this.frameBuffer.length,
           avgKeypointDistance: this.calculateAvgKeypointDistance(),
           maxKeypointDistance: this.calculateMaxKeypointDistance(),
@@ -208,7 +269,7 @@ export class MotionLivenessDetector {
           eyeAspectRatioVariance: this.calculateVariance(this.eyeAspectRatioHistory),
           mouthAspectRatioVariance: this.calculateVariance(this.mouthAspectRatioHistory)
         }
-      }
+      )
     } catch (error) {
       console.warn('[MotionLivenessDetector] Error analyzing motion:', error)
       return this.createEmptyResult()
@@ -717,15 +778,15 @@ export class MotionLivenessDetector {
    * 分析失败时创建空结果
    */
   private createEmptyResult(): MotionDetectionResult {
-    return {
-      motionScore: 0,
-      opticalFlowMagnitude: 0,
-      keypointVariance: 0,
-      eyeMotionScore: 0,
-      mouthMotionScore: 0,
-      motionType: 'none',
-      isLively: false,
-      details: {
+    return new MotionDetectionResult(
+      0,
+      0,
+      0,
+      0,
+      0,
+      'none',
+      false,
+      {
         frameCount: this.frameBuffer.length,
         avgKeypointDistance: 0,
         maxKeypointDistance: 0,
@@ -733,7 +794,7 @@ export class MotionLivenessDetector {
         eyeAspectRatioVariance: 0,
         mouthAspectRatioVariance: 0
       }
-    }
+    )
   }
 
   /**

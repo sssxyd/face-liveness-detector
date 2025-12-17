@@ -9,37 +9,157 @@
  * 5. 帧重复检测 (Frame Duplication Detection) - 检测视频是否有重复帧
  */
 
-// @ts-ignore - opencv.js doesn't have proper TypeScript definitions
-import cv from 'opencv.js'
+export interface ScreenCaptureDetectorOptions {
+  confidenceThreshold: number
+  moireThreshold: number
+  fftSize: number
+  flickerMaxHistory: number
+  flickerMinSamples: number
+  flickerMinPeriod: number
+  flickerMaxPeriod: number
+  flickerStrengthThreshold: number
+  duplicationMaxHistory: number
+  duplicationSimilarityThreshold: number
+  gridHighFreqThreshold: number
+  gridStrengthThreshold: number
+  chromaticShiftThreshold: number
+  minFramesRequired: number  // 检测器准备就绪所需的最小帧数（默认 5）
+}
+
+/**
+ * Moire pattern detection result
+ */
+export interface MoirePatternDetectionResult {
+  isScreenCapture: boolean
+  confidence: number
+  moireStrength: number
+  dominantFrequencies: number[]
+}
+
+/**
+ * Flicker detection result
+ */
+export interface FlickerDetectionResult {
+  isScreenCapture: boolean
+  confidence: number
+  flickerFrequency: number
+  flickerStrength: number
+}
+
+/**
+ * Chromatic aberration detection result
+ */
+export interface ChromaticAberrationResult {
+  isScreenCapture: boolean
+  confidence: number
+  aberrationAmount: number
+}
+
+/**
+ * Pixel grid detection result
+ */
+export interface PixelGridDetectionResult {
+  isScreenCapture: boolean
+  confidence: number
+  gridStrength: number
+  gridPeriod: number
+}
+
+/**
+ * Frame duplication detection result
+ */
+export interface FrameDuplicationResult {
+  isVideoReplay: boolean
+  confidence: number
+  duplicateCount: number
+  averageSimilarity: number
+}
+
+/**
+ * Main screen capture detection response
+ */
+export class ScreenCaptureDetectionResult {
+  isScreenCapture: boolean
+  confidenceScore: number
+  detectionResults: Array<{
+    method: string
+    isScreenCapture: boolean
+    confidence: number
+    details: any
+  }>
+  riskLevel: 'low' | 'medium' | 'high'
+
+  constructor(
+    isScreenCapture: boolean,
+    confidenceScore: number,
+    detectionResults: Array<{
+      method: string
+      isScreenCapture: boolean
+      confidence: number
+      details: any
+    }>,
+    riskLevel: 'low' | 'medium' | 'high'
+  ) {
+    this.isScreenCapture = isScreenCapture
+    this.confidenceScore = confidenceScore
+    this.detectionResults = detectionResults
+    this.riskLevel = riskLevel
+  }
+
+  /**
+   * Get detection result message
+   * Returns "success" if not screen capture, otherwise returns the reasons for detecting screen capture
+   */
+  getMessage(): string {
+    if (!this.isScreenCapture) {
+      return 'success'
+    }
+
+    // Collect all detection methods that identified screen capture
+    const detectedMethods = this.detectionResults
+      .filter(r => r.isScreenCapture)
+      .map(r => {
+        const confidence = (r.confidence * 100).toFixed(1)
+        return `${r.method} (${confidence}% confidence)`
+      })
+
+    const reasons = detectedMethods.join('; ')
+    return `Screen capture detected: ${reasons}. Risk level: ${this.riskLevel.toUpperCase()}`
+  }
+}
 
 /**
  * 莫尔纹检测 - 最可靠的屏幕检测方法
  * 
  * 原理：
  * 当摄像机拍摄屏幕时，摄像机的传感器网格和屏幕的像素网格会产生干涉
- * 导致出现莫尔纹（Moiré pattern）- 周期性的条纹或波纹
+ * 导致出现莫尔纹（Moire pattern）- 周期性的条纹或波纹
  * 真实人脸：没有这种规则的波纹
  * 屏幕采集：明显的周期性莫尔纹
  */
-export class MoiréPatternDetector {
-  private readonly fftSize = 256
-  private readonly threshold = 0.65 // 莫尔纹特征强度阈值
+export class MoirePatternDetector {
+  private cv: any = null
+  private fftSize: number = 256
+  private threshold: number = 0.65 // 莫尔纹特征强度阈值
+
+  constructor(fftSize: number, moiréThreshold: number) {
+    this.fftSize = fftSize
+    this.threshold = moiréThreshold
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+  }
 
   /**
    * 检测莫尔纹图案
    * 通过频域分析检测是否存在周期性干涉纹
+   * @param gray - 灰度图像
    */
-  detectMoiréPattern(frame: cv.Mat): {
-    isScreenCapture: boolean
-    confidence: number
-    moiréStrength: number
-    dominantFrequencies: number[]
-  } {
+  detectMoirePattern(gray: any): MoirePatternDetectionResult {
     try {
-      // 转灰度
-      const gray = new cv.Mat()
-      cv.cvtColor(frame, gray, cv.COLOR_BGR2GRAY)
-
+      const cv = this.cv
+      if (!cv) throw new Error('OpenCV instance not initialized')
       // 使用 Canny 边缘检测突出周期性结构
       const edges = new cv.Mat()
       cv.Canny(gray, edges, 50, 150)
@@ -53,25 +173,24 @@ export class MoiréPatternDetector {
       // 检测频率特征
       const frequencyFeatures = this.analyzeFrequencyDomain(edges)
 
-      gray.delete()
       edges.delete()
 
       // 综合评分
-      const moiréStrength = (periodicity + directionConsistency + frequencyFeatures.peakStrength) / 3
+      const moireStrength = (periodicity + directionConsistency + frequencyFeatures.peakStrength) / 3
 
-      const isScreenCapture = moiréStrength > this.threshold
+      const isScreenCapture = moireStrength > this.threshold
 
       return {
         isScreenCapture,
-        confidence: Math.min(Math.abs(moiréStrength - this.threshold) / 0.35, 1.0),
-        moiréStrength,
+        confidence: Math.min(Math.abs(moireStrength - this.threshold) / 0.35, 1.0),
+        moireStrength,
         dominantFrequencies: frequencyFeatures.dominantFreqs
       }
     } catch (error) {
       return {
         isScreenCapture: false,
         confidence: 0.0,
-        moiréStrength: 0.0,
+        moireStrength: 0.0,
         dominantFrequencies: []
       }
     }
@@ -81,7 +200,7 @@ export class MoiréPatternDetector {
    * 检测周期性结构
    * 莫尔纹是高度周期性的
    */
-  private detectPeriodicity(edges: cv.Mat): number {
+  private detectPeriodicity(edges: any): number {
     const width = edges.cols
     const height = edges.rows
 
@@ -113,7 +232,7 @@ export class MoiréPatternDetector {
    * 分析单行/列的周期性
    * 使用自相关检测重复模式
    */
-  private analyzeLinePeriodicity(line: cv.Mat): number {
+  private analyzeLinePeriodicity(line: any): number {
     const data = line.data8U
     const length = data.length
 
@@ -149,7 +268,8 @@ export class MoiréPatternDetector {
    * 分析边缘方向一致性
    * 莫尔纹有明确的方向
    */
-  private analyzeEdgeDirection(edges: cv.Mat): number {
+  private analyzeEdgeDirection(edges: any): number {
+    const cv = this.cv
     // 使用 Sobel 获取边缘方向
     const sobelX = new cv.Mat()
     const sobelY = new cv.Mat()
@@ -191,10 +311,11 @@ export class MoiréPatternDetector {
   /**
    * 频域分析 - 检测屏幕特有的频率成分
    */
-  private analyzeFrequencyDomain(edges: cv.Mat): {
+  private analyzeFrequencyDomain(edges: any): {
     peakStrength: number
     dominantFreqs: number[]
   } {
+    const cv = this.cv
     // 简化处理：在原始图像上进行高频分析
     const sobelX = new cv.Mat()
     const sobelY = new cv.Mat()
@@ -239,22 +360,34 @@ export class MoiréPatternDetector {
  * 屏幕采集：明确的周期性闪烁（周期 = 屏幕刷新周期 / 摄像机帧率）
  */
 export class FlickerDetector {
+  private cv: any = null
   private brightnessHistory: number[] = []
-  private readonly maxHistory = 300 // ~10 秒 @ 30fps
-  private readonly minSamples = 60
+  private maxHistory: number = 300 // ~10 秒 @ 30fps
+  private minSamples: number = 60
+  private minPeriod: number = 5
+  private maxPeriod: number = 50
+  private strengthThreshold: number = 0.3
+
+  constructor(flickerMaxHistory: number, flickerMinSamples: number, flickerMinPeriod: number, flickerMaxPeriod: number, flickerStrengthThreshold: number) { 
+    this.maxHistory = flickerMaxHistory
+    this.minSamples = flickerMinSamples
+    this.minPeriod = flickerMinPeriod
+    this.maxPeriod = flickerMaxPeriod
+    this.strengthThreshold = flickerStrengthThreshold
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+  }
 
   /**
    * 检测频闪模式
+   * @param gray - 灰度图像
    */
-  detectFlicker(frame: cv.Mat): {
-    isScreenCapture: boolean
-    confidence: number
-    flickerFrequency: number
-    flickerStrength: number
-  } {
+  detectFlicker(gray: any): FlickerDetectionResult {
     try {
       // 计算平均亮度
-      const brightness = this.calculateAverageBrightness(frame)
+      const brightness = this.calculateAverageBrightness(gray)
       this.brightnessHistory.push(brightness)
 
       // 保持历史大小
@@ -283,7 +416,7 @@ export class FlickerDetector {
         (frequency > 2.5 && frequency < 3.5) // 24Hz 投影仪
 
       return {
-        isScreenCapture: isScreenFlicker && strength > 0.3,
+        isScreenCapture: isScreenFlicker && strength > this.strengthThreshold,
         confidence: isScreenFlicker ? Math.min(strength, 1.0) : 0.0,
         flickerFrequency: frequency,
         flickerStrength: strength
@@ -314,8 +447,8 @@ export class FlickerDetector {
     let maxAutocorr = 0
     let maxPeriod = 0
 
-    // 检查 5-50 帧的周期（对应 0.17-1.67Hz @ 30fps）
-    for (let period = 5; period < 50; period++) {
+    // 检查周期范围（对应 0.17-1.67Hz @ 30fps）
+    for (let period = this.minPeriod; period < this.maxPeriod; period++) {
       let autocorr = 0
 
       for (let i = 0; i < n - period; i++) {
@@ -347,14 +480,11 @@ export class FlickerDetector {
 
   /**
    * 计算平均亮度
+   * @param gray - 灰度图像
    */
-  private calculateAverageBrightness(frame: cv.Mat): number {
-    const gray = new cv.Mat()
-    cv.cvtColor(frame, gray, cv.COLOR_BGR2GRAY)
-
+  private calculateAverageBrightness(gray: any): number {
+    const cv = this.cv
     const mean = cv.mean(gray)
-    gray.delete()
-
     return mean[0] // 0-255
   }
 
@@ -373,17 +503,25 @@ export class FlickerDetector {
  * 屏幕采集：可见的 RGB 分离或条纹
  */
 export class ChromaticAberrationDetector {
+  private cv: any = null
+  private shiftThreshold: number = 0.5
+
+  constructor(chromaticShiftThreshold: number) {
+    this.shiftThreshold = chromaticShiftThreshold
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+  }
+
   /**
    * 检测 RGB 色彩分离
    */
-  detectChromaticAberration(frame: cv.Mat): {
-    isScreenCapture: boolean
-    confidence: number
-    aberrationAmount: number
-  } {
+  detectChromaticAberration(frame: any): ChromaticAberrationResult {
     try {
+      const cv = this.cv
       // 分离 RGB 通道
-      const channels: cv.Mat[] = new Array(3)
+      const channels: Array<any> = new Array(3)
       cv.split(frame, channels)
 
       const [bChannel, gChannel, rChannel] = channels
@@ -394,9 +532,9 @@ export class ChromaticAberrationDetector {
 
       const maxShift = Math.max(redGreenShift, greenBlueShift)
 
-      // 屏幕采集：可见的错位 (> 0.5 像素)
-      // 真实图像：没有错位 (< 0.1 像素)
-      const isScreenCapture = maxShift > 0.5
+      // 屏幕采集：可见的错位
+      // 真实图像：没有错位
+      const isScreenCapture = maxShift > this.shiftThreshold
 
       channels.forEach(c => c.delete())
 
@@ -417,7 +555,8 @@ export class ChromaticAberrationDetector {
   /**
    * 计算两个通道之间的平均错位
    */
-  private calculateChannelShift(channel1: cv.Mat, channel2: cv.Mat): number {
+  private calculateChannelShift(channel1: any, channel2: any): number {
+    const cv = this.cv
     // 使用相位相关（Phase Correlation）检测错位
     // 简化版本：计算通道差异
 
@@ -446,19 +585,26 @@ export class ChromaticAberrationDetector {
  * 屏幕采集：明确的网格结构
  */
 export class PixelGridDetector {
+  private cv: any = null
+  private highFreqThreshold: number = 0.15
+  private gridStrengthThreshold: number = 0.6
+
+  constructor(gridHighFreqThreshold: number, gridStrengthThreshold: number) {
+    this.highFreqThreshold = gridHighFreqThreshold
+    this.gridStrengthThreshold = gridStrengthThreshold
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+  }
+
   /**
    * 检测像素网格
+   * @param gray - 灰度图像
    */
-  detectPixelGrid(frame: cv.Mat): {
-    isScreenCapture: boolean
-    confidence: number
-    gridStrength: number
-    gridPeriod: number
-  } {
+  detectPixelGrid(gray: any): PixelGridDetectionResult {
     try {
-      const gray = new cv.Mat()
-      cv.cvtColor(frame, gray, cv.COLOR_BGR2GRAY)
-
+      const cv = this.cv
       // 使用拉普拉斯算子检测高频成分（像素网格）
       const laplacian = new cv.Mat()
       cv.Laplacian(gray, laplacian, cv.CV_32F)
@@ -469,17 +615,16 @@ export class PixelGridDetector {
       // 分析网格规律性
       const gridStrength = this.analyzeGridRegularity(laplacian)
 
-      gray.delete()
       laplacian.delete()
 
       // 屏幕特有的网格：高频能量高 + 强规律性
-      const isScreenCapture = highFreqEnergy > 0.15 && gridStrength > 0.6
+      const isScreenCapture = highFreqEnergy > this.highFreqThreshold && gridStrength > this.gridStrengthThreshold
 
       return {
         isScreenCapture,
         confidence: (highFreqEnergy + gridStrength) / 2.0,
         gridStrength,
-        gridPeriod: this.estimateGridPeriod(frame)
+        gridPeriod: this.estimateGridPeriod(gray)
       }
     } catch (error) {
       return {
@@ -494,7 +639,7 @@ export class PixelGridDetector {
   /**
    * 计算高频能量
    */
-  private calculateHighFreqEnergy(laplacian: cv.Mat): number {
+  private calculateHighFreqEnergy(laplacian: any): number {
     const data = laplacian.data32F
     let energy = 0
 
@@ -508,7 +653,7 @@ export class PixelGridDetector {
   /**
    * 分析网格规律性
    */
-  private analyzeGridRegularity(laplacian: cv.Mat): number {
+  private analyzeGridRegularity(laplacian: any): number {
     // 计算拉普拉斯值的直方图
     // 网格应该产生特定的值分布
 
@@ -526,7 +671,7 @@ export class PixelGridDetector {
   /**
    * 估计像素网格周期
    */
-  private estimateGridPeriod(frame: cv.Mat): number {
+  private estimateGridPeriod(frame: any): number {
     // 典型屏幕分辨率对应的像素周期
     // 这是一个简化的估计
     const width = frame.cols
@@ -548,24 +693,30 @@ export class PixelGridDetector {
  * 视频回放：某些帧重复出现
  */
 export class FrameDuplicationDetector {
+  private cv: any = null
   private frameHistory: Array<{
     data: Uint8ClampedArray
     timestamp: number
   }> = []
-  private readonly maxHistory = 30
-  private readonly threshold = 0.98 // 相似度阈值
+  private maxHistory: number = 30
+  private threshold: number = 0.98 // 相似度阈值
+
+  constructor(duplicateMaxHistory: number, duplicationSimilarityThreshold: number) {
+    this.maxHistory = duplicateMaxHistory
+    this.threshold = duplicationSimilarityThreshold
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+  }
 
   /**
    * 检测帧重复
+   * @param gray - 灰度图像
    */
-  detectFrameDuplication(frame: cv.Mat): {
-    isVideoReplay: boolean
-    confidence: number
-    duplicateCount: number
-    averageSimilarity: number
-  } {
+  detectFrameDuplication(gray: any): FrameDuplicationResult {
     try {
-      const frameData = this.extractFrameData(frame)
+      const frameData = this.extractFrameData(gray)
 
       this.frameHistory.push({
         data: frameData,
@@ -608,18 +759,16 @@ export class FrameDuplicationDetector {
 
   /**
    * 提取帧数据用于比较
+   * @param gray - 灰度图像
    */
-  private extractFrameData(frame: cv.Mat): Uint8ClampedArray {
-    const gray = new cv.Mat()
-    cv.cvtColor(frame, gray, cv.COLOR_BGR2GRAY)
-
+  private extractFrameData(gray: any): Uint8ClampedArray {
+    const cv = this.cv
     // 缩小尺寸以加快比较（64x64）
     const resized = new cv.Mat()
     cv.resize(gray, resized, new cv.Size(64, 64))
 
     const data = resized.data8U as Uint8ClampedArray
 
-    gray.delete()
     resized.delete()
 
     return data
@@ -683,34 +832,62 @@ export class FrameDuplicationDetector {
  * 综合屏幕采集检测引擎
  */
 export class ScreenCaptureDetector {
-  private moiréDetector: MoiréPatternDetector
+  private moireDetector: MoirePatternDetector
   private flickerDetector: FlickerDetector
   private chromaticDetector: ChromaticAberrationDetector
   private gridDetector: PixelGridDetector
   private duplicationDetector: FrameDuplicationDetector
 
-  constructor() {
-    this.moiréDetector = new MoiréPatternDetector()
-    this.flickerDetector = new FlickerDetector()
-    this.chromaticDetector = new ChromaticAberrationDetector()
-    this.gridDetector = new PixelGridDetector()
-    this.duplicationDetector = new FrameDuplicationDetector()
+  // OpenCV instance
+  private cv: any = null
+  // 置信度阈值（默认 0.6）
+  private confidenceThreshold: number = 0.6
+  // 帧计数（用于检测就绪状态）
+  private frameCount: number = 0
+  // 最小帧数要求（默认5帧，平衡检测准确性和响应速度）
+  private minFramesRequired: number = 5
+
+  constructor(options: ScreenCaptureDetectorOptions) {
+    this.confidenceThreshold = options.confidenceThreshold
+    this.minFramesRequired = options.minFramesRequired
+    this.moireDetector = new MoirePatternDetector(options.fftSize, options.moireThreshold)
+    this.flickerDetector = new FlickerDetector(options.flickerMaxHistory, options.flickerMinSamples, options.flickerMinPeriod, options.flickerMaxPeriod, options.flickerStrengthThreshold)
+    this.chromaticDetector = new ChromaticAberrationDetector(options.chromaticShiftThreshold)
+    this.gridDetector = new PixelGridDetector(options.gridHighFreqThreshold, options.gridStrengthThreshold)
+    this.duplicationDetector = new FrameDuplicationDetector(options.duplicationMaxHistory, options.duplicationSimilarityThreshold)
+  }
+
+  setCVInstance(cvInstance: any): void {
+    this.cv = cvInstance
+    this.moireDetector.setCVInstance(cvInstance)
+    this.flickerDetector.setCVInstance(cvInstance)
+    this.chromaticDetector.setCVInstance(cvInstance)
+    this.gridDetector.setCVInstance(cvInstance)
+    this.duplicationDetector.setCVInstance(cvInstance)
+  }
+
+  /**
+   * 检查检测器是否已准备就绪
+   * 只有累积足够的帧数，检测结果才足够可信
+   * @returns true 如果已累积足够的帧，false 则仍需要更多帧
+   */
+  isReady(): boolean {
+    return this.frameCount >= this.minFramesRequired
   }
 
   /**
    * 综合检测
+   * @param frame - 原始帧（BGR格式)
+   * @param gray - 灰度帧
    */
-  detectScreenCapture(frame: cv.Mat): {
-    isScreenCapture: boolean
-    confidenceScore: number
-    detectionResults: Array<{
-      method: string
-      isScreenCapture: boolean
-      confidence: number
-      details: any
-    }>
-    riskLevel: 'low' | 'medium' | 'high'
-  } {
+  detectScreenCapture(frame: any, gray: any): ScreenCaptureDetectionResult {
+    if (!this.cv) {
+      throw new Error('OpenCV instance not initialized. Call setCVInstance() first.')
+    }
+
+    // 累计帧数
+    this.frameCount++
+
     const results: Array<{
       method: string
       isScreenCapture: boolean
@@ -718,84 +895,88 @@ export class ScreenCaptureDetector {
       details: any
     }> = []
 
-    // 1. 莫尔纹检测（最可靠）
-    const moiréResult = this.moiréDetector.detectMoiréPattern(frame)
-    results.push({
-      method: 'Moiré Pattern Detection',
-      isScreenCapture: moiréResult.isScreenCapture,
-      confidence: moiréResult.confidence,
-      details: {
-        strength: moiréResult.moiréStrength.toFixed(3),
-        frequencies: moiréResult.dominantFrequencies
-      }
-    })
+      // 1. 莫尔纹检测（最可靠）
+      const moireResult = this.moireDetector.detectMoirePattern(gray)
+      results.push({
+        method: 'Moire Pattern Detection',
+        isScreenCapture: moireResult.isScreenCapture,
+        confidence: moireResult.confidence,
+        details: {
+          strength: moireResult.moireStrength.toFixed(3),
+          frequencies: moireResult.dominantFrequencies
+        }
+      })
 
-    // 2. 频闪检测
-    const flickerResult = this.flickerDetector.detectFlicker(frame)
-    results.push({
-      method: 'Flicker Detection',
-      isScreenCapture: flickerResult.isScreenCapture,
-      confidence: flickerResult.confidence,
-      details: {
-        frequency: flickerResult.flickerFrequency.toFixed(2),
-        strength: flickerResult.flickerStrength.toFixed(3)
-      }
-    })
+      // 2. 频闪检测
+      const flickerResult = this.flickerDetector.detectFlicker(gray)
+      results.push({
+        method: 'Flicker Detection',
+        isScreenCapture: flickerResult.isScreenCapture,
+        confidence: flickerResult.confidence,
+        details: {
+          frequency: flickerResult.flickerFrequency.toFixed(2),
+          strength: flickerResult.flickerStrength.toFixed(3)
+        }
+      })
 
-    // 3. 色彩异常检测
-    const chromaticResult = this.chromaticDetector.detectChromaticAberration(frame)
-    results.push({
-      method: 'Chromatic Aberration Detection',
-      isScreenCapture: chromaticResult.isScreenCapture,
-      confidence: chromaticResult.confidence,
-      details: {
-        aberrationAmount: chromaticResult.aberrationAmount.toFixed(3)
-      }
-    })
+      // 3. 色彩异常检测
+      const chromaticResult = this.chromaticDetector.detectChromaticAberration(frame)
+      results.push({
+        method: 'Chromatic Aberration Detection',
+        isScreenCapture: chromaticResult.isScreenCapture,
+        confidence: chromaticResult.confidence,
+        details: {
+          aberrationAmount: chromaticResult.aberrationAmount.toFixed(3)
+        }
+      })
 
-    // 4. 像素网格检测
-    const gridResult = this.gridDetector.detectPixelGrid(frame)
-    results.push({
-      method: 'Pixel Grid Detection',
-      isScreenCapture: gridResult.isScreenCapture,
-      confidence: gridResult.confidence,
-      details: {
-        gridStrength: gridResult.gridStrength.toFixed(3),
-        period: gridResult.gridPeriod
-      }
-    })
+      // 4. 像素网格检测
+      const gridResult = this.gridDetector.detectPixelGrid(gray)
+      results.push({
+        method: 'Pixel Grid Detection',
+        isScreenCapture: gridResult.isScreenCapture,
+        confidence: gridResult.confidence,
+        details: {
+          gridStrength: gridResult.gridStrength.toFixed(3),
+          period: gridResult.gridPeriod
+        }
+      })
 
-    // 5. 帧重复检测
-    const duplicationResult = this.duplicationDetector.detectFrameDuplication(frame)
-    results.push({
-      method: 'Frame Duplication Detection',
-      isScreenCapture: duplicationResult.isVideoReplay,
-      confidence: duplicationResult.confidence,
-      details: {
-        duplicateCount: duplicationResult.duplicateCount,
-        similarity: duplicationResult.averageSimilarity.toFixed(3)
-      }
-    })
-
+      // 5. 帧重复检测
+      const duplicationResult = this.duplicationDetector.detectFrameDuplication(gray)
+      results.push({
+        method: 'Frame Duplication Detection',
+        isScreenCapture: duplicationResult.isVideoReplay,
+        confidence: duplicationResult.confidence,
+        details: {
+          duplicateCount: duplicationResult.duplicateCount,
+          similarity: duplicationResult.averageSimilarity.toFixed(3)
+        }
+      })
+      
     // 综合评分
     const screenCaptureCount = results.filter(r => r.isScreenCapture).length
-    const avgConfidence = results.reduce((sum, r) => sum + r.confidence, 0) / results.length
+    const avgConfidence = results.length > 0 
+      ? results.reduce((sum, r) => sum + r.confidence, 0) / results.length 
+      : 0
 
-    const isScreenCapture = screenCaptureCount >= 2 && avgConfidence > 0.6
+    // 使用配置的置信度阈值来判断是否是屏幕采集
+    const isScreenCapture = screenCaptureCount >= 2 && avgConfidence > this.confidenceThreshold
 
     let riskLevel: 'low' | 'medium' | 'high' = 'low'
     if (screenCaptureCount >= 4) riskLevel = 'high'
     else if (screenCaptureCount >= 2) riskLevel = 'medium'
 
-    return {
+    return new ScreenCaptureDetectionResult(
       isScreenCapture,
-      confidenceScore: isScreenCapture ? avgConfidence : 1 - avgConfidence,
-      detectionResults: results,
+      isScreenCapture ? avgConfidence : 1 - avgConfidence,
+      results,
       riskLevel
-    }
+    )
   }
 
   reset(): void {
+    this.frameCount = 0
     this.flickerDetector.reset()
     this.duplicationDetector.reset()
   }

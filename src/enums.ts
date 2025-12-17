@@ -44,12 +44,19 @@ export enum DetectionCode {
  * Error code enumeration
  */
 export enum ErrorCode {
-  // Detector initialization failed
+  // 检测器初始化失败
   DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',
-  // Camera access denied
+  // 摄像头访问被拒绝
   CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',
-  // Video stream acquisition failed
+  // 视频流获取失败
   STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED',
-  // Fraud detected: non-real face
-  SUSPECTED_FRAUDS_DETECTED = 'SUSPECTED_FRAUDS_DETECTED',
+  // 内部错误
+  INTERNAL_ERROR = 'INTERNAL_ERROR',
+}
+
+export enum EngineState {
+  IDLE = 'idle',                    // 初始状态
+  INITIALIZING = 'initializing',    // 正在初始化
+  READY = 'ready',                  // 初始化完成，就绪
+  DETECTING = 'detecting'           // 检测中
 }

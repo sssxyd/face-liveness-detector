@@ -15,47 +15,59 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   tensorflow_backend: 'auto',
 
   // Detection Settings
-  video_width: 640,
-  video_height: 640,
-  video_mirror: true,
-  video_load_timeout: 5000,
-  detection_frame_delay: 100,
-  error_retry_delay: 200,
+  detect_video_width: 640,
+  detect_video_height: 640,
+  detect_video_mirror: true,
+  detect_video_load_timeout: 5000,
+  detect_frame_delay: 100,
+  detect_error_retry_delay: 200,
 
   // Collection Settings
-  silent_detect_count: 3,
-  min_face_ratio: 0.5,
-  max_face_ratio: 0.9,
-  min_face_frontal: 0.9,
-  min_image_quality: 0.5,
-  min_real_score: 0.85,
-  min_live_score: 0.5,
-  suspected_frauds_count: 3,
-  face_frontal_features: {
+  collect_min_collect_count: 3,
+  collect_min_face_ratio: 0.5,
+  collect_max_face_ratio: 0.9,
+  collect_min_face_frontal: 0.9,
+  collect_min_image_quality: 0.5,
+  collect_face_frontal_features: {
     yaw_threshold: 3,
     pitch_threshold: 4,
     roll_threshold: 2
   },
-  image_quality_features: {
+  collect_image_quality_features: {
     require_full_face_in_bounds: false,
-    use_opencv_enhancement: true,
     min_laplacian_variance: 50,
     min_gradient_sharpness: 0.15,
     min_blur_score: 0.6
   },
 
   // Liveness Settings
-  liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
-  liveness_action_count: 1,
-  liveness_action_randomize: true,
-  liveness_verify_timeout: 60000,
-  min_mouth_open_percent: 0.2,
+  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
+  action_liveness_action_count: 1,
+  action_liveness_action_randomize: true,
+  action_liveness_verify_timeout: 60000,
+  action_liveness_min_mouth_open_percent: 0.2,
 
   // Motion Liveness Settings
-  min_motion_score: 0.15,
-  min_keypoint_variance: 0.02,
-  motion_frame_buffer_size: 5,
-  eye_aspect_ratio_threshold: 0.15,
+  motion_liveness_min_motion_score: 0.15,
+  motion_liveness_min_keypoint_variance: 0.02,
+  motion_liveness_frame_buffer_size: 5,
+  motion_liveness_eye_aspect_ratio_threshold: 0.15,
+
+  // Screen Capture Detection Settings
+  screen_capture_confidence_threshold: 0.6,
+  screen_capture_min_frames_required: 5,
+  screen_capture_moire_threshold: 0.65,
+  screen_capture_fft_size: 256,
+  screen_capture_flicker_max_history: 300,
+  screen_capture_flicker_min_samples: 60,
+  screen_capture_flicker_min_period: 5,
+  screen_capture_flicker_max_period: 50,
+  screen_capture_flicker_strength_threshold: 0.3,
+  screen_capture_grid_high_freq_threshold: 0.15,
+  screen_capture_grid_strength_threshold: 0.6,
+  screen_capture_chromatic_shift_threshold: 0.5,
+  screen_capture_duplication_max_history: 30,
+  screen_capture_duplication_similarity_threshold: 0.98,
 }
 
 /**

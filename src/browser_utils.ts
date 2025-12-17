@@ -25,6 +25,19 @@ export function drawCanvasToMat(cv: any, canvas: HTMLCanvasElement, gray: boolea
     }
 }
 
+export function matToGray(cv: any, mat: any): any | null {
+    try {
+        if (!cv || !mat || mat.empty()) {
+            return null
+        }
+        const grayMat = new cv.Mat()
+        cv.cvtColor(mat, grayMat, cv.COLOR_BGR2GRAY)
+        return grayMat
+    } catch (e) {
+        return null
+    }
+}
+
 /**
  * Convert OpenCV Mat to Base64 JPEG image
  * @param {any} cv - OpenCV instance
