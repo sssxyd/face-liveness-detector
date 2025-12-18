@@ -40,7 +40,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
     min_blur_score: 0.6
   },
 
-  // Liveness Settings
+  // action Liveness Settings
   action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   action_liveness_action_count: 1,
   action_liveness_action_randomize: true,
@@ -52,6 +52,9 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   motion_liveness_min_keypoint_variance: 0.02,
   motion_liveness_frame_buffer_size: 5,
   motion_liveness_eye_aspect_ratio_threshold: 0.15,
+  motion_liveness_min_optical_flow_threshold: 0.02,
+  motion_liveness_motion_consistency_threshold: 0.3,
+  motion_liveness_strict_photo_detection: false,
 
   // Screen Capture Detection Settings
   screen_capture_confidence_threshold: 0.6,

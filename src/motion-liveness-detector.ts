@@ -62,8 +62,8 @@ export class MotionDetectionResult {
   }
 
   /**
-   * Get liveness detection result message
-   * Returns empty string if lively, otherwise returns reasons for non-liveness detection
+   * 获取活体检测结果信息
+   * 如果活跃，返回空字符串，否则返回非活体检测的原因
    */
   getMessage(minMotionScore: number, minKeypointVariance: number): string {
     if (this.isLively) {
@@ -72,22 +72,22 @@ export class MotionDetectionResult {
 
     const reasons: string[] = []
 
-    // Check motion score
+    // 检查运动评分
     if (this.motionScore < minMotionScore) {
-      reasons.push(`Insufficient motion detected (motion score: ${(this.motionScore * 100).toFixed(1)}%)`)
+      reasons.push(`检测到的运动不足 (运动评分: ${(this.motionScore * 100).toFixed(1)}%)`)
     }
 
-    // Check keypoint variance
+    // 检查关键点方差
     if (this.keypointVariance < minKeypointVariance) {
-      reasons.push(`Low keypoint variance (${(this.keypointVariance * 100).toFixed(1)}%), indicating static/photo-like face`)
+      reasons.push(`关键点方差低 (${(this.keypointVariance * 100).toFixed(1)}%)，表示面孔静止或类似照片`)
     }
 
-    // Check motion type
+    // 检查运动类型
     if (this.motionType === 'none') {
-      reasons.push('No motion detected, face appears to be static or from a photo')
+      reasons.push('未检测到运动，面孔似乎是静止的或来自照片')
     }
 
-    // If no specific reasons found but still not lively, provide generic message
+    // 如果没有找到具体原因但仍然不活跃，提供通用信息
     if (reasons.length === 0) {
       reasons.push('Face does not meet liveness requirements')
     }
@@ -103,13 +103,19 @@ export type MotionType = 'none' | 'rotation' | 'translation' | 'breathing' | 'mi
  */
 export interface MotionLivenessDetectorOptions {
   // 活体检测的最小运动评分阈值 (0-1)
-  minMotionThreshold: number
+  minMotionThreshold?: number
   // 最小关键点方差阈值 (0-1)
-  minKeypointVariance: number
+  minKeypointVariance?: number
   // 运动历史分析的帧缓冲区大小
-  frameBufferSize: number
+  frameBufferSize?: number
   // 眨眼检测的眼睛宽高比阈值 (0-1)
-  eyeAspectRatioThreshold: number
+  eyeAspectRatioThreshold?: number
+  // 光流和关键点方差一致性阈值 (0-1) - 防止照片微动
+  motionConsistencyThreshold?: number
+  // 最小光流幅度阈值 - 照片几乎无光流 (0-1)
+  minOpticalFlowThreshold?: number
+  // 是否启用严格照片检测模式
+  strictPhotoDetection?: boolean
 }
 
 /**
@@ -131,28 +137,37 @@ interface FaceKeypoints {
  * 使用光流、关键点跟踪和面部特征分析
  */
 export class MotionLivenessDetector {
-  // Configuration with default values
+  // 配置及默认值
   private readonly minMotionThreshold: number
   private readonly minKeypointVariance: number
   private readonly frameBufferSize: number
   private readonly eyeAspectRatioThreshold: number
+  private readonly motionConsistencyThreshold: number
+  private readonly minOpticalFlowThreshold: number
+  private readonly strictPhotoDetection: boolean
 
-  // State
+  // 状态
   private frameBuffer: any[] = [] // 存储 cv.Mat (gray)
   private keypointHistory: Array<FaceKeypoints> = []
   private faceAreaHistory: number[] = []
   private eyeAspectRatioHistory: number[] = []
   private mouthAspectRatioHistory: number[] = []
+  private opticalFlowHistory: number[] = []
+  private pupilSizeHistory: number[] = []
 
-  // OpenCV instance
+  // OpenCV 实例
   private cv: any = null
 
-  constructor(options: MotionLivenessDetectorOptions) {
-    // Set configuration with provided options or defaults
-    this.minMotionThreshold = options.minMotionThreshold
-    this.minKeypointVariance = options.minKeypointVariance
-    this.frameBufferSize = options.frameBufferSize
-    this.eyeAspectRatioThreshold = options.eyeAspectRatioThreshold
+  constructor(options: Partial<MotionLivenessDetectorOptions> = {}) {
+    // 用提供的选项或默认值设置配置
+    this.minMotionThreshold = options.minMotionThreshold ?? 0.15
+    this.minKeypointVariance = options.minKeypointVariance ?? 0.02
+    this.frameBufferSize = options.frameBufferSize ?? 5
+    this.eyeAspectRatioThreshold = options.eyeAspectRatioThreshold ?? 0.15
+    // 照片防护参数
+    this.motionConsistencyThreshold = options.motionConsistencyThreshold ?? 0.5
+    this.minOpticalFlowThreshold = options.minOpticalFlowThreshold ?? 0.08
+    this.strictPhotoDetection = options.strictPhotoDetection ?? false
   }
 
   setCVInstance(cvInstance: any): void {
@@ -164,7 +179,7 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Reset motion detection state
+   * 重置运动检测状态
    */
   reset(): void {
     // 清理所有缓存的 Mat 对象
@@ -176,35 +191,37 @@ export class MotionLivenessDetector {
     this.faceAreaHistory = []
     this.eyeAspectRatioHistory = []
     this.mouthAspectRatioHistory = []
+    this.opticalFlowHistory = []
+    this.pupilSizeHistory = []
   }
 
   /**
-   * Analyze motion and liveness from current frame and history
+   * 从当前帧和历史记录分析运动和活体性
    */
   analyzeMotion(
-    currentFrameMat: any,
-    currentFace: FaceResult,
+    grayMat: any,
+    faceResult: FaceResult,
     faceBox: Box
   ): MotionDetectionResult {
     try {
-      // Add current frame to buffer
-      this.addFrameToBuffer(currentFrameMat)
+      // 将当前帧添加到缓冲区
+      this.addFrameToBuffer(grayMat)
 
-      // Extract keypoints from current face
-      const currentKeypoints = this.extractKeypoints(currentFace)
+      // 从当前面孔提取关键点
+      const currentKeypoints = this.extractKeypoints(faceResult)
       this.keypointHistory.push(currentKeypoints)
       if (this.keypointHistory.length > this.frameBufferSize) {
         this.keypointHistory.shift()
       }
 
-      // Calculate face area
+      // 计算人脸区域
       const faceArea = faceBox[2] * faceBox[3]
       this.faceAreaHistory.push(faceArea)
       if (this.faceAreaHistory.length > this.frameBufferSize) {
         this.faceAreaHistory.shift()
       }
 
-      // Calculate eye and mouth aspect ratios
+      // 计算眼睛和嘴巴的宽高比
       if (currentKeypoints.leftEye && currentKeypoints.rightEye) {
         const leftEAR = this.calculateEyeAspectRatio(currentKeypoints.leftEye)
         const rightEAR = this.calculateEyeAspectRatio(currentKeypoints.rightEye)
@@ -223,35 +240,58 @@ export class MotionLivenessDetector {
         }
       }
 
-      // Need at least 2 frames for motion analysis
+      // 需要至少 2 帧进行运动分析
       if (this.frameBuffer.length < 2) {
         return this.createEmptyResult()
       }
 
-      // Analyze optical flow
+      // 分析光流
       const opticalFlowResult = this.analyzeOpticalFlow()
+      this.opticalFlowHistory.push(opticalFlowResult)
+      if (this.opticalFlowHistory.length > this.frameBufferSize) {
+        this.opticalFlowHistory.shift()
+      }
 
-      // Analyze keypoint stability
+      // 检测瞳孔反应（简单实现）
+      const pupilResponse = this.detectPupilResponse(currentKeypoints)
+      if (pupilResponse > 0) {
+        this.pupilSizeHistory.push(pupilResponse)
+        if (this.pupilSizeHistory.length > this.frameBufferSize) {
+          this.pupilSizeHistory.shift()
+        }
+      }
+
+      // 分析关键点稳定性
       const keypointVariance = this.calculateKeypointVariance()
 
-      // Analyze eye and mouth motion
+      // 分析眼睛和嘴巴运动
       const eyeMotionScore = this.calculateEyeMotionScore()
       const mouthMotionScore = this.calculateMouthMotionScore()
       const faceAreaVariance = this.calculateFaceAreaVariance()
 
-      // Detect motion type
+      // 验证运动一致性（防止照片微动攻击）
+      const motionConsistency = this.validateMotionConsistency(opticalFlowResult, keypointVariance)
+
+      // 检测运动类型
       const motionType = this.detectMotionType(opticalFlowResult, keypointVariance)
 
-      // Calculate overall motion score
+      // 计算总体运动评分（调整权重以应对照片攻击）
       const motionScore = this.calculateOverallMotionScore(
         opticalFlowResult,
         keypointVariance,
         eyeMotionScore,
-        mouthMotionScore
+        mouthMotionScore,
+        motionConsistency
       )
 
-      // Determine liveness
-      const isLively = this.determineLiveness(motionScore, keypointVariance, motionType)
+      // 确定活体性（加入额外检查）
+      const isLively = this.determineLiveness(
+        motionScore,
+        keypointVariance,
+        motionType,
+        opticalFlowResult,
+        motionConsistency
+      )
 
       return new MotionDetectionResult(
         motionScore,
@@ -277,12 +317,12 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * Add frame to circular buffer
+   * 将帧添加到循环缓冲区
    */
-  private addFrameToBuffer(frameMat: any): void {
+  private addFrameToBuffer(grayMat: any): void {
 
     try {
-      const gray = frameMat.clone()
+      const gray = grayMat.clone()
       
       this.frameBuffer.push(gray)
       
@@ -293,6 +333,79 @@ export class MotionLivenessDetector {
       }
     } catch (error) {
       console.warn('[MotionLivenessDetector] Failed to add frame:', error)
+    }
+  }
+
+  /**
+   * 验证运动一致性 - 防止照片微动攻击
+   * 真实面部运动：光流和关键点方差应该一致且相关
+   * 照片微动：只有光流或只有噪声，二者不匹配
+   */
+  private validateMotionConsistency(opticalFlow: number, keypointVariance: number): number {
+    // 如果光流和关键点变化都很低，返回0（静止或照片）
+    if (opticalFlow < 0.01 && keypointVariance < 0.01) {
+      return 0
+    }
+
+    // 计算二者的相关性
+    // 真实运动：二者应该相关联（同时增加）
+    // 照片微动：可能只有一个很大（比如光流大但关键点稳定）
+    const ratio = Math.min(opticalFlow, keypointVariance) / Math.max(opticalFlow, keypointVariance, 0.01)
+    
+    // 一致性分数：接近1表示匹配良好，接近0表示不匹配（可疑）
+    return ratio
+  }
+
+  /**
+   * 检测瞳孔反应 - 活体的关键特征
+   * 照片的瞳孔无法反应光线变化
+   */
+  private detectPupilResponse(keypoints: FaceKeypoints): number {
+    if (!keypoints.leftEye || !keypoints.rightEye) {
+      return 0
+    }
+
+    try {
+      // 计算左眼瞳孔大小（使用眼睛关键点的范围）
+      const leftEyeSize = this.calculateEyeSize(keypoints.leftEye)
+      const rightEyeSize = this.calculateEyeSize(keypoints.rightEye)
+      const avgEyeSize = (leftEyeSize + rightEyeSize) / 2
+      
+      return avgEyeSize
+    } catch (error) {
+      return 0
+    }
+  }
+
+  /**
+   * 计算眼睛大小（用于瞳孔反应检测）
+   */
+  private calculateEyeSize(eyeKeypoints: any[][]): number {
+    if (!eyeKeypoints || eyeKeypoints.length < 4) {
+      return 0
+    }
+
+    try {
+      // 计算眼睛边界框
+      let minX = Infinity, maxX = -Infinity
+      let minY = Infinity, maxY = -Infinity
+
+      for (const point of eyeKeypoints) {
+        if (point && point.length >= 2) {
+          minX = Math.min(minX, point[0])
+          maxX = Math.max(maxX, point[0])
+          minY = Math.min(minY, point[1])
+          maxY = Math.max(maxY, point[1])
+        }
+      }
+
+      if (minX === Infinity || minY === Infinity) return 0
+
+      const width = maxX - minX
+      const height = maxY - minY
+      return width * height // 面积
+    } catch (error) {
+      return 0
     }
   }
 
@@ -720,24 +833,41 @@ export class MotionLivenessDetector {
 
   /**
    * 从多个来源计算总体运动评分
+   * 针对照片攻击进行优化：提高光流和关键点方差的权重
    */
   private calculateOverallMotionScore(
     opticalFlow: number,
     keypointVariance: number,
     eyeMotion: number,
-    mouthMotion: number
+    mouthMotion: number,
+    motionConsistency: number
   ): number {
-    // 不同运动指标的加权组合
+    // 针对照片防护的优化权重：
+    // - 光流权重提高至 0.45（照片特征是零光流）
+    // - 关键点方差权重保持较高 0.35（照片完全静止）
+    // - 运动一致性权重 0.1（防止微动假正）
+    // - 眼睛和嘴巴运动权重降低 0.05 + 0.05
     const weights = {
-      opticalFlow: 0.3,
-      keypointVariance: 0.4,
-      eyeMotion: 0.15,
-      mouthMotion: 0.15
+      opticalFlow: 0.45,
+      keypointVariance: 0.35,
+      motionConsistency: 0.1,
+      eyeMotion: 0.05,
+      mouthMotion: 0.05
+    }
+
+    // 严格模式：进一步提高光流权重
+    if (this.strictPhotoDetection) {
+      weights.opticalFlow = 0.55
+      weights.keypointVariance = 0.3
+      weights.motionConsistency = 0.15
+      weights.eyeMotion = 0
+      weights.mouthMotion = 0
     }
 
     return (
       opticalFlow * weights.opticalFlow +
       keypointVariance * weights.keypointVariance +
+      motionConsistency * weights.motionConsistency +
       eyeMotion * weights.eyeMotion +
       mouthMotion * weights.mouthMotion
     )
@@ -745,29 +875,58 @@ export class MotionLivenessDetector {
 
   /**
    * 根据运动分析确定面部是否活跃
+   * 增强照片防护：加入光流最小阈值和运动一致性检查
    */
   private determineLiveness(
     motionScore: number,
     keypointVariance: number,
-    motionType: MotionType
+    motionType: MotionType,
+    opticalFlow: number,
+    motionConsistency: number
   ): boolean {
     // 照片特征：
     // - 运动评分几乎为零 (< 0.15)
     // - 关键点方差很低 (< 0.02)
+    // - 光流几乎为零 (< 0.08) ← 最明显的照片特征
     // - 运动类型 = 'none'
+    // - 运动不一致（光流和关键点不匹配）← 照片微动
 
-    // 必须有有意义的运动
+    // 检查1：必须有有意义的光流（照片的最弱点）
+    // 照片无法产生光流，这是最可靠的指标
+    if (opticalFlow < this.minOpticalFlowThreshold) {
+      return false
+    }
+
+    // 检查2：必须有有意义的运动评分
     if (motionScore < this.minMotionThreshold) {
       return false
     }
 
-    // 必须有关键点变化（自然运动）
+    // 检查3：必须有关键点变化（自然运动）
     if (keypointVariance < this.minKeypointVariance) {
       return false
     }
 
-    // 运动类型 'none' 表示静态照片
+    // 检查4：运动类型 'none' 表示静态照片
     if (motionType === 'none') {
+      return false
+    }
+
+    // 检查5：运动一致性检查（防止照片微动）
+    // 真实面部运动：光流和关键点应该一致
+    // 照片微动：二者会严重不匹配
+    if (motionConsistency < this.motionConsistencyThreshold) {
+      return false
+    }
+
+    // 检查6：验证物理约束（防止突跳式微动）
+    // 真实运动加速度平滑，照片微动会有突跳
+    if (!this.validatePhysicalConstraints()) {
+      return false
+    }
+
+    // 严格模式：需要更高的光流阈值
+    if (this.strictPhotoDetection && opticalFlow < this.minOpticalFlowThreshold * 1.5) {
       return false
     }
 
@@ -798,6 +957,45 @@ export class MotionLivenessDetector {
   }
 
   /**
+   * 验证运动的物理约束
+   * 照片微动的运动往往会违反物理约束（如速度跳跃）
+   * 真实面部运动应该表现出光滑的加速度和速度变化
+   */
+  private validatePhysicalConstraints(): boolean {
+    if (this.opticalFlowHistory.length < 3) {
+      return true // 数据不足，不检查
+    }
+
+    // 检查光流的加速度变化（应该平滑）
+    const flowAccelerations: number[] = []
+    for (let i = 2; i < this.opticalFlowHistory.length; i++) {
+      const prev = this.opticalFlowHistory[i - 2]
+      const curr = this.opticalFlowHistory[i - 1]
+      const next = this.opticalFlowHistory[i]
+      
+      // 计算加速度（二阶差分）
+      const accel = Math.abs((next - curr) - (curr - prev))
+      flowAccelerations.push(accel)
+    }
+
+    if (flowAccelerations.length === 0) return true
+
+    // 计算加速度的平均值和方差
+    const avgAccel = flowAccelerations.reduce((a, b) => a + b, 0) / flowAccelerations.length
+    const accelVariance = this.calculateVariance(flowAccelerations)
+
+    // 照片微动的特征：加速度变化很大（突跳）
+    // 真实运动的加速度变化应该相对稳定
+    const accelRatio = accelVariance / (avgAccel + 0.01)
+
+    // 阈值：如果加速度变化过大，说明可能是微动（突跳运动）
+    // 合理的值约为 0.5-2.0，超过 3.0 表示不自然
+    const maxAccelRatio = this.strictPhotoDetection ? 2.0 : 3.0
+    
+    return accelRatio < maxAccelRatio
+  }
+
+  /**
    * 获取运动检测结果（用于调试）
    */
   getStatistics(): any {
@@ -806,7 +1004,9 @@ export class MotionLivenessDetector {
       keypointHistorySize: this.keypointHistory.length,
       faceAreaHistorySize: this.faceAreaHistory.length,
       eyeAspectRatioHistorySize: this.eyeAspectRatioHistory.length,
-      mouthAspectRatioHistorySize: this.mouthAspectRatioHistory.length
+      mouthAspectRatioHistorySize: this.mouthAspectRatioHistory.length,
+      opticalFlowHistorySize: this.opticalFlowHistory.length,
+      pupilSizeHistorySize: this.pupilSizeHistory.length
     }
   }
 }

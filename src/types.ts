@@ -66,6 +66,10 @@ export interface FaceDetectionEngineOptions {
   motion_liveness_min_keypoint_variance?: number // 自然运动的最小关键点方差（0-1）
   motion_liveness_frame_buffer_size?: number // 用于运动分析的帧缓冲区数量
   motion_liveness_eye_aspect_ratio_threshold?: number // 眨眼检测的眼睛长宽比阈值
+  motion_liveness_motion_consistency_threshold?: number // 光流和关键点方差一致性阈值 (0-1) - 防止照片微动
+  motion_liveness_min_optical_flow_threshold?: number // 最小光流幅度阈值 - 照片几乎无光流 (0-1)
+  motion_liveness_strict_photo_detection?: boolean // 是否启用严格照片检测模式
+
 
   // ========== 屏幕采集检测设置 ==========
   screen_capture_confidence_threshold?: number // 屏幕采集的置信度阈值（0-1，默认 0.6）
