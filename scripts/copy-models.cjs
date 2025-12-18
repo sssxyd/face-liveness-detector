@@ -80,14 +80,6 @@ const REQUIRED_MODELS = [
   'facemesh.json',
   'facemesh.bin',
   
-  // Antispoof (liveness detection)
-  'antispoof.json',
-  'antispoof.bin',
-  
-  // Liveness detection
-  'liveness.json',
-  'liveness.bin',
-  
   // Model manifest (required)
   'models.json',
 ];

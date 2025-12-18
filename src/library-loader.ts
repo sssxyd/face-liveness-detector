@@ -368,22 +368,29 @@ export function getCvSync() {
 
 /**
  * Create Human.js configuration object
+ * 使用 blazeface (人脸检测) 和 facemesh (脸部关键点) 模型
  */
 function _createHumanConfig(backend: string, modelPath?: string, wasmPath?: string): any {
   const config: any = {
     backend,
     face: {
       enabled: true,
-      detector: { rotation: false, return: true },
-      mesh: { enabled: true },
+      detector: { 
+        enabled: true,        // blazeface 人脸检测器
+        rotation: false, 
+        return: true 
+      },
+      mesh: { 
+        enabled: true         // facemesh 脸部关键点（包含表情特征）
+      },
       iris: { enabled: false },
-      antispoof: { enabled: true },
-      liveness: { enabled: true }
+      antispoof: { enabled: false },
+      liveness: { enabled: false }
     },
     body: { enabled: false },
     hand: { enabled: false },
     object: { enabled: false },
-    gesture: { enabled: true }
+    gesture: { enabled: false }  // 关闭手势识别（节省资源）
   }
 
   if (modelPath) {
