@@ -38,8 +38,8 @@ export interface FaceDetectionEngineOptions {
   tensorflow_backend?: 'auto' | 'webgl' | 'wasm'  // TensorFlow 后端选择
 
   // ========== 检测设置 ==========
-  detect_video_width?: number  // 视频流宽度
-  detect_video_height?: number // 视频流高度
+  detect_video_ideal_width?: number  // 视频流建议分辨率宽度
+  detect_video_ideal_height?: number // 视频流建议分辨率高度
   detect_video_mirror?: boolean // 水平镜像视频
   detect_video_load_timeout?: number // 加载视频流的超时时间（毫秒）
   detect_frame_delay?: number // 检测帧之间的延迟（毫秒）
@@ -69,15 +69,12 @@ export interface FaceDetectionEngineOptions {
 
   // ========== 屏幕采集检测设置 ==========
   screen_capture_confidence_threshold?: number // 屏幕采集的置信度阈值（0-1，默认 0.6）
+  screen_capture_detection_strategy?: 'fastest' | 'fast' | 'accurate' | 'adaptive' // 检测策略
 
   // 莫尔纹检测参数
   screen_moire_pattern_threshold?: number // 综合莫尔纹置信度阈值（0-1，默认 0.65）
   screen_moire_pattern_enable_dct?: boolean // 是否启用 DCT 分析（默认 true）
   screen_moire_pattern_enable_edge_detection?: boolean // 是否启用边缘检测（默认 true）
-  
-  // 像素网格检测参数
-  screen_pixel_grid_high_freq_threshold?: number // 高频能量阈值（0-1，默认 0.15）
-  screen_pixel_grid_strength_threshold?: number // 网格强度阈值（0-1，默认 0.6）
   
   // 屏幕色彩特征参数
   screen_color_saturation_threshold?: number   // 色彩饱和度阈值（0-100%，屏幕图像通常 < 40%）
@@ -85,6 +82,16 @@ export interface FaceDetectionEngineOptions {
   screen_color_pixel_entropy_threshold?: number  // 像素值熵阈值（0-8，屏幕通常 < 6.5）
   screen_color_gradient_smoothness_threshold?: number    // 梯度平滑性阈值（0-1，屏幕通常 > 0.7）
   screen_color_confidence_threshold?: number // 综合置信度阈值（0-1，用于判定是否为屏幕拍摄）
+
+  // 屏幕 RGB 发光模式检测参数
+  screen_rgb_low_freq_start_percent?: number // 低频段开始位置（相对于频谱长度的百分比）
+  screen_rgb_low_freq_end_percent?: number   // 低频段结束位置（相对于频谱长度的百分比）
+  screen_rgb_energy_ratio_normalization_factor?: number // 能量比归一化因子
+  screen_rgb_channel_difference_normalization_factor?: number // 通道均值差异的归一化因子
+  screen_rgb_energy_score_weight?: number // RGB 周期性能量权重
+  screen_rgb_asymmetry_score_weight?: number // RGB 通道不同步程度权重
+  screen_rgb_difference_factor_weight?: number // 通道均值差异权重
+  screen_rgb_confidence_threshold?: number // RGB  屏幕拍摄的置信度阈值
 }
 
 /**

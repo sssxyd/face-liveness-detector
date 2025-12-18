@@ -15,8 +15,8 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   tensorflow_backend: 'auto',
 
   // Detection Settings
-  detect_video_width: 640,
-  detect_video_height: 640,
+  detect_video_ideal_width: 1920,
+  detect_video_ideal_height: 1080,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
   detect_frame_delay: 100,
@@ -55,9 +55,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
 
   // Screen Capture Detection Settings
   screen_capture_confidence_threshold: 0.6,
-
-  screen_pixel_grid_high_freq_threshold: 0.15,
-  screen_pixel_grid_strength_threshold: 0.6,
+  screen_capture_detection_strategy: 'adaptive',
 
   screen_moire_pattern_threshold: 0.65,
   screen_moire_pattern_enable_dct: true,
@@ -68,6 +66,15 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   screen_color_pixel_entropy_threshold: 6.5,
   screen_color_gradient_smoothness_threshold: 0.7,
   screen_color_confidence_threshold: 0.6,
+
+  screen_rgb_low_freq_start_percent: 0.15,
+  screen_rgb_low_freq_end_percent: 0.35,
+  screen_rgb_energy_ratio_normalization_factor: 10,
+  screen_rgb_channel_difference_normalization_factor: 50,
+  screen_rgb_energy_score_weight: 0.40,
+  screen_rgb_asymmetry_score_weight: 0.40,
+  screen_rgb_difference_factor_weight: 0.20,
+  screen_rgb_confidence_threshold: 0.60,
 }
 
 /**

@@ -276,7 +276,7 @@ function detectMoirePatternDCT(
     }
     
     // 莫尔纹特征：高周期性 + 明确的方向性
-    const moireStrength = periodicityScore * 0.6 + directionality * 0.4
+    const moireStrength = periodicityScore * 0.7 + directionality * 0.3
     
     return {
       moireStrength,

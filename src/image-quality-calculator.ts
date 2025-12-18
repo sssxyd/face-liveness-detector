@@ -181,7 +181,7 @@ function checkFaceCompletenessInternal(
   let opencvContourScore = 1.0
   let opencvSharpnessScore = 1.0
 
-  if (config.use_opencv_enhancement && matImage) {
+  if (matImage) {
     try {
       if (face?.box) {
         opencvContourScore = detectFaceCompletenessOpenCVContour(cv, matImage, face.box)

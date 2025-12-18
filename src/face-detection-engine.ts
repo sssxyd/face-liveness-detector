@@ -22,7 +22,7 @@ import { calcImageQuality } from './image-quality-calculator'
 import { loadOpenCV, loadHuman, getOpenCVVersion, detectBrowserEngine } from './library-loader'
 import { MotionLivenessDetector } from './motion-liveness-detector'
 import { drawCanvasToMat, matToGray } from './browser_utils'
-import { ScreenCaptureDetector } from './screen-capture-detector'
+import { ScreenCaptureDetector, stringToDetectionStrategy } from './screen-capture-detector'
 
 /**
  * Detector info parameters
@@ -59,7 +59,6 @@ class DetectionState {
   motionDetector: MotionLivenessDetector | null = null
   liveness: boolean = false
   screenDetector: ScreenCaptureDetector | null = null
-  realness: boolean = false
 
   constructor(options: Partial<DetectionState>) {
     Object.assign(this, options)
@@ -85,7 +84,7 @@ class DetectionState {
   // 是否准备好进行动作验证
   isReadyToVerify(minCollectCount: number): boolean {
     if (this.period === DetectionPeriod.COLLECT 
-      && this.realness && this.liveness 
+      && this.liveness 
       && this.collectCount >= minCollectCount)
       {
         return true
@@ -137,16 +136,23 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     })
     this.detectionState.screenDetector = new ScreenCaptureDetector({
       confidenceThreshold: this.options.screen_capture_confidence_threshold,
+      detectionStrategy: stringToDetectionStrategy(this.options.screen_capture_detection_strategy),
       moireThreshold: this.options.screen_moire_pattern_threshold,
       moireEnableDCT: this.options.screen_moire_pattern_enable_dct,
       moireEnableEdgeDetection: this.options.screen_moire_pattern_enable_edge_detection,
-      gridHighFreqThreshold: this.options.screen_pixel_grid_high_freq_threshold,
-      gridStrengthThreshold: this.options.screen_pixel_grid_strength_threshold,
       colorSaturationThreshold: this.options.screen_color_saturation_threshold,
       colorRgbCorrelationThreshold: this.options.screen_color_rgb_correlation_threshold,
       colorPixelEntropyThreshold: this.options.screen_color_pixel_entropy_threshold,
-      colorGradientSmoothnessThreshold: this.options.screen_color_gradient_smoothness_threshold,
       colorConfidenceThreshold: this.options.screen_color_confidence_threshold,
+      rgbLowFreqStartPercent: this.options.screen_rgb_low_freq_start_percent,
+      rgbLowFreqEndPercent: this.options.screen_rgb_low_freq_end_percent,
+      rgbEnergyRatioNormalizationFactor: this.options.screen_rgb_energy_ratio_normalization_factor,
+      rgbChannelDifferenceNormalizationFactor: this.options.screen_rgb_channel_difference_normalization_factor,
+      rgbEnergyScoreWeight: this.options.screen_rgb_energy_score_weight,
+      rgbAsymmetryScoreWeight: this.options.screen_rgb_asymmetry_score_weight,
+      rgbDifferenceFactorWeight: this.options.screen_rgb_difference_factor_weight,
+      rgbConfidenceThreshold: this.options.screen_rgb_confidence_threshold
+
     })
   }
 
@@ -361,9 +367,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: 'user',
-            width: { ideal: this.options.detect_video_width },
-            height: { ideal: this.options.detect_video_height },
-            aspectRatio: { ideal: this.options.detect_video_width / this.options.detect_video_height }
+            width: { ideal: this.options.detect_video_ideal_width },
+            height: { ideal: this.options.detect_video_ideal_height },
+            aspectRatio: { ideal: this.options.detect_video_ideal_width / this.options.detect_video_ideal_height }
           },
           audio: false
         })
@@ -657,35 +663,35 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     
     // 当前帧图片
-    const frameImage = drawCanvasToMat(this.cv, frameCanvas, false)
-    if (!frameImage) {
+    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
+    if (!bgrFrame) {
       this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
       return
     }
 
     // 当前帧灰度图片
-    const grayImage = matToGray(this.cv, frameImage)
-    if (!grayImage) {
-      frameImage.delete()
+    const grayFrame = matToGray(this.cv, bgrFrame)
+    if (!grayFrame) {
+      bgrFrame.delete()
       this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
       return
     }    
 
     // 提取人脸区域图片及灰度图片
-    const faceImage = frameImage.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
-    const faceGrayImage = matToGray(this.cv, faceImage)
-    if (!faceGrayImage) {
-      frameImage.delete()
-      faceImage.delete()
+    const bgrFace = bgrFrame.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
+    const grayFace = matToGray(this.cv, bgrFace)
+    if (!grayFace) {
+      bgrFrame.delete()
+      bgrFace.delete()
       this.emitDebug('detection', 'Failed to convert face Mat to grayscale', {}, 'warn')
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
       return
     }
 
     // 释放不再需要的Mat
-    frameImage.delete()
+    bgrFrame.delete()
 
     try{
       if(!this.detectionState.screenDetector) {
@@ -707,12 +713,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 屏幕捕获检测, 只关心脸部区域
-      const screenResult = this.detectionState.screenDetector.detectScreenCapture(faceImage, faceGrayImage)
-      faceImage.delete()
-      faceGrayImage.delete()
+      const screenResult = this.detectionState.screenDetector.detectAuto(bgrFace, grayFace)
+      bgrFace.delete()
+      grayFace.delete()
       // 屏幕捕获检测器已经准备就绪，其验证结果可信
       if(screenResult.isScreenCapture){
-        grayImage.delete()
+        grayFrame.delete()
         this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_REAL, message: screenResult.getMessage(), screenConfidence: screenResult.confidenceScore })
         this.emitDebug('screen-capture-detection', 'Screen capture detected - possible video replay attack', {
           confidence: screenResult.confidenceScore,
@@ -722,13 +728,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
         return
       }
-      this.detectionState.realness = true
 
       // 运动检测
-      const motionResult = this.detectionState.motionDetector.analyzeMotion(grayImage, face, faceBox)
+      const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, face, faceBox)
       if(this.detectionState.motionDetector.isReady()){
         // 运动检测器已经准备就绪，其验证结果可信
         if (!motionResult.isLively) {
+          grayFrame.delete()
           this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
             motionScore: motionResult.motionScore,
             keypointVariance: motionResult.keypointVariance,
@@ -768,7 +774,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       let frontal = 1
       // 计算面部正对度，不达标则跳过当前帧
       if(this.detectionState.needFrontalFace()){
-        frontal = calcFaceFrontal(this.cv, face, gestures, grayImage, this.options.collect_face_frontal_features)
+        frontal = calcFaceFrontal(this.cv, face, gestures, grayFrame, this.options.collect_face_frontal_features)
         this.detectionState.lastFrontalScore = frontal
 
         if (frontal < this.options.collect_min_face_frontal) {
@@ -780,14 +786,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 计算面部质量，不达标则跳过当前帧
-      const qualityResult = calcImageQuality(this.cv, grayImage, face, this.actualVideoWidth, this.actualVideoHeight, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
+      const qualityResult = calcImageQuality(this.cv, grayFrame, face, this.actualVideoWidth, this.actualVideoHeight, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
         this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.options.collect_min_image_quality }, 'info')
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
         return
       }
-      grayImage.delete()
+      grayFrame.delete()
 
       // 当前帧通过常规检查
       this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_CHECK_PASS, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
@@ -832,17 +838,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
     }
     finally{
-      if (grayImage) {
-        grayImage.delete()
+      if (grayFrame) {
+        grayFrame.delete()
       }
-      if (frameImage) {
-        frameImage.delete()
+      if (bgrFrame) {
+        bgrFrame.delete()
       }
-      if (faceImage) {
-        faceImage.delete()
+      if (bgrFace) {
+        bgrFace.delete()
       }
-      if (faceGrayImage) {
-        faceGrayImage.delete()
+      if (grayFace) {
+        grayFace.delete()
       }
     }
   }
