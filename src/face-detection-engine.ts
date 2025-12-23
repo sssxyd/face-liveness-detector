@@ -77,6 +77,66 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.detectionState = createDetectionState(this.options)
   }
 
+  /**
+   * 提取错误信息的辅助方法 - 处理各种错误类型
+   * @param error - 任意类型的错误对象
+   * @returns 包含错误消息和堆栈的对象
+   */
+  private extractErrorInfo(error: any): { message: string; stack: string; name?: string; cause?: string } {
+    // 处理 Error 实例
+    if (error instanceof Error) {
+      let causeStr: string | undefined
+      if (error.cause) {
+        causeStr = error.cause instanceof Error ? error.cause.message : String(error.cause)
+      }
+      return {
+        message: error.message || 'Unknown error',
+        stack: error.stack || this.getStackTrace(),
+        name: error.name,
+        cause: causeStr
+      }
+    }
+
+    // 处理其他对象类型
+    if (typeof error === 'object' && error !== null) {
+      let causeStr: string | undefined
+      if ('cause' in error) {
+        const cause = (error as any).cause
+        causeStr = cause instanceof Error ? cause.message : String(cause)
+      }
+      return {
+        message: error.message || JSON.stringify(error),
+        stack: error.stack || this.getStackTrace(),
+        name: error.name,
+        cause: causeStr
+      }
+    }
+
+    // 处理基本类型（string, number 等）
+    return {
+      message: String(error),
+      stack: this.getStackTrace()
+    }
+  }
+
+  /**
+   * 获取当前调用栈信息
+   */
+  private getStackTrace(): string {
+    try {
+      // 创建一个Error对象来获取堆栈
+      const err = new Error()
+      if (err.stack) {
+        // 移除前两行（Error 和 getStackTrace 本身）
+        const lines = err.stack.split('\n')
+        return lines.slice(2).join('\n') || 'Stack trace unavailable'
+      }
+      return 'Stack trace unavailable'
+    } catch {
+      return 'Stack trace unavailable'
+    }
+  }
+
   updateOptions(options?: Partial<FaceDetectionEngineOptions>): void {
     if(this.engineState == EngineState.DETECTING){
       this.stopDetection(false)
@@ -138,13 +198,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       try {
         this.human = await loadHuman(this.options.human_model_path, this.options.tensorflow_wasm_path, this.options.tensorflow_backend)
       } catch (humanError) {
-        const errorMsg = humanError instanceof Error ? humanError.message : 'Unknown error'
-        const stack = humanError instanceof Error ? humanError.stack : 'N/A'
+        const errorInfo = this.extractErrorInfo(humanError)
+        const errorMsg = errorInfo.message
         
         // 分析错误类型，提供针对性的建议
         let errorContext: any = {
           error: errorMsg,
-          stack,
+          stack: errorInfo.stack,
+          name: errorInfo.name,
+          cause: errorInfo.cause,
           userAgent: navigator.userAgent,
           platform: (navigator as any).userAgentData?.platform || 'unknown',
           browser: detectBrowserEngine(navigator.userAgent),
@@ -250,7 +312,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emit('detector-loaded', loadedData)
       this.emitDebug('initialization', 'Engine initialized and ready', loadedData)
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      const errorInfo = this.extractErrorInfo(error)
+      const errorMsg = errorInfo.message
       this.emit('detector-loaded' as any, {
         success: false,
         error: errorMsg
@@ -261,7 +324,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       })
       this.emitDebug('initialization', 'Failed to load libraries', {
         error: errorMsg,
-        stack: error instanceof Error ? error.stack : 'N/A'
+        stack: errorInfo.stack,
+        name: errorInfo.name,
+        cause: errorInfo.cause
       }, 'error')
     } finally {
       if (this.engineState === EngineState.INITIALIZING) {
@@ -403,10 +468,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       this.emitDebug('video-setup', 'Detection started')
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      const errorInfo = this.extractErrorInfo(error)
+      const errorMsg = errorInfo.message
       this.emitDebug('video-setup', 'Failed to start detection', {
         error: errorMsg,
-        stack: error instanceof Error ? error.stack : 'N/A'
+        stack: errorInfo.stack,
+        name: errorInfo.name,
+        cause: errorInfo.cause
       }, 'error')
       this.emit('detector-error' as any, {
         code: ErrorCode.STREAM_ACQUISITION_FAILED,
@@ -519,10 +587,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       try {
         result = await this.human.detect(this.videoElement)
       } catch (detectError) {
-        const errorMsg = detectError instanceof Error ? detectError.message : 'Unknown error'
+        const errorInfo = this.extractErrorInfo(detectError)
+        const errorMsg = errorInfo.message
         this.emitDebug('detection', 'Human.detect() call failed', {
           error: errorMsg,
-          stack: detectError instanceof Error ? detectError.stack : 'N/A',
+          stack: errorInfo.stack,
+          name: errorInfo.name,
           hasHuman: !!this.human,
           humanVersion: this.human?.version,
           videoReadyState: this.videoElement?.readyState,
@@ -548,10 +618,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.handleMultipleFaces(faces.length)
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      const errorInfo = this.extractErrorInfo(error)
+      const errorMsg = errorInfo.message
       this.emitDebug('detection', 'Unexpected error in detection loop', {
         error: errorMsg,
-        stack: error instanceof Error ? error.stack : 'N/A'
+        stack: errorInfo.stack,
+        name: errorInfo.name,
+        cause: errorInfo.cause
       }, 'error')
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
     }
@@ -758,10 +831,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.scheduleNextDetection(this.options.detect_frame_delay * 2.5)
       }
     } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+      const errorInfo = this.extractErrorInfo(error)
+      const errorMsg = errorInfo.message
       this.emitDebug('detection', 'Unexpected error in single face handling', {
         error: errorMsg,
-        stack: error instanceof Error ? error.stack : 'N/A'
+        stack: errorInfo.stack,
+        name: errorInfo.name,
+        cause: errorInfo.cause
       }, 'error')
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
     }
