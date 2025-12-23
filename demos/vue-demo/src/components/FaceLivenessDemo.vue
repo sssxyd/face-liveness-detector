@@ -84,26 +84,23 @@
       <video
         ref="videoElement"
         width="640"
-        height="480"
+        height="640"
         autoplay
         playsinline
         muted
       ></video>
-      <div v-if="isDetecting && currentAction" class="status-overlay">
-        <div v-if="currentAction" class="action-prompt">
-          <span class="action-icon">{{ getActionIcon(currentAction) }}</span>
-          <span class="action-text">{{ getActionText(currentAction) }}</span>
-        </div>
+    </div>
+
+    <!-- Action Prompt Display (Below Video) -->
+    <div v-if="isDetecting && currentAction" class="action-prompt-container">
+      <div class="action-prompt">
+        <span class="action-icon">{{ getActionIcon(currentAction) }}</span>
+        <span class="action-text">{{ getActionText(currentAction) }}</span>
       </div>
     </div>
 
     <!-- Messages Display (Below Video) -->
-    <div v-if="isDetecting" class="messages-container">
-      <!-- Action Message Display -->
-      <div class="action-message-panel">
-        <div v-if="actionMessage" class="action-message">{{ actionMessage }}</div>
-      </div>
-      
+    <div class="messages-container">      
       <!-- Status Message Display -->
       <div class="status-message-panel">
         <div class="status-message">{{ statusMessage }}</div>
@@ -116,7 +113,7 @@
       <div class="info-grid">
         <div class="info-item">
           <span class="label">Collect:</span>
-          <span class="value">{{ silentPassedCount }} / {{ config.silent_detect_count }}</span>
+          <span class="value">{{ silentPassedCount }} / {{ options.collect_min_collect_count }}</span>
         </div>
         <div class="info-item">
           <span class="label">Action:</span>
@@ -127,24 +124,22 @@
           <span class="value">{{ faceInfo.passed ? 'Yes' : 'No' }}</span>
         </div>              
         <div class="info-item">
-          <span class="label">Size:</span>
-          <span class="value">{{ (faceInfo.size * 100).toFixed(1) }}%</span>
+          <span class="label">Code:</span>
+          <span class="value">{{ faceInfo.code }}</span>
         </div>  
-        <div class="info-item">
-          <span class="label">Frontal:</span>
-          <span class="value">{{ (faceInfo.frontal * 100).toFixed(1) }}%</span>
+        <div class="info-item info-item-full">
+          <span class="label">Message:</span>
+          <span class="value">{{ faceInfo.message }}</span>
         </div>
-        <div class="info-item">
-          <span class="label">Quality:</span>
-          <span class="value">{{ (faceInfo.quality * 100).toFixed(1) }}%</span>
-        </div>
-        <div class="info-item">
-          <span class="label">Real:</span>
-          <span class="value">{{ (faceInfo.real * 100).toFixed(1) }}%</span>
-        </div>
-        <div class="info-item">
-          <span class="label">LIVE:</span>
-          <span class="value">{{ (faceInfo.live * 100).toFixed(1) }}%</span>
+        <div class="info-item info-item-full">
+          <span class="label">Data:</span>
+          <div class="value value-data">
+            <div v-for="(val, key) in faceInfo.data" :key="key" class="data-row">
+              <span class="data-key">{{ key }}:</span>
+              <span class="data-value">{{ val }}</span>
+            </div>
+            <div v-if="Object.keys(faceInfo.data).length === 0" class="data-empty">No data</div>
+          </div>
         </div>
       </div>
     </div>
@@ -233,7 +228,7 @@ import FaceDetectionEngine, {
   type DetectorActionEventData,
   type DetectorErrorEventData,
   type DetectorDebugEventData,
-  type FaceDetectionEngineConfig,
+  type FaceDetectionEngineOptions,
   DetectionCode
 } from '@sssxyd/face-liveness-detector'
 
@@ -250,8 +245,7 @@ const videoElement = ref<HTMLVideoElement | null>(null)
 // 状态
 const isEngineReady = ref<boolean>(false)
 const isDetecting = ref<boolean>(false)
-const statusMessage = ref<string>('等待开始检测...')
-const actionMessage = ref<string>('')
+const statusMessage = ref<string>('waiting...')
 const errorMessage = ref<string>('')
 const borderColor = ref<'idle' | 'warn' | 'yes' | 'success' | 'failed'>('idle')
 
@@ -263,11 +257,9 @@ const silentPassedCount = ref<number>(0)
 const actionPassedCount = ref<number>(0)
 const faceInfo = ref({
   passed: false,
-  size: 0,
-  frontal: 0,
-  quality: 0,
-  real: 0,
-  live: 0
+  code: '',
+  message: '',
+  data: {},
 })
 
 // 检测结果
@@ -285,24 +277,26 @@ const showDebugPanel = ref<boolean>(false)
 const maxDebugLogs = 100
 
 // 计算配置
-const config = computed<FaceDetectionEngineConfig>(() => ({
+const options = computed<FaceDetectionEngineOptions>(() => ({
   human_model_path: humanModelPath.value,
   tensorflow_wasm_path: tensorflowWasmPath.value,
-  video_width: 640,
-  video_height: 640,
-  min_image_quality: minImageQuality.value,
-  min_face_frontal: 0.9,
-  liveness_action_count: actionCount.value,
-  liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
-  silent_detect_count: 3,
-  min_real_score: 0.5,
-  min_live_score: 0.5
+  detect_video_ideal_width: 1920,
+  detect_video_ideal_height: 1080,  
+  motion_liveness_min_motion_score: 0.15,
+  motion_liveness_min_keypoint_variance: 0.02,
+  screen_capture_confidence_threshold: 0.6,
+  screen_capture_detection_strategy: 'adaptive',
+  collect_min_image_quality: minImageQuality.value,
+  collect_min_face_frontal: 0.9,
+  collect_min_collect_count: 3,
+  action_liveness_action_count: actionCount.value,
+  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
 }))
 
 // 初始化引擎
 onMounted(async () => {
   try {
-    engine = new FaceDetectionEngine(config.value)
+    engine = new FaceDetectionEngine(options.value)
     
     // Listen to events
     engine.on('detector-loaded', handleEngineReady)
@@ -313,6 +307,7 @@ onMounted(async () => {
     engine.on('detector-debug', handleDebugLog)
     
     // Initialize
+    statusMessage.value = 'Initializing engine...'
     await engine.initialize()
   } catch (error: any) {
     console.error('Engine initialization failed:', error)
@@ -349,39 +344,38 @@ function handleDetectorInfo(data: DetectorInfoEventData) {
   switch(data.code){
     case DetectionCode.FACE_CHECK_PASS:
       borderColor.value = 'yes'
-      statusMessage.value = 'Face detected successfully'
+      statusMessage.value = 'Face Collected'
       break
     case DetectionCode.VIDEO_NO_FACE:
     case DetectionCode.MULTIPLE_FACE:
       borderColor.value = 'failed'
-      statusMessage.value = getPromptMessage(data.code)
+      statusMessage.value = data.message || getPromptMessage(data.code)
       break
     default:
       borderColor.value = 'warn'
-      statusMessage.value = getPromptMessage(data.code)
+      statusMessage.value = data.message || getPromptMessage(data.code)
       break
   }
   
+  const { passed, code, message, ...restData } = data
   faceInfo.value = {
-    passed: data.passed,
-    size: data.size,
-    frontal: data.frontal,
-    quality: data.quality,
-    real: data.real,
-    live: data.live
+    passed,
+    code: String(code),
+    message,
+    data: restData
   }
 }
 
 function handleDetectorAction(data: DetectorActionEventData) {
   if (data.status === 'started') {
     currentAction.value = data.action
-    actionMessage.value = `Please perform action: ${getActionText(data.action)}`
+    statusMessage.value = `Please perform action: ${getActionText(data.action)}`
   } else if (data.status === 'completed') {
     actionPassedCount.value++
     currentAction.value = null
-    actionMessage.value = 'Action recognized successfully!'
+    statusMessage.value = 'Action recognized successfully!'
   } else if (data.status === 'timeout') {
-    actionMessage.value = 'Action recognition timeout'
+    statusMessage.value = 'Action recognition timeout'
   }
 }
 
@@ -434,10 +428,10 @@ async function startDetection() {
     currentAction.value = null
     detectionResult.value = null
     errorMessage.value = ''
-    faceInfo.value = { passed: false, size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
+    faceInfo.value = { passed: false, code: '', message: '', data: {} }
     
     // Update configuration
-    engine.updateConfig(config.value)
+    engine.updateOptions(options.value)
     
     // Start detection
     await engine.startDetection(videoElement.value)
@@ -455,7 +449,6 @@ function stopDetection() {
     isDetecting.value = false
     currentAction.value = null
     statusMessage.value = 'Detection stopped'
-    actionMessage.value = ''
     borderColor.value = 'idle'
   }
 }
@@ -465,9 +458,8 @@ function resetDetection() {
   errorMessage.value = ''
   silentPassedCount.value = 0
   actionPassedCount.value = 0
-  faceInfo.value = { passed: false, size: 0, frontal: 0, quality: 0, real: 0, live: 0 }
+  faceInfo.value = { passed: false, code: '', message: '', data: {} }
   statusMessage.value = 'Waiting to start detection...'
-  actionMessage.value = ''
   borderColor.value = 'idle'
 }
 
@@ -707,66 +699,16 @@ function getActionCountLabel(count: number): string {
   object-fit: cover;
 }
 
-.status-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: transparent;
-  padding: 15px;
-  color: white;
-  border-radius: 50%;
-}
-
-.messages-container {
-  width: 100%;
-  max-width: 640px;
-  margin: 20px auto 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.action-message-panel {
+.action-prompt-container {
   text-align: center;
-  width: 100%;
-}
-
-.action-message {
-  font-size: 16px;
-  font-weight: 600;
-  color: #fff;
-  padding: 12px 20px;
-  background: rgba(66, 185, 131, 0.95);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  word-break: break-word;
-}
-
-.status-message-panel {
-  text-align: center;
-  width: 100%;
-}
-
-.status-message {
-  font-size: 16px;
-  font-weight: 600;
-  color: #2c3e50;
-  padding: 12px 20px;
-  background: #f8f9fa;
-  border-radius: 6px;
-  border-left: 4px solid #42b983;
-  word-break: break-word;
+  margin-top: 15px;
+  margin-bottom: 20px;
 }
 
 .action-prompt {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
+  display: inline-block;
   background: rgba(66, 185, 131, 0.95);
-  padding: 30px 50px;
+  padding: 20px 40px;
   border-radius: 12px;
   text-align: center;
   box-shadow: 0 4px 20px rgba(0,0,0,0.3);
@@ -774,14 +716,15 @@ function getActionCountLabel(count: number): string {
 
 .action-icon {
   font-size: 48px;
-  display: block;
-  margin-bottom: 10px;
+  display: inline-block;  
+  margin-right: 10px;     
 }
 
 .action-text {
   font-size: 24px;
   font-weight: bold;
   color: white;
+  display: inline-block;  /* 加这一行 */
 }
 
 /* 信息面板 */
@@ -813,6 +756,11 @@ function getActionCountLabel(count: number): string {
   border-left: 3px solid #42b983;
 }
 
+.info-item.info-item-full {
+  grid-column: 1 / -1;
+  flex-direction: column;
+}
+
 .info-item .label {
   font-weight: 500;
   color: #555;
@@ -821,6 +769,41 @@ function getActionCountLabel(count: number): string {
 .info-item .value {
   font-weight: 700;
   color: #2c3e50;
+}
+
+.value-data {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.data-row {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.data-row:last-child {
+  border-bottom: none;
+}
+
+.data-key {
+  font-weight: 600;
+  color: #3498db;
+  min-width: 80px;
+}
+
+.data-value {
+  color: #2c3e50;
+  word-break: break-all;
+  flex: 1;
+}
+
+.data-empty {
+  color: #95a5a6;
+  font-style: italic;
 }
 
 /* 结果面板 */
@@ -1278,15 +1261,6 @@ function getActionCountLabel(count: number): string {
   .messages-container {
     max-width: calc(100% - 20px);
     gap: 8px;
-  }
-
-  .action-message-panel {
-    width: 100%;
-  }
-
-  .action-message {
-    font-size: 14px;
-    padding: 10px 15px;
   }
 
   .status-message-panel {

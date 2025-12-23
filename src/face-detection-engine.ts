@@ -20,9 +20,8 @@ import { SimpleEventEmitter } from './event-emitter'
 import { calcFaceFrontal } from './face-frontal-calculator'
 import { calcImageQuality } from './image-quality-calculator'
 import { loadOpenCV, loadHuman, getOpenCVVersion, detectBrowserEngine } from './library-loader'
-import { MotionLivenessDetector } from './motion-liveness-detector'
 import { drawCanvasToMat, matToGray } from './browser_utils'
-import { ScreenCaptureDetector, stringToDetectionStrategy } from './screen-capture-detector'
+import { createDetectionState, DetectionState } from './face-detection-state'
 
 /**
  * Detector info parameters
@@ -39,58 +38,6 @@ interface DetectorInfoParams {
   keypointVariance?: number
   motionType?: string
   screenConfidence?: number
-}
-
-/**
- * Internal detection state interface
- */
-class DetectionState {
-  period: DetectionPeriod = DetectionPeriod.DETECT
-  startTime: number = performance.now()
-  collectCount: number = 0
-  suspectedFraudsCount: number = 0
-  bestQualityScore: number = 0
-  bestFrameImage: string | null = null
-  bestFaceImage: string | null = null
-  completedActions: Set<LivenessAction> = new Set()
-  currentAction: LivenessAction | null = null
-  actionVerifyTimeout: ReturnType<typeof setTimeout> | null = null
-  lastFrontalScore: number = 1
-  motionDetector: MotionLivenessDetector | null = null
-  liveness: boolean = false
-  screenDetector: ScreenCaptureDetector | null = null
-
-  constructor(options: Partial<DetectionState>) {
-    Object.assign(this, options)
-  }
-
-  reset(): void {
-    const savedMotionDetector = this.motionDetector
-    const savedScreenDetector = this.screenDetector
-    
-    savedMotionDetector?.reset()
-    
-    Object.assign(this, new DetectionState({}))
-    
-    this.motionDetector = savedMotionDetector
-    this.screenDetector = savedScreenDetector
-  }
-
-  // 默认方法
-  needFrontalFace(): boolean {
-    return this.period !== DetectionPeriod.VERIFY
-  }
-
-  // 是否准备好进行动作验证
-  isReadyToVerify(minCollectCount: number): boolean {
-    if (this.period === DetectionPeriod.COLLECT 
-      && this.liveness 
-      && this.collectCount >= minCollectCount)
-      {
-        return true
-      }
-    return false
-  }
 }
 
 /**
@@ -127,33 +74,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   constructor(options?: Partial<FaceDetectionEngineOptions>) {
     super()
     this.options = mergeOptions(options)
-    this.detectionState = new DetectionState({})
-    this.detectionState.motionDetector = new MotionLivenessDetector({
-      minMotionThreshold: this.options.motion_liveness_min_motion_score,
-      minKeypointVariance: this.options.motion_liveness_min_keypoint_variance,
-      frameBufferSize: this.options.motion_liveness_frame_buffer_size,
-      eyeAspectRatioThreshold: this.options.motion_liveness_eye_aspect_ratio_threshold
-    })
-    this.detectionState.screenDetector = new ScreenCaptureDetector({
-      confidenceThreshold: this.options.screen_capture_confidence_threshold,
-      detectionStrategy: stringToDetectionStrategy(this.options.screen_capture_detection_strategy),
-      moireThreshold: this.options.screen_moire_pattern_threshold,
-      moireEnableDCT: this.options.screen_moire_pattern_enable_dct,
-      moireEnableEdgeDetection: this.options.screen_moire_pattern_enable_edge_detection,
-      colorSaturationThreshold: this.options.screen_color_saturation_threshold,
-      colorRgbCorrelationThreshold: this.options.screen_color_rgb_correlation_threshold,
-      colorPixelEntropyThreshold: this.options.screen_color_pixel_entropy_threshold,
-      colorConfidenceThreshold: this.options.screen_color_confidence_threshold,
-      rgbLowFreqStartPercent: this.options.screen_rgb_low_freq_start_percent,
-      rgbLowFreqEndPercent: this.options.screen_rgb_low_freq_end_percent,
-      rgbEnergyRatioNormalizationFactor: this.options.screen_rgb_energy_ratio_normalization_factor,
-      rgbChannelDifferenceNormalizationFactor: this.options.screen_rgb_channel_difference_normalization_factor,
-      rgbEnergyScoreWeight: this.options.screen_rgb_energy_score_weight,
-      rgbAsymmetryScoreWeight: this.options.screen_rgb_asymmetry_score_weight,
-      rgbDifferenceFactorWeight: this.options.screen_rgb_difference_factor_weight,
-      rgbConfidenceThreshold: this.options.screen_rgb_confidence_threshold
+    this.detectionState = createDetectionState(this.options)
+  }
 
-    })
+  updateOptions(options?: Partial<FaceDetectionEngineOptions>): void {
+    if(this.engineState == EngineState.DETECTING){
+      this.stopDetection(false)
+    }
+    this.options = mergeOptions(options)
+    this.detectionState = createDetectionState(this.options)
   }
 
   getEngineState(): EngineState {
@@ -874,7 +803,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private handleVerifyPhase(gestures: GestureResult[]): void {
     // No action set yet, will continue after setting
     if (!this.detectionState.currentAction) {
-      this.selectNextAction()
+      if(!this.selectNextAction()) {
+        this.emit('detector-error' as any, {
+          code: ErrorCode.INTERNAL_ERROR,
+          message: 'No available actions to perform for liveness verification'
+        })
+        this.stopDetection(false)
+        return
+      }
       this.scheduleNextDetection(this.options.detect_frame_delay * 3)
       return
     }
@@ -894,10 +830,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // Action completed
     this.emit('detector-action', actionComplete)
     this.emitDebug('liveness', 'Action detected', { action: this.detectionState.currentAction })
-    
-    this.clearActionVerifyTimeout()
-    this.detectionState.completedActions.add(this.detectionState.currentAction)
-    this.detectionState.currentAction = null
+    this.detectionState.onActionCompleted()
 
     // Check if all required actions completed
     if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
@@ -906,7 +839,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     // Select next action
-    this.selectNextAction()
+    if(!this.selectNextAction()) {
+      this.emit('detector-error' as any, {
+        code: ErrorCode.INTERNAL_ERROR,
+        message: 'No available actions to perform for liveness verification'
+      })
+      this.stopDetection(false)
+      return
+    }
     this.scheduleNextDetection()
   }
 
@@ -975,14 +915,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Select next action
    */
-  private selectNextAction(): void {
+  private selectNextAction(): boolean {
     const availableActions = (this.options.action_liveness_action_list ?? []).filter(
       action => !this.detectionState.completedActions.has(action)
     )
 
     if (availableActions.length === 0) {
       this.emitDebug('liveness', 'No available actions to perform', { completedActions: Array.from(this.detectionState.completedActions), totalActions: this.options.action_liveness_action_list?.length ?? 0 }, 'warn')
-      return
+      return false
     }
 
     let nextAction = availableActions[0]
@@ -992,8 +932,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         nextAction = availableActions[randomIndex]
     }
 
-    this.detectionState.currentAction = nextAction
-
     const actionStart: DetectorActionEventData = {
       action: nextAction,
       status: LivenessActionStatus.STARTED
@@ -1001,10 +939,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.emit('detector-action', actionStart)
     this.emitDebug('liveness', 'Action selected', { action: this.detectionState.currentAction })
 
-    // Start action verification timeout timer
-    this.clearActionVerifyTimeout()
-    this.detectionState.actionVerifyTimeout = setTimeout(() => {
-      if (nextAction) {
+    this.detectionState.onActionStarted(nextAction, this.options.action_liveness_verify_timeout, () => {
         this.emitDebug('liveness', 'Action verify timeout', {
           action: nextAction,
           timeout: this.options.action_liveness_verify_timeout
@@ -1013,21 +948,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           action: nextAction,
           status: LivenessActionStatus.TIMEOUT
         })
-        this.resetDetectionState()
-      }
-    }, this.options.action_liveness_verify_timeout)
+        this.resetDetectionState()      
+    })
 
-    return
-  }
-
-  /**
-   * Clear action verify timeout
-   */
-  private clearActionVerifyTimeout(): void {
-    if (this.detectionState.actionVerifyTimeout !== null) {
-      clearTimeout(this.detectionState.actionVerifyTimeout)
-      this.detectionState.actionVerifyTimeout = null
-    }
+    return true
   }
 
   /**
