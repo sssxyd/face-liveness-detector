@@ -455,9 +455,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
         if (this.videoElement) {
           this.videoElement.addEventListener('canplay', onCanPlay, { once: true })
-          this.videoElement.play().catch(err => {
+          this.videoElement.play().catch((err: any) => {
             clearTimeout(timeout)
             cleanup()
+            const errorInfo = this.extractErrorInfo(err)
+            this.emitDebug('video-setup', 'Failed to play video', {
+              error: errorInfo.message,
+              stack: errorInfo.stack,
+              name: errorInfo.name,
+              cause: errorInfo.cause
+            }, 'error')
             reject(err)
           })
         }
@@ -663,38 +670,38 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     
-    // 当前帧图片
-    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
-    if (!bgrFrame) {
-      this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
-      this.scheduleNextDetection(this.options.detect_error_retry_delay)
-      return
-    }
+    // 所有需要删除的 Mat 对象
+    let bgrFrame: any = null
+    let grayFrame: any = null
+    let bgrFace: any = null
+    let grayFace: any = null
 
-    // 当前帧灰度图片
-    const grayFrame = matToGray(this.cv, bgrFrame)
-    if (!grayFrame) {
-      bgrFrame.delete()
-      this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
-      this.scheduleNextDetection(this.options.detect_error_retry_delay)
-      return
-    }    
+    try {
+      // 当前帧图片
+      bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
+      if (!bgrFrame) {
+        this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
+        this.scheduleNextDetection(this.options.detect_error_retry_delay)
+        return
+      }
 
-    // 提取人脸区域图片及灰度图片
-    const bgrFace = bgrFrame.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
-    const grayFace = matToGray(this.cv, bgrFace)
-    if (!grayFace) {
-      bgrFrame.delete()
-      bgrFace.delete()
-      this.emitDebug('detection', 'Failed to convert face Mat to grayscale', {}, 'warn')
-      this.scheduleNextDetection(this.options.detect_error_retry_delay)
-      return
-    }
+      // 当前帧灰度图片
+      grayFrame = matToGray(this.cv, bgrFrame)
+      if (!grayFrame) {
+        this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
+        this.scheduleNextDetection(this.options.detect_error_retry_delay)
+        return
+      }    
 
-    // 释放不再需要的Mat
-    bgrFrame.delete()
+      // 提取人脸区域图片及灰度图片
+      bgrFace = bgrFrame.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
+      grayFace = matToGray(this.cv, bgrFace)
+      if (!grayFace) {
+        this.emitDebug('detection', 'Failed to convert face Mat to grayscale', {}, 'warn')
+        this.scheduleNextDetection(this.options.detect_error_retry_delay)
+        return
+      }
 
-    try{
       if(!this.detectionState.screenDetector) {
         this.emit('detector-error' as any, {
           code: ErrorCode.INTERNAL_ERROR,
@@ -715,11 +722,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       // 屏幕捕获检测, 只关心脸部区域
       const screenResult = this.detectionState.screenDetector.detectAuto(bgrFace, grayFace)
-      bgrFace.delete()
-      grayFace.delete()
       // 屏幕捕获检测器已经准备就绪，其验证结果可信
       if(screenResult.isScreenCapture){
-        grayFrame.delete()
         this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_REAL, message: screenResult.getMessage(), screenConfidence: screenResult.confidenceScore })
         this.emitDebug('screen-capture-detection', 'Screen capture detected - possible video replay attack', {
           confidence: screenResult.confidenceScore,
@@ -735,13 +739,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if(this.detectionState.motionDetector.isReady()){
         // 运动检测器已经准备就绪，其验证结果可信
         if (!motionResult.isLively) {
-          grayFrame.delete()
           this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
             motionScore: motionResult.motionScore,
             keypointVariance: motionResult.keypointVariance,
+            opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
+            eyeMotionScore: motionResult.eyeMotionScore,
+            mouthMotionScore: motionResult.mouthMotionScore,
             motionType: motionResult.motionType,
             minMotionScore: this.options.motion_liveness_min_motion_score,
-            minKeypointVariance: this.options.motion_liveness_min_keypoint_variance
+            minKeypointVariance: this.options.motion_liveness_min_keypoint_variance,
+            minOpticalFlowThreshold: this.options.motion_liveness_min_optical_flow_threshold,
+            minMotionConsistencyThreshold: this.options.motion_liveness_motion_consistency_threshold,
+            details: motionResult.details
           }, 'warn')
           this.emitDetectorInfo({
             code: DetectionCode.FACE_NOT_LIVE,
@@ -794,7 +803,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
         return
       }
-      grayFrame.delete()
 
       // 当前帧通过常规检查
       this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_CHECK_PASS, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
@@ -842,18 +850,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.scheduleNextDetection(this.options.detect_error_retry_delay)
     }
     finally{
-      if (grayFrame) {
-        grayFrame.delete()
-      }
-      if (bgrFrame) {
-        bgrFrame.delete()
-      }
-      if (bgrFace) {
-        bgrFace.delete()
-      }
-      if (grayFace) {
-        grayFace.delete()
-      }
+      // 统一在 finally 块中删除所有 Mat 对象
+      if (grayFrame) grayFrame.delete()
+      if (bgrFrame) bgrFrame.delete()
+      if (bgrFace) bgrFace.delete()
+      if (grayFace) grayFace.delete()
     }
   }
 
@@ -1141,7 +1142,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       
       this.frameCanvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
-      this.emitDebug('capture', 'Frame drawn to canvas')
+      this.emitDebug('capture', 'Frame drawn to canvas as ' + videoHeight_actual + 'x' + videoWidth_actual)
       
       return this.frameCanvasElement
     } catch (e) {
