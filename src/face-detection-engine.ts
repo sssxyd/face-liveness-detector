@@ -539,6 +539,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Reset detection state
    */
   private resetDetectionState(): void {
+    this.emitDebug('detection', 'Resetting detection state...')
     this.detectionState.reset()
     this.actualVideoWidth = 0
     this.actualVideoHeight = 0
@@ -724,10 +725,34 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const screenResult = this.detectionState.screenDetector.detectAuto(bgrFace, grayFace)
       // 屏幕捕获检测器已经准备就绪，其验证结果可信
       if(screenResult.isScreenCapture){
+        // 从 executedMethods 提取各检测器的置信度
+        const methodConfidences = screenResult.executedMethods.reduce((acc: any, method: any) => {
+          if (method.method.includes('Moiré')) {
+            acc.moireConfidence = method.confidence
+          } else if (method.method.includes('Color')) {
+            acc.colorConfidence = method.confidence
+          } else if (method.method.includes('RGB')) {
+            acc.rgbConfidence = method.confidence
+          }
+          return acc
+        }, {})
+
         this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_REAL, message: screenResult.getMessage(), screenConfidence: screenResult.confidenceScore })
         this.emitDebug('screen-capture-detection', 'Screen capture detected - possible video replay attack', {
-          confidence: screenResult.confidenceScore,
-          minConfidence: this.options.screen_capture_confidence_threshold
+          overallConfidence: screenResult.confidenceScore,
+          minConfidenceThreshold: this.options.screen_capture_confidence_threshold,
+          moireConfidence: methodConfidences.moireConfidence ?? 'N/A',
+          colorConfidence: methodConfidences.colorConfidence ?? 'N/A',
+          rgbConfidence: methodConfidences.rgbConfidence ?? 'N/A',
+          detectionStrategy: screenResult.strategy,
+          riskLevel: screenResult.riskLevel,
+          processingTimeMs: screenResult.processingTimeMs,
+          executedMethods: screenResult.executedMethods.map((m: any) => ({
+            method: m.method,
+            isScreenCapture: m.isScreenCapture,
+            confidence: m.confidence
+          })),
+          skippedMethods: screenResult.skippedMethods
         }, 'warn')
         this.resetDetectionState()
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
