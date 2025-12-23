@@ -83,6 +83,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     this.options = mergeOptions(options)
     this.detectionState = createDetectionState(this.options)
+    this.detectionState.setCVInstance(this.cv)
   }
 
   getEngineState(): EngineState {
@@ -126,10 +127,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         version: cv_version
       })
 
-      // Inject OpenCV instance into motion detector
-      if (this.detectionState.motionDetector) {
-        (this.detectionState.motionDetector as any).cv = cv
-      }
+      // Inject OpenCV instance into motion detector and screen detector
+      this.detectionState.setCVInstance(this.cv)
 
       // Load Human.js
       console.log('[FaceDetectionEngine] Loading Human.js models...')

@@ -28,7 +28,7 @@ export class DetectionState {
 
     reset(): void {
         this.clearActionVerifyTimeout()
-        
+
         const savedMotionDetector = this.motionDetector
         const savedScreenDetector = this.screenDetector
 
@@ -72,6 +72,11 @@ export class DetectionState {
         this.clearActionVerifyTimeout()     
         this.completedActions.add(this.currentAction)
         this.currentAction = null
+    }
+
+    setCVInstance(cvInstance: any): void {
+        this.motionDetector?.setCVInstance(cvInstance)
+        this.screenDetector?.setCVInstance(cvInstance)
     }
 
     /**
