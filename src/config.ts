@@ -35,7 +35,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   },
   collect_image_quality_features: {
     require_full_face_in_bounds: false,
-    min_laplacian_variance: 50,
+    min_laplacian_variance: 40,  // 从 50 降低到 40，适应现实环境的光线和对焦变化
     min_gradient_sharpness: 0.15,
     min_blur_score: 0.6
   },

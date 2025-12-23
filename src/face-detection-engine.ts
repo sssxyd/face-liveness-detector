@@ -640,12 +640,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   private getPerformActionCount(): number{
     if (this.options.action_liveness_action_count <= 0){
-      this.emitDebug('config', 'liveness_action_count is 0 or negative', { count: this.options.action_liveness_action_count }, 'warn')
+      this.emitDebug('config', 'liveness_action_count is 0 or negative', { count: this.options.action_liveness_action_count }, 'info')
       return 0
     }
     const actionListLength = this.options.action_liveness_action_list?.length ?? 0
     if (actionListLength === 0) {
-      this.emitDebug('config', 'liveness_action_list is empty', { actionListLength }, 'warn')
+      this.emitDebug('config', 'liveness_action_list is empty', { actionListLength }, 'info')
     }
     return Math.min(this.options.action_liveness_action_count, actionListLength)
   }
