@@ -70,7 +70,7 @@ function getEnabledModels() {
 }
 
 /**
- * Get all available model files
+ * Get required model files (whitelist only necessary models)
  */
 function getAvailableModels() {
   if (!fs.existsSync(HUMAN_MODELS_DIR)) {
@@ -79,12 +79,35 @@ function getAvailableModels() {
     );
   }
 
-  const files = fs.readdirSync(HUMAN_MODELS_DIR);
-  const modelFiles = files.filter(file => 
-    file.endsWith('.json') || file.endsWith('.bin')
-  );
-  
-  return modelFiles.sort();
+  // Only copy essential model files
+  const requiredModels = [
+    // Face detection
+    'blazeface.json',
+    'blazeface.bin',
+    
+    // Face mesh
+    'facemesh.json',
+    'facemesh.bin',
+    
+    // Model manifest (required)
+    'models.json',
+  ];
+
+  // Verify that all required files exist
+  const missingFiles = [];
+  requiredModels.forEach(model => {
+    if (!fs.existsSync(path.join(HUMAN_MODELS_DIR, model))) {
+      missingFiles.push(model);
+    }
+  });
+
+  if (missingFiles.length > 0) {
+    throw new Error(
+      `Missing required model files: ${missingFiles.join(', ')}\nPlease ensure @vladmandic/human is correctly installed.`
+    );
+  }
+
+  return requiredModels;
 }
 
 /**
