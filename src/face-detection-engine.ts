@@ -674,8 +674,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // 所有需要删除的 Mat 对象
     let bgrFrame: any = null
     let grayFrame: any = null
-    let bgrFace: any = null
-    let grayFace: any = null
 
     try {
       // 当前帧图片
@@ -693,15 +691,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
         return
       }    
-
-      // 提取人脸区域图片及灰度图片
-      bgrFace = bgrFrame.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
-      grayFace = matToGray(this.cv, bgrFace)
-      if (!grayFace) {
-        this.emitDebug('detection', 'Failed to convert face Mat to grayscale', {}, 'warn')
-        this.scheduleNextDetection(this.options.detect_error_retry_delay)
-        return
-      }
 
       if(!this.detectionState.screenDetector) {
         this.emit('detector-error' as any, {
@@ -722,7 +711,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 屏幕捕获检测, 只关心脸部区域
-      const screenResult = this.detectionState.screenDetector.detect(bgrFace, grayFace, this.options.debug_mode)
+      const screenResult = this.detectionState.screenDetector.detect(bgrFrame, grayFrame, this.options.debug_mode)
       // 屏幕捕获检测器已经准备就绪，其验证结果可信
       if(screenResult.isScreenCapture){
         // 从 executedMethods 提取各检测器的置信度
@@ -892,8 +881,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // 统一在 finally 块中删除所有 Mat 对象
       if (grayFrame) grayFrame.delete()
       if (bgrFrame) bgrFrame.delete()
-      if (bgrFace) bgrFace.delete()
-      if (grayFace) grayFace.delete()
     }
   }
 

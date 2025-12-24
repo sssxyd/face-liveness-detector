@@ -439,35 +439,39 @@ function extractCenterROI(cv: any, matImage: any): any {
  * 计算综合屏幕拍摄置信度
  * 基于各项特征指标的加权平均
  * 
- * 权重说明：
- * - RGB相关性 (42%)：最强屏幕特征，完全独立于分辨率，是核心判断指标
- * - 饱和度 (36%)：次强屏幕特征，屏幕图像去饱和特征明显
- * - 像素熵 (22%)：辅助特征，屏幕像素分布规则性
- * 
- * 删除梯度特征原因：
- * - 梯度特征对分辨率敏感，是主要噪声源
- * - 权重仅 17%，且可靠性最低（⭐⭐⭐）
- * - 删除后准确率反而提升 1-3%（去掉噪声）
- * - 代码简化 40%，性能提升 40%（少 80ms 计算）
- * - RGB相关性 + 饱和度 已足以识别屏幕特性
+ * 针对完整高分辨率图像（1920×1080+）优化：
+ * - 足够的屏幕像素采样，所有特征都清晰
+ * - RGB相关性权重提升（屏幕同质性强）
+ * - 饱和度权重平衡（屏幕特征明显）
+ * - 像素熵权重保持
  */
 function calculateScreenConfidence(
   saturation: ColorFeatureMetric,
   rgbCorrelation: ColorFeatureMetric,
   entropy: ColorFeatureMetric
 ): number {
-  // 加权平均：各特征的贡献度
-  // 权重自动归一化：35/83 : 30/83 : 18/83
   const weights = {
-    rgbCorrelation: 0.42,    // RGB相关性：42% (from 35/83)
-    saturation: 0.36,        // 饱和度：36% (from 30/83)
-    entropy: 0.22,           // 像素熵：22% (from 18/83)
+    rgbCorrelation: 0.42,    // RGB相关性：42% (完整图像中最强屏幕特征)
+    saturation: 0.36,        // 饱和度：36%
+    entropy: 0.22,           // 像素熵：22%
   }
 
+  // 为每个特征计算连续得分（而不是二元的 0 或 1）
+  // 这样即使特征未达到硬阈值，仍然可以贡献部分置信度
+  
+  // RGB 相关性：0.75-1.0 范围评分（屏幕通常 > 0.85）
+  const rgbScore = Math.max(0, (rgbCorrelation.value - 0.7) / (1.0 - 0.7))
+  
+  // 饱和度：0-40 范围评分（屏幕通常 < 40）
+  const satScore = Math.max(0, 1 - (saturation.value / 40))
+  
+  // 像素熵：4-8 范围评分（屏幕通常 < 6.5）
+  const entScore = Math.max(0, 1 - (entropy.value / 8))
+
   const confidence =
-    rgbCorrelation.score * weights.rgbCorrelation +
-    saturation.score * weights.saturation +
-    entropy.score * weights.entropy
+    rgbScore * weights.rgbCorrelation +
+    satScore * weights.saturation +
+    entScore * weights.entropy
 
   return Math.min(1, Math.max(0, confidence))
 }

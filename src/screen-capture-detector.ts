@@ -244,7 +244,8 @@ export class ScreenCaptureDetector {
       }
 
       // 明确判定为屏幕捕捉时，直接返回
-      const rgbCanDetermine = rgbEmissionResult.isScreenCapture && rgbEmissionResult.confidence > 0.75
+      // 完整高分辨率图像：RGB信号应该很强
+      const rgbCanDetermine = rgbEmissionResult.isScreenCapture && rgbEmissionResult.confidence > 0.65
       if (rgbCanDetermine) {
         const totalTime = performance.now() - startTime
         if (debug) {
@@ -293,7 +294,8 @@ export class ScreenCaptureDetector {
       }
 
       // 明确判定为屏幕捕捉时，直接返回
-      const colorCanDetermine = colorResult.isScreenCapture && colorResult.confidence > 0.75
+      // 完整高分辨率图像：色彩特征应该清晰
+      const colorCanDetermine = colorResult.isScreenCapture && colorResult.confidence > 0.65
       if (colorCanDetermine) {
         const totalTime = performance.now() - startTime
         if (debug) {
@@ -348,7 +350,8 @@ export class ScreenCaptureDetector {
         }
 
         // 明确判定为屏幕捕捉时，直接返回
-        const moireCanDetermine = moireResult.isScreenCapture && moireResult.confidence > 0.75
+        // 完整高分辨率图像：莫尔纹应该很清晰
+        const moireCanDetermine = moireResult.isScreenCapture && moireResult.confidence > 0.65
         if (moireCanDetermine) {
           const totalTime = performance.now() - startTime
           if (debug) {
@@ -374,10 +377,11 @@ export class ScreenCaptureDetector {
       }
 
       // 都不能明确判定，计算加权置信度
+      // 优化权重比例：针对完整高分辨率图像（1920×1080+）
       const weightedConfidence = 
-        rgbEmissionResult.confidence * 0.5 +    // RGB权重 50%
-        colorResult.confidence * 0.3 +            // Color权重 30%
-        moireResult.confidence * 0.2              // Moiré权重 20%
+        rgbEmissionResult.confidence * 0.50 +    // RGB权重 50%
+        colorResult.confidence * 0.25 +           // Color权重 25%
+        moireResult.confidence * 0.25             // Moiré权重 25% (提升，完整图像中莫尔纹清晰)
       
       // 第 3 层：用加权置信度判定最终结果
       const isScreenCapture = weightedConfidence > this.confidenceThreshold

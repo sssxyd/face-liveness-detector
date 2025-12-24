@@ -26,7 +26,10 @@ export interface MoirePatternDetectionConfig {
 // ==================== 默认配置 ====================
 
 const DEFAULT_CONFIG: Required<MoirePatternDetectionConfig> = {
-  moire_threshold: 0.65,
+  // 针对完整高分辨率图像（1920×1080+）优化：
+  // - 完整采样提供充足的屏幕像素网格
+  // - 莫尔纹信号清晰，使用更严格的阈值
+  moire_threshold: 0.55,
   enable_dct: true,
   enable_edge_detection: true,
 }
@@ -126,6 +129,17 @@ export function detectMoirePattern(
     
     if (!cv) throw new Error('OpenCV instance not initialized')
     
+    // 验证灰度图像是否有效
+    if (!gray || gray.rows === 0 || gray.cols === 0) {
+      console.warn('[MoirePattern] Invalid gray image')
+      return {
+        isScreenCapture: false,
+        confidence: 0.0,
+        moireStrength: 0.0,
+        dominantFrequencies: [],
+      }
+    }
+    
     let moireStrength = 0
     let dominantFrequencies: number[] = []
     
@@ -137,24 +151,29 @@ export function detectMoirePattern(
     }
     
     // 辅助：Canny 边缘检测方案用于增强检测
-    if (finalConfig.enable_edge_detection) {
-      const edges = new cv.Mat()
-      cv.Canny(gray, edges, 50, 150)
-      
-      const periodicity = detectPeriodicity(cv, edges)
-      const directionConsistency = analyzeEdgeDirection(cv, edges)
-      
-      edges.delete()
-      
-      // 融合两种方法的结果
-      moireStrength += (periodicity + directionConsistency) * 0.5 * 0.4
+    if (finalConfig.enable_edge_detection && moireStrength < 0.5) {
+      try {
+        const edges = new cv.Mat()
+        cv.Canny(gray, edges, 50, 150)
+        
+        const periodicity = detectPeriodicity(cv, edges)
+        const directionConsistency = analyzeEdgeDirection(cv, edges)
+        
+        edges.delete()
+        
+        // 融合两种方法的结果
+        moireStrength += (periodicity + directionConsistency) * 0.5 * 0.4
+      } catch (edgeError) {
+        console.warn('[MoirePattern] Edge detection failed, skipping:', edgeError)
+        // 继续使用 DCT 结果
+      }
     }
     
     const isScreenCapture = moireStrength > finalConfig.moire_threshold
     
     return {
       isScreenCapture,
-      confidence: Math.min(Math.abs(moireStrength - finalConfig.moire_threshold) / 0.35, 1.0),
+      confidence: Math.min(Math.max(0, moireStrength), 1.0),
       moireStrength,
       dominantFrequencies,
     }

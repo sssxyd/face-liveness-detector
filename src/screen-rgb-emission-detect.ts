@@ -39,6 +39,10 @@ export interface RgbEmissionDetectionResult {
 
 /**
  * RGB 发光模式检测的默认配置
+ * 
+ * 针对完整高分辨率图像（1920×1080+）优化：
+ * - 足够的频域采样，RGB子像素周期信号清晰
+ * - 使用更严格的置信度阈值
  */
 const DEFAULT_RGB_EMISSION_CONFIG: Required<RgbEmissionDetectionConfig> = {
   // 频率带分析参数
