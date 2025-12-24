@@ -14,7 +14,7 @@
  * 5. 暗角（Vignetting）- 四角暗化
  */
 
-import { ScreenFrameCollector } from "./screen-frame-collector"
+import { VideoFrameCollector } from "./video-frame-collector"
 
 export interface OpticalDistortionDetectorConfig {
   // 帧缓冲区大小
@@ -74,32 +74,14 @@ export interface OpticalDistortionDetectionResult {
 
 export class OpticalDistortionDetector {
   private config: OpticalDistortionDetectorConfig
-  private frameWidth: number = 0
-  private frameHeight: number = 0
-  private frameCollector: ScreenFrameCollector
+  private frameCollector: VideoFrameCollector
 
-  constructor(frameCollector: ScreenFrameCollector, config?: Partial<OpticalDistortionDetectorConfig>) {
+  constructor(frameCollector: VideoFrameCollector, config: OpticalDistortionDetectorConfig) {
     this.frameCollector = frameCollector
     
     // 初始化帧尺寸
     const frameSize = frameCollector.getFrameSize()
-    this.frameWidth = frameSize.width
-    this.frameHeight = frameSize.height
-    
-    this.config = {
-      bufferSize: config?.bufferSize ?? 10,
-      keystoneThreshold: config?.keystoneThreshold ?? 0.15, // 15% 宽度变化
-      barrelDistortionThreshold: config?.barrelDistortionThreshold ?? 0.10,
-      chromaticAberrationThreshold: config?.chromaticAberrationThreshold ?? 3.0, // 像素
-      vignetteThreshold: config?.vignetteThreshold ?? 0.20, // 四角亮度下降20%
-      samplingStride: config?.samplingStride ?? 4,
-      featureWeights: config?.featureWeights ?? {
-        keystone: 0.25,
-        barrelDistortion: 0.25,
-        chromaticAberration: 0.25,
-        vignette: 0.25,
-      },
-    }
+    this.config = config
     
     console.log('[OpticalDistortion] Detector initialized with shared FrameCollector')
   }
@@ -143,7 +125,7 @@ export class OpticalDistortionDetector {
     try {
       const referenceFrame = frames[0]
 
-      console.log(`[OpticalDistortion] Analyzing ${this.frameWidth}x${this.frameHeight}`)
+      console.log(`[OpticalDistortion] Analyzing ${this.frameCollector.getFrameWidth()}x${this.frameCollector.getFrameHeight()}`)
 
       // 检测各个光学失真特征
       const keystoneResult = this.detectKeystone(referenceFrame)
@@ -229,10 +211,10 @@ export class OpticalDistortionDetector {
   } {
     try {
       // 检测上边界
-      const topEdgeWidth = this.findHorizontalEdgeWidth(frame, Math.floor(this.frameHeight * 0.1))
+      const topEdgeWidth = this.findHorizontalEdgeWidth(frame, Math.floor(this.frameCollector.getFrameHeight() * 0.1))
 
       // 检测下边界
-      const bottomEdgeWidth = this.findHorizontalEdgeWidth(frame, Math.floor(this.frameHeight * 0.9))
+      const bottomEdgeWidth = this.findHorizontalEdgeWidth(frame, Math.floor(this.frameCollector.getFrameHeight() * 0.9))
 
       if (topEdgeWidth === 0 || bottomEdgeWidth === 0) {
         return { detected: false, level: 0 }
@@ -273,7 +255,7 @@ export class OpticalDistortionDetector {
       const maxDeviation = Math.max(leftBoundaryDeviation, rightBoundaryDeviation)
 
       // 偏差转换为失真水平
-      const distortionLevel = Math.min(1, maxDeviation / (this.frameHeight * 0.1)) // 如果边界弯曲超过高度10%
+      const distortionLevel = Math.min(1, maxDeviation / (this.frameCollector.getFrameHeight() * 0.1)) // 如果边界弯曲超过高度10%
 
       const detected = distortionLevel > this.config.barrelDistortionThreshold
       const level = distortionLevel
@@ -319,36 +301,36 @@ export class OpticalDistortionDetector {
       // 计算中心区域亮度
       const centerBrightness = this.getAverageBrightness(
         frame,
-        Math.floor(this.frameWidth * 0.25),
-        Math.floor(this.frameHeight * 0.25),
-        Math.floor(this.frameWidth * 0.75),
-        Math.floor(this.frameHeight * 0.75)
+        Math.floor(this.frameCollector.getFrameWidth() * 0.25),
+        Math.floor(this.frameCollector.getFrameHeight() * 0.25),
+        Math.floor(this.frameCollector.getFrameWidth() * 0.75),
+        Math.floor(this.frameCollector.getFrameHeight() * 0.75)
       )
 
       // 计算四个角区域的平均亮度
-      const cornerSize = Math.min(Math.floor(this.frameWidth * 0.1), Math.floor(this.frameHeight * 0.1))
+      const cornerSize = Math.min(Math.floor(this.frameCollector.getFrameWidth() * 0.1), Math.floor(this.frameCollector.getFrameHeight() * 0.1))
 
       const topLeftBrightness = this.getAverageBrightness(frame, 0, 0, cornerSize, cornerSize)
       const topRightBrightness = this.getAverageBrightness(
         frame,
-        this.frameWidth - cornerSize,
+        this.frameCollector.getFrameWidth() - cornerSize,
         0,
-        this.frameWidth,
+        this.frameCollector.getFrameWidth(),
         cornerSize
       )
       const bottomLeftBrightness = this.getAverageBrightness(
         frame,
         0,
-        this.frameHeight - cornerSize,
+        this.frameCollector.getFrameHeight() - cornerSize,
         cornerSize,
-        this.frameHeight
+        this.frameCollector.getFrameHeight()
       )
       const bottomRightBrightness = this.getAverageBrightness(
         frame,
-        this.frameWidth - cornerSize,
-        this.frameHeight - cornerSize,
-        this.frameWidth,
-        this.frameHeight
+        this.frameCollector.getFrameWidth() - cornerSize,
+        this.frameCollector.getFrameHeight() - cornerSize,
+        this.frameCollector.getFrameWidth(),
+        this.frameCollector.getFrameHeight()
       )
 
       const avgCornerBrightness =
@@ -379,9 +361,9 @@ export class OpticalDistortionDetector {
 
     const threshold = 50 // 亮度变化阈值
 
-    for (let x = 0; x < this.frameWidth - stride; x += stride) {
-      const idx1 = y * this.frameWidth + x
-      const idx2 = y * this.frameWidth + (x + stride)
+    for (let x = 0; x < this.frameCollector.getFrameWidth() - stride; x += stride) {
+      const idx1 = y * this.frameCollector.getFrameWidth() + x
+      const idx2 = y * this.frameCollector.getFrameWidth() + (x + stride)
 
       if (idx1 >= frame.length || idx2 >= frame.length) break
 
@@ -407,12 +389,12 @@ export class OpticalDistortionDetector {
    */
   private measureBoundaryDeviation(frame: Uint8Array, side: 'left' | 'right'): number {
     const stride = this.config.samplingStride
-    const x = side === 'left' ? Math.floor(this.frameWidth * 0.05) : Math.floor(this.frameWidth * 0.95)
+    const x = side === 'left' ? Math.floor(this.frameCollector.getFrameWidth() * 0.05) : Math.floor(this.frameCollector.getFrameWidth() * 0.95)
 
     // 沿垂直方向跟踪边界位置
     const positions: number[] = []
 
-    for (let y = 0; y < this.frameHeight; y += stride) {
+    for (let y = 0; y < this.frameCollector.getFrameHeight(); y += stride) {
       const edgeX = this.findVerticalEdgeAtY(frame, y, x, side)
       positions.push(edgeX)
     }
@@ -439,8 +421,8 @@ export class OpticalDistortionDetector {
     if (side === 'left') {
       // 从左向右找边界
       for (let x = Math.max(0, startX - 50); x < startX + 50; x += stride) {
-        const idx1 = y * this.frameWidth + x
-        const idx2 = y * this.frameWidth + (x + stride)
+        const idx1 = y * this.frameCollector.getFrameWidth() + x
+        const idx2 = y * this.frameCollector.getFrameWidth() + (x + stride)
 
         if (idx1 >= frame.length || idx2 >= frame.length) continue
 
@@ -450,9 +432,9 @@ export class OpticalDistortionDetector {
       }
     } else {
       // 从右向左找边界
-      for (let x = Math.min(this.frameWidth - 1, startX + 50); x > startX - 50; x -= stride) {
-        const idx1 = y * this.frameWidth + x
-        const idx2 = y * this.frameWidth + (x - stride)
+      for (let x = Math.min(this.frameCollector.getFrameWidth() - 1, startX + 50); x > startX - 50; x -= stride) {
+        const idx1 = y * this.frameCollector.getFrameWidth() + x
+        const idx2 = y * this.frameCollector.getFrameWidth() + (x - stride)
 
         if (idx1 >= frame.length || idx2 >= frame.length) continue
 
@@ -476,7 +458,7 @@ export class OpticalDistortionDetector {
 
     for (let y = y1; y < y2; y += stride) {
       for (let x = x1; x < x2; x += stride) {
-        const idx = y * this.frameWidth + x
+        const idx = y * this.frameCollector.getFrameWidth() + x
         if (idx >= 0 && idx < frame.length) {
           sum += frame[idx]
           count++

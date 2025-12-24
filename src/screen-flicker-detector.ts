@@ -12,7 +12,7 @@
  * 4. 统计多少像素检测到周期性，若超过阈值则判定为屏幕
  */
 
-import { ScreenFrameCollector } from "./screen-frame-collector"
+import { VideoFrameCollector } from "./video-frame-collector"
 
 export interface ScreenFlickerDetectorConfig {
   // 帧缓冲区大小（帧数）
@@ -67,28 +67,11 @@ export interface ScreenFlickerDetectionResult {
 
 export class ScreenFlickerDetector {
   private config: ScreenFlickerDetectorConfig
-  private frameWidth: number = 0
-  private frameHeight: number = 0
-  private averageFps: number = 0
-  private frameCollector: ScreenFrameCollector
+  private frameCollector: VideoFrameCollector
 
-  constructor(frameCollector: ScreenFrameCollector, config?: Partial<ScreenFlickerDetectorConfig>) {
+  constructor(frameCollector: VideoFrameCollector, config: ScreenFlickerDetectorConfig) {
     this.frameCollector = frameCollector
-    
-    // 初始化帧尺寸和FPS
-    const frameSize = frameCollector.getFrameSize()
-    this.frameWidth = frameSize.width
-    this.frameHeight = frameSize.height
-    this.averageFps = frameCollector.getAverageFps()
-    
-    this.config = {
-      bufferSize: config?.bufferSize ?? 30,
-      minFlickerPeriodFrames: config?.minFlickerPeriodFrames ?? 1,
-      maxFlickerPeriodFrames: config?.maxFlickerPeriodFrames ?? 8,
-      correlationThreshold: config?.correlationThreshold ?? 0.65,
-      passingPixelRatio: config?.passingPixelRatio ?? 0.40,
-      samplingStride: config?.samplingStride ?? 2,
-    }
+    this.config = config
     
     console.log('[ScreenFlicker] Detector initialized with shared FrameCollector')
   }
@@ -110,11 +93,6 @@ export class ScreenFlickerDetector {
   analyze(): ScreenFlickerDetectionResult {
     // 获取帧缓冲（从 FrameCollector）
     const frames = this.frameCollector.getGrayFrames(this.config.bufferSize)
-    
-    // 同步FPS信息
-    if (this.frameCollector.getAverageFps() > 0) {
-      this.averageFps = this.frameCollector.getAverageFps()
-    }
 
     // 检查缓冲区是否有足够的帧
     const minFramesNeeded = this.config.maxFlickerPeriodFrames + 2
@@ -142,8 +120,8 @@ export class ScreenFlickerDetector {
       // 采样像素位置（使用自适应采样步长）
       const sampledPixels = this.generateSampledPixels(resolutionAdaptation.effectiveSamplingStride)
       console.log(`[ScreenFlicker] Analyzing ${sampledPixels.length} sampled pixels`)
-      console.log(`[ScreenFlicker] Resolution: ${this.frameWidth}x${this.frameHeight}, Adaptation: stride=${resolutionAdaptation.effectiveSamplingStride}, passingRatio=${(resolutionAdaptation.effectivePassingRatio * 100).toFixed(0)}%`)
-      console.log(`[ScreenFlicker] Effective period range: 1-${effectiveMaxPeriod} frames (fps: ${this.averageFps.toFixed(1)})`)
+      console.log(`[ScreenFlicker] Resolution: ${this.frameCollector.getFrameWidth()}x${this.frameCollector.getFrameHeight()}, Adaptation: stride=${resolutionAdaptation.effectiveSamplingStride}, passingRatio=${(resolutionAdaptation.effectivePassingRatio * 100).toFixed(0)}%`)
+      console.log(`[ScreenFlicker] Effective period range: 1-${effectiveMaxPeriod} frames (fps: ${this.frameCollector.getAverageFps().toFixed(1)})`)
 
       // 对每个采样像素计算自相关
       const pixelFlickerCounts = new Map<number, number>() // lag -> 通过的像素数
@@ -187,12 +165,12 @@ export class ScreenFlickerDetector {
 
       // 根据fps和周期推断屏幕刷新频率
       let estimatedScreenRefreshRate: number | undefined
-      if (dominantLag > 0 && this.averageFps > 0) {
+      if (dominantLag > 0 && this.frameCollector.getAverageFps() > 0) {
         // 屏幕刷新频率 = fps / lag
         // 例如：60fps视频 + 1帧周期 = 60Hz屏幕
         // 例如：60fps视频 + 2帧周期 = 120Hz屏幕
         // 例如：30fps视频 + 4帧周期 = 120Hz屏幕
-        estimatedScreenRefreshRate = this.averageFps / dominantLag
+        estimatedScreenRefreshRate = this.frameCollector.getAverageFps() / dominantLag
       }
 
       const analysisTime = performance.now() - startTime
@@ -202,7 +180,7 @@ export class ScreenFlickerDetector {
       if (estimatedScreenRefreshRate) {
         console.log(`[ScreenFlicker] Estimated screen refresh rate: ${estimatedScreenRefreshRate.toFixed(0)}Hz`)
       }
-      console.log(`[ScreenFlicker] Average FPS: ${this.averageFps.toFixed(1)}, Confidence: ${confidence.toFixed(3)}, Screen: ${isScreenCapture}`)
+      console.log(`[ScreenFlicker] Average FPS: ${this.frameCollector.getAverageFps().toFixed(1)}, Confidence: ${confidence.toFixed(3)}, Screen: ${isScreenCapture}`)
 
       return {
         isScreenCapture,
@@ -210,7 +188,7 @@ export class ScreenFlickerDetector {
         dominantFlickerPeriod: dominantLag > 0 ? dominantLag : undefined,
         estimatedScreenRefreshRate: estimatedScreenRefreshRate,
         passingPixelRatio,
-        averageFps: this.averageFps > 0 ? this.averageFps : undefined,
+        averageFps: this.frameCollector.getAverageFps() > 0 ? this.frameCollector.getAverageFps() : undefined,
         sampledPixelCount: sampledPixels.length,
         details: {
           correlationValues,
@@ -241,7 +219,7 @@ export class ScreenFlickerDetector {
    * 获取当前平均fps
    */
   getAverageFps(): number {
-    return this.averageFps
+    return this.frameCollector.getAverageFps()
   }
 
   /**
@@ -257,20 +235,20 @@ export class ScreenFlickerDetector {
    */
   private getEffectiveMaxPeriod(): number {
     // 如果fps尚未稳定，使用配置中的最大值
-    if (this.averageFps < 10) {
+    if (this.frameCollector.getAverageFps() < 10) {
       return this.config.maxFlickerPeriodFrames
     }
 
     // 根据fps计算合理的最大周期范围
     let effectiveMax: number
 
-    if (this.averageFps >= 50) {
+    if (this.frameCollector.getAverageFps() >= 50) {
       // 高fps摄像头（50+fps）：60Hz屏幕 → 1帧, 120Hz屏幕 → 2-3帧
       effectiveMax = 3
-    } else if (this.averageFps >= 30) {
+    } else if (this.frameCollector.getAverageFps() >= 30) {
       // 中等fps摄像头（30-50fps）：60Hz屏幕 → 1-2帧, 120Hz屏幕 → 2-4帧
       effectiveMax = 4
-    } else if (this.averageFps >= 15) {
+    } else if (this.frameCollector.getAverageFps() >= 15) {
       // 低fps摄像头（15-30fps）：60Hz屏幕 → 2-4帧, 120Hz屏幕 → 4-8帧
       effectiveMax = 8
     } else {
@@ -297,12 +275,11 @@ export class ScreenFlickerDetector {
     effectiveSamplingStride: number
     effectivePassingRatio: number
   } {
-    const totalPixels = this.frameWidth * this.frameHeight
+    const totalPixels = this.frameCollector.getFrameWidth() * this.frameCollector.getFrameHeight()
     const currentStride = this.config.samplingStride
     
     // 估计当前配置下会采样多少像素
-    const estimatedSampledPixels = Math.ceil((this.frameWidth / currentStride) * (this.frameHeight / currentStride))
-
+    const estimatedSampledPixels = Math.ceil((this.frameCollector.getFrameWidth() / currentStride) * (this.frameCollector.getFrameHeight() / currentStride))
     let effectiveStride = currentStride
     let effectivePassingRatio = this.config.passingPixelRatio
 
@@ -347,14 +324,14 @@ export class ScreenFlickerDetector {
     const pixels: number[] = []
     const effectiveStride = stride ?? this.config.samplingStride
 
-    for (let y = 0; y < this.frameHeight; y += effectiveStride) {
-      for (let x = 0; x < this.frameWidth; x += effectiveStride) {
-        pixels.push(y * this.frameWidth + x)
+    for (let y = 0; y < this.frameCollector.getFrameHeight(); y += effectiveStride) {
+      for (let x = 0; x < this.frameCollector.getFrameWidth(); x += effectiveStride) {
+        pixels.push(y * this.frameCollector.getFrameWidth() + x)
       }
     }
 
     console.log(
-      `[ScreenFlicker] Generated ${pixels.length} sampled pixels from ${this.frameWidth}x${this.frameHeight} with stride ${effectiveStride}`
+      `[ScreenFlicker] Generated ${pixels.length} sampled pixels from ${this.frameCollector.getFrameWidth()}x${this.frameCollector.getFrameHeight()} with stride ${effectiveStride}`
     )
 
     return pixels

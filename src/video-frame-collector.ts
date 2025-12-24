@@ -11,16 +11,14 @@
 export interface FrameCollectorConfig {
   // 帧缓冲区大小（足够大以满足所有检测器的需求）
   bufferSize: number
-  // 预期的视频帧率（用于初始化）
-  fpsEstimate: number
 }
 
 /**
  * 公共帧采集器
  * 
- * 多个检测器可以共用一个 ScreenFrameCollector 实例，减少内存占用和代码重复
+ * 多个检测器可以共用一个 VideoFrameCollector 实例，减少内存占用和代码重复
  */
-export class ScreenFrameCollector {
+export class VideoFrameCollector {
   private config: FrameCollectorConfig
   
   // 帧缓冲区
@@ -39,7 +37,6 @@ export class ScreenFrameCollector {
   constructor(config?: Partial<FrameCollectorConfig>) {
     this.config = {
       bufferSize: config?.bufferSize ?? 60, // 默认60帧（足够大）
-      fpsEstimate: config?.fpsEstimate ?? 30,
     }
   }
 

@@ -12,7 +12,7 @@
  * 4. 响应时间 > 100ms → 墨水屏
  */
 
-import { ScreenFrameCollector } from "./screen-frame-collector"
+import { VideoFrameCollector } from "./video-frame-collector"
 
 export interface ScreenResponseTimeDetectorConfig {
   // 帧缓冲区大小
@@ -60,9 +60,9 @@ export interface ScreenResponseTimeDetectionResult {
 
 export class ScreenResponseTimeDetector {
   private config: ScreenResponseTimeDetectorConfig
-  private frameCollector: ScreenFrameCollector
+  private frameCollector: VideoFrameCollector
 
-  constructor(frameCollector: ScreenFrameCollector, config: ScreenResponseTimeDetectorConfig) {
+  constructor(frameCollector: VideoFrameCollector, config: ScreenResponseTimeDetectorConfig) {
     this.frameCollector = frameCollector
     this.config = config
   }
@@ -83,7 +83,7 @@ export class ScreenResponseTimeDetector {
    */
   analyze(): ScreenResponseTimeDetectionResult {
     // 获取帧缓冲
-    const frames = this.frameCollector.getGrayFrames()
+    const frames = this.frameCollector.getGrayFrames(this.config.bufferSize)
 
     // 需要足够的帧来测量变化
     const minFramesNeeded = 10
@@ -208,8 +208,8 @@ export class ScreenResponseTimeDetector {
    * 跟踪该像素的值变化，找出最大的变化
    * 计算这个变化需要多少帧（时间）完成
    */
-  private measurePixelResponseTime(pixelIdx: number, frames?: Uint8Array[]): number {
-    const sourceFrames = frames || this.frameCollector.getGrayFrames()
+  private measurePixelResponseTime(pixelIdx: number, frames: Uint8Array[]): number {
+    const sourceFrames = frames
     
     if (sourceFrames.length === 0 || pixelIdx >= sourceFrames[0].length) {
       return -1

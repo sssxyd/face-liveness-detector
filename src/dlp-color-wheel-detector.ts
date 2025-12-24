@@ -17,7 +17,7 @@
  * 3. 如果R领先，B延后 → DLP特征
  */
 
-import { ScreenFrameCollector } from "./screen-frame-collector"
+import { VideoFrameCollector } from "./video-frame-collector"
 
 export interface DLPColorWheelDetectorConfig {
   // 帧缓冲区大小
@@ -60,20 +60,12 @@ export interface DLPColorWheelDetectionResult {
 
 export class DLPColorWheelDetector {
   private config: DLPColorWheelDetectorConfig
-  private frameCollector: ScreenFrameCollector
+  private frameCollector: VideoFrameCollector
 
-  constructor(frameCollector: ScreenFrameCollector, config?: Partial<DLPColorWheelDetectorConfig>) {
+  constructor(frameCollector: VideoFrameCollector, config: DLPColorWheelDetectorConfig) {
     this.frameCollector = frameCollector
-    this.config = {
-      bufferSize: config?.bufferSize ?? 30,
-      edgeThreshold: config?.edgeThreshold ?? 80, // 80级以上的亮度跳变
-      minChannelSeparationPixels: config?.minChannelSeparationPixels ?? 2,
-      separationConfidenceThreshold: config?.separationConfidenceThreshold ?? 0.65,
-      samplingStride: config?.samplingStride ?? 2,
-    }
+    this.config = config
   }
-
-
 
   /**
    * 获取当前缓冲区中的帧数

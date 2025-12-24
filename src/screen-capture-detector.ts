@@ -14,7 +14,7 @@ import { ScreenFlickerDetector, ScreenFlickerDetectorConfig } from './screen-fli
 import { ScreenResponseTimeDetector, ScreenResponseTimeDetectorConfig } from './screen-response-time-detector'
 import { DLPColorWheelDetector, DLPColorWheelDetectorConfig } from './dlp-color-wheel-detector'
 import { OpticalDistortionDetector, OpticalDistortionDetectorConfig } from './optical-distortion-detector'
-import { ScreenFrameCollector } from './screen-frame-collector'
+import { VideoFrameCollector } from './video-frame-collector'
 
 /**
  * 详细的级联检测过程日志
@@ -106,12 +106,8 @@ export class ScreenCaptureDetectionResult {
 }
 
 export interface ScreenCaptureDetectorOptions {
-  // 预期的视频帧率
-  fpsEstimate?: number
-
   // 视频闪烁检测配置
   flickerBufferSize?: number
-  flickerFpsEstimate?: number
   flickerMinPeriod?: number
   flickerMaxPeriod?: number
   flickerCorrelationThreshold?: number
@@ -120,15 +116,17 @@ export interface ScreenCaptureDetectorOptions {
 
   // 响应时间检测配置（墨水屏）
   responseTimeBufferSize?: number
-  responseTimeFpsEstimate?: number
+  responseTimeMinPixelDelta?: number
   responseTimeThreshold?: number
   responseTimePassingPixelRatio?: number
+  responseTimeSamplingStride?: number
 
   // DLP色轮检测配置 (DLP投影仪)
   dlpColorWheelBufferSize?: number
   dlpEdgeThreshold?: number
   dlpChannelSeparationThreshold?: number
   dlpConfidenceThreshold?: number
+  dlpSamplingStride?: number
 
   // 光学畸变检测配置 (其他光学投影仪)
   opticalDistortionBufferSize?: number
@@ -136,33 +134,65 @@ export interface ScreenCaptureDetectorOptions {
   opticalBarrelThreshold?: number
   opticalChromaticThreshold?: number
   opticalVignetteThreshold?: number
+  opticalSamplingStride?: number
+  opticalFeatureKeystone?: number
+  opticalFeatureBarrel?: number
+  opticalFeatureChromatic?: number
+  opticalFeatureVignette?: number
+
+  // 摄像头采集配置
+  frameDropRate?: number // 随机丢帧率 (0-1)，用于模拟摄像头帧频不稳定
 }
 
 /**
  * ScreenCaptureDetectorOptions 的默认值
  */
 const DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS: Required<ScreenCaptureDetectorOptions> = {
-  fpsEstimate: 30,
-  flickerBufferSize: 30,
-  flickerFpsEstimate: 30,
+  flickerBufferSize: 15, // 15帧 @ 30fps = 0.5秒，足以检测LCD闪烁
   flickerMinPeriod: 1,
-  flickerMaxPeriod: 8,
+  flickerMaxPeriod: 3, // 对应约10Hz的闪烁，覆盖60-120Hz刷新率
   flickerCorrelationThreshold: 0.65,
   flickerPassingPixelRatio: 0.40,
-  flickerSamplingStride: 2,
-  responseTimeBufferSize: 60,
-  responseTimeFpsEstimate: 30,
-  responseTimeThreshold: 100,
+  flickerSamplingStride: 1, // 100%采样以捕捉闪烁周期
+  responseTimeBufferSize: 30, // 30帧 @ 30fps = 1秒，足以检测墨水屏响应速度
+  responseTimeMinPixelDelta: 30, // 像素值变化至少30级，减少噪声影响
+  responseTimeSamplingStride: 1, // 100%采样以测量响应时间
+  responseTimeThreshold: 150, // 150ms阈值，更准确地检测墨水屏(200-500ms)
   responseTimePassingPixelRatio: 0.45,
-  dlpColorWheelBufferSize: 30,
+  dlpColorWheelBufferSize: 20, // 20帧 @ 30fps = 0.67秒，足以检测DLP色轮干涉
   dlpEdgeThreshold: 80,
-  dlpChannelSeparationThreshold: 2,
+  dlpChannelSeparationThreshold: 3, // RGB分离至少3像素，减少误报
   dlpConfidenceThreshold: 0.65,
-  opticalDistortionBufferSize: 1,
+  dlpSamplingStride: 1, // 100%采样以捕捉DLP色轮干涉
+  opticalDistortionBufferSize: 3, // 3帧用于验证光学畸变的稳定性
   opticalKeystoneThreshold: 0.15,
   opticalBarrelThreshold: 0.10,
   opticalChromaticThreshold: 3.0,
   opticalVignetteThreshold: 0.20,
+  opticalSamplingStride: 2, // 50%采样足以覆盖光学畸变特征
+  opticalFeatureKeystone: 0.35, // 梯形失真（最常见投影问题）权重最高
+  opticalFeatureBarrel: 0.30, // 桶形畸变（典型镜头失真）
+  opticalFeatureChromatic: 0.20, // 色差（可能被其他因素影响）
+  opticalFeatureVignette: 0.15, // 晕影（最微妙，易受环境光影响）
+  frameDropRate: 0.03, // 3% 丢帧率（模拟真实摄像头，30fps下约丢1帧/秒）
+}
+
+function calcOptionsByFPS(fps: number): Partial<ScreenCaptureDetectorOptions> {
+  if (fps <= 0) {
+    console.warn('[calcOptionsByFPS] Invalid FPS value, using defaults')
+    return {}
+  }
+
+  // 基准FPS为30，其他参数按比例调整以保持相同的时间窗口
+  const fpsRatio = fps / 30
+
+  return {
+    // 缓冲区大小：按FPS比例调整，保持时间窗口一致
+    flickerBufferSize: Math.max(5, Math.round(15 * fpsRatio)), // 保持约0.5秒时间窗口
+    responseTimeBufferSize: Math.max(10, Math.round(30 * fpsRatio)), // 保持约1秒时间窗口
+    dlpColorWheelBufferSize: Math.max(8, Math.round(20 * fpsRatio)), // 保持约0.67秒时间窗口
+    opticalDistortionBufferSize: Math.max(1, Math.round(3 * fpsRatio)), // 保持帧数配置
+  }
 }
 
 /**
@@ -172,65 +202,82 @@ const DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS: Required<ScreenCaptureDetectorOpt
  */
 export class ScreenCaptureDetector {
   private cv: any = null
+  private config: Required<ScreenCaptureDetectorOptions>
   
-  private frameCollector: ScreenFrameCollector
+  private frameCollector: VideoFrameCollector
   private flickerDetector: ScreenFlickerDetector
   private responseTimeDetector: ScreenResponseTimeDetector
   private dlpColorWheelDetector: DLPColorWheelDetector
   private opticalDistortionDetector: OpticalDistortionDetector
+  private droppedFramesCount: number = 0
 
-  constructor(options: Partial<ScreenCaptureDetectorOptions> = {}) {
-    // 合并用户提供的选项和默认值
-    const config = { ...DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS, ...options }
+  constructor(fps?: number) {
+
+
+    // 根据fps动态调整参数
+    const fpsOptions = calcOptionsByFPS(fps ?? 30)
+
+    // 合并：默认值 → FPS调整值 → 用户选项（后面的覆盖前面的）
+    this.config = { 
+      ...DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS, 
+      ...fpsOptions
+    }
 
     const bufferSize = Math.max(
-      config.flickerBufferSize,
-      config.responseTimeBufferSize,
-      config.dlpColorWheelBufferSize,
-      config.opticalDistortionBufferSize,
-      config.fpsEstimate
+      this.config.flickerBufferSize,
+      this.config.responseTimeBufferSize,
+      this.config.dlpColorWheelBufferSize,
+      this.config.opticalDistortionBufferSize,
     )
 
     // 创建公共帧采集器
-    this.frameCollector = new ScreenFrameCollector({
-      bufferSize: bufferSize,
-      fpsEstimate: config.fpsEstimate,
+    this.frameCollector = new VideoFrameCollector({
+      bufferSize: bufferSize
     })
 
     // 初始化视频闪烁检测器 (LCD/OLED)
     this.flickerDetector = new ScreenFlickerDetector(this.frameCollector, {
-      bufferSize: config.flickerBufferSize,
-      minFlickerPeriodFrames: config.flickerMinPeriod,
-      maxFlickerPeriodFrames: config.flickerMaxPeriod,
-      correlationThreshold: config.flickerCorrelationThreshold,
-      passingPixelRatio: config.flickerPassingPixelRatio,
-      samplingStride: config.flickerSamplingStride,
+      bufferSize: this.config.flickerBufferSize,
+      minFlickerPeriodFrames: this.config.flickerMinPeriod,
+      maxFlickerPeriodFrames: this.config.flickerMaxPeriod,
+      correlationThreshold: this.config.flickerCorrelationThreshold,
+      passingPixelRatio: this.config.flickerPassingPixelRatio,
+      samplingStride: this.config.flickerSamplingStride,
     })
 
     // 初始化响应时间检测器（墨水屏）
     this.responseTimeDetector = new ScreenResponseTimeDetector(this.frameCollector, {
-      bufferSize: config.responseTimeBufferSize,
-      minPixelDelta: 30,
-      einkResponseTimeThreshold: config.responseTimeThreshold,
-      samplingStride: 2,
-      passingPixelRatio: config.responseTimePassingPixelRatio,
+      bufferSize: this.config.responseTimeBufferSize,
+      minPixelDelta: this.config.responseTimeMinPixelDelta,
+      einkResponseTimeThreshold: this.config.responseTimeThreshold,
+      samplingStride: this.config.responseTimeSamplingStride,
+      passingPixelRatio: this.config.responseTimePassingPixelRatio,
     })
 
     // 初始化DLP色轮检测器 (DLP投影仪)
     this.dlpColorWheelDetector = new DLPColorWheelDetector(this.frameCollector, {
-      bufferSize: config.dlpColorWheelBufferSize,
-      edgeThreshold: config.dlpEdgeThreshold,
-      minChannelSeparationPixels: config.dlpChannelSeparationThreshold,
-      separationConfidenceThreshold: config.dlpConfidenceThreshold,
+      bufferSize: this.config.dlpColorWheelBufferSize,
+      edgeThreshold: this.config.dlpEdgeThreshold,
+      minChannelSeparationPixels: this.config.dlpChannelSeparationThreshold,
+      separationConfidenceThreshold: this.config.dlpConfidenceThreshold,
+      samplingStride: this.config.dlpSamplingStride,
     })
 
     // 初始化光学畸变检测器 (其他投影仪)
     this.opticalDistortionDetector = new OpticalDistortionDetector(this.frameCollector, {
-      keystoneThreshold: config.opticalKeystoneThreshold,
-      barrelDistortionThreshold: config.opticalBarrelThreshold,
-      chromaticAberrationThreshold: config.opticalChromaticThreshold,
-      vignetteThreshold: config.opticalVignetteThreshold,
-    })
+      bufferSize: this.config.opticalDistortionBufferSize,
+      keystoneThreshold: this.config.opticalKeystoneThreshold,
+      barrelDistortionThreshold: this.config.opticalBarrelThreshold,
+      chromaticAberrationThreshold: this.config.opticalChromaticThreshold,
+      vignetteThreshold: this.config.opticalVignetteThreshold,
+      samplingStride: this.config.opticalSamplingStride,
+      featureWeights: {
+        keystone: this.config.opticalFeatureKeystone,
+        barrelDistortion: this.config.opticalFeatureBarrel,
+        chromaticAberration: this.config.opticalFeatureChromatic,
+        vignette: this.config.opticalFeatureVignette,
+      }
+    })  
   }
 
   setCVInstance(cvInstance: any): void {
@@ -240,10 +287,22 @@ export class ScreenCaptureDetector {
   /**
    * 向视频检测器添加一帧（用于实时视频处理）
    * 建议每收到一帧就调用此方法
+   * 
+   * @param grayMat 灰度图像矩阵
+   * @param bgrMat 彩色图像矩阵（可选）
+   * @returns 帧是否被接受（true表示被处理，false表示被随机丢弃）
    */
-  addVideoFrame(grayMat: any, bgrMat?: any): void {
+  addVideoFrame(grayMat: any, bgrMat: any): boolean {
+    // 随机丢帧模拟摄像头采集不稳定
+    if (this.config.frameDropRate > 0 && Math.random() < this.config.frameDropRate) {
+      this.droppedFramesCount++
+      console.log(`[ScreenCaptureDetector] Frame dropped (total: ${this.droppedFramesCount})`)
+      return false
+    }
+
     // 将帧添加到公共采集器
     this.frameCollector.addFrame(grayMat, bgrMat)
+    return true
   }
 
   /**
@@ -273,6 +332,26 @@ export class ScreenCaptureDetector {
         required: 1,
       },
     }
+  }
+
+  /**
+   * 获取丢帧统计信息
+   */
+  getFrameDropStats(): {
+    droppedFramesCount: number
+    dropRate: number
+  } {
+    return {
+      droppedFramesCount: this.droppedFramesCount,
+      dropRate: this.config.frameDropRate,
+    }
+  }
+
+  /**
+   * 重置丢帧计数
+   */
+  resetFrameDropStats(): void {
+    this.droppedFramesCount = 0
   }
 
   /**

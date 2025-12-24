@@ -69,7 +69,7 @@ export class DetectionState {
         if(this.currentAction === null) {
             return
         }
-        this.clearActionVerifyTimeout()     
+        this.clearActionVerifyTimeout()
         this.completedActions.add(this.currentAction)
         this.currentAction = null
     }
@@ -100,23 +100,6 @@ export function createDetectionState(options: ResolvedEngineOptions): DetectionS
         frameBufferSize: options.motion_liveness_frame_buffer_size,
         eyeAspectRatioThreshold: options.motion_liveness_eye_aspect_ratio_threshold
     })
-    detectionState.screenDetector = new ScreenCaptureDetector({
-        confidenceThreshold: options.screen_capture_confidence_threshold,
-        moireThreshold: options.screen_moire_pattern_threshold,
-        moireEnableDCT: options.screen_moire_pattern_enable_dct,
-        moireEnableEdgeDetection: options.screen_moire_pattern_enable_edge_detection,
-        colorSaturationThreshold: options.screen_color_saturation_threshold,
-        colorRgbCorrelationThreshold: options.screen_color_rgb_correlation_threshold,
-        colorPixelEntropyThreshold: options.screen_color_pixel_entropy_threshold,
-        colorConfidenceThreshold: options.screen_color_confidence_threshold,
-        rgbLowFreqStartPercent: options.screen_rgb_low_freq_start_percent,
-        rgbLowFreqEndPercent: options.screen_rgb_low_freq_end_percent,
-        rgbEnergyRatioNormalizationFactor: options.screen_rgb_energy_ratio_normalization_factor,
-        rgbChannelDifferenceNormalizationFactor: options.screen_rgb_channel_difference_normalization_factor,
-        rgbEnergyScoreWeight: options.screen_rgb_energy_score_weight,
-        rgbAsymmetryScoreWeight: options.screen_rgb_asymmetry_score_weight,
-        rgbDifferenceFactorWeight: options.screen_rgb_difference_factor_weight,
-        rgbConfidenceThreshold: options.screen_rgb_confidence_threshold
-    })
+    detectionState.screenDetector = new ScreenCaptureDetector()
     return detectionState
 }
