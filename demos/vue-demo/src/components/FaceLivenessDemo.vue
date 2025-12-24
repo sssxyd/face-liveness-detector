@@ -278,13 +278,12 @@ const maxDebugLogs = 100
 
 // 计算配置
 const options = computed<FaceDetectionEngineOptions>(() => ({
+  debug_mode: true,
   human_model_path: humanModelPath.value,
   tensorflow_wasm_path: tensorflowWasmPath.value,
   detect_video_ideal_width: 1920,
   detect_video_ideal_height: 1080,  
   motion_liveness_min_motion_score: 0.15,
-  screen_capture_confidence_threshold: 0.7,
-  screen_capture_detection_strategy: 'accurate',
   collect_min_image_quality: minImageQuality.value,
   collect_min_face_frontal: 0.9,
   collect_min_collect_count: 3,

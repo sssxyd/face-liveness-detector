@@ -722,7 +722,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 屏幕捕获检测, 只关心脸部区域
-      const screenResult = this.detectionState.screenDetector.detectAuto(bgrFace, grayFace)
+      const screenResult = this.detectionState.screenDetector.detect(bgrFace, grayFace, this.options.debug_mode)
       // 屏幕捕获检测器已经准备就绪，其验证结果可信
       if(screenResult.isScreenCapture){
         // 从 executedMethods 提取各检测器的置信度
@@ -744,7 +744,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           moireConfidence: methodConfidences.moireConfidence ?? 'N/A',
           colorConfidence: methodConfidences.colorConfidence ?? 'N/A',
           rgbConfidence: methodConfidences.rgbConfidence ?? 'N/A',
-          detectionStrategy: screenResult.strategy,
           riskLevel: screenResult.riskLevel,
           processingTimeMs: screenResult.processingTimeMs,
           executedMethods: screenResult.executedMethods.map((m: any) => ({
@@ -762,7 +761,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           isScreenCapture: screenResult.isScreenCapture,
           overallConfidence: screenResult.confidenceScore,
           minConfidenceThreshold: this.options.screen_capture_confidence_threshold,
-          detectionStrategy: screenResult.strategy,
           riskLevel: screenResult.riskLevel,
           processingTimeMs: screenResult.processingTimeMs,
           executedMethods: screenResult.executedMethods.map((m: any) => ({
@@ -770,7 +768,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
             isScreenCapture: m.isScreenCapture,
             confidence: m.confidence
           })),
-          skippedMethods: screenResult.skippedMethods
+          skippedMethods: screenResult.skippedMethods,
+          debug: screenResult.debug
         })
       }
 
@@ -1122,6 +1121,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     details?: Record<string, any>,
     level: 'info' | 'warn' | 'error' = 'info'
   ): void {
+    if(this.options.debug_mode !== true) return
+
     const debugData: DetectorDebugEventData = {
       level,
       stage,

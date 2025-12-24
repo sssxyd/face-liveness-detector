@@ -1,7 +1,7 @@
 {
   "type": "module",
   "name": "@sssxyd/face-liveness-detector",
-  "version": "0.4.0-alpha.9",
+  "version": "0.4.0-alpha.10",
   "description": "Pure JS/TS implementation of liveness face detection based on human.js and opencv.js",
   "main": "dist/index.js",
   "module": "dist/index.esm.js",

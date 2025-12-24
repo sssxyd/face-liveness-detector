@@ -12,76 +12,9 @@ import { detectMoirePattern, MoirePatternDetectionConfig } from './screen-moire-
 import { detectRGBEmissionPattern, RgbEmissionDetectionConfig } from './screen-rgb-emission-detect'
 
 /**
- * 检测策略枚举
- */
-export enum DetectionStrategy {
-  /** 最快模式：仅使用RGB发光检测 (~10ms) */
-  FASTEST = 'fastest',
-  
-  /** 快速模式：RGB发光 + 色彩特征 (~30-40ms) */
-  FAST = 'fast',
-  
-  /** 精准模式：全部三种方法 (~100-150ms) */
-  ACCURATE = 'accurate',
-  
-  /** 自适应模式：根据第一轮结果动态调整 */
-  ADAPTIVE = 'adaptive',
-}
-
-/**
- * 将字符串转换为 DetectionStrategy 枚举值
- * 
- * @param value - 字符串值
- * @param defaultValue - 默认值（可选）
- * @returns DetectionStrategy 枚举值
- * @throws Error 如果字符串不是有效的检测策略
- * 
- * @example
- * const strategy = stringToDetectionStrategy('fastest')  // DetectionStrategy.FASTEST
- * const strategy2 = stringToDetectionStrategy('invalid', DetectionStrategy.ADAPTIVE)  // DetectionStrategy.ADAPTIVE
- */
-export function stringToDetectionStrategy(
-  value: string,
-  defaultValue?: DetectionStrategy
-): DetectionStrategy {
-  const normalizedValue = value.toLowerCase().trim()
-  
-  // 直接比对枚举值
-  switch (normalizedValue) {
-    case DetectionStrategy.FASTEST:
-      return DetectionStrategy.FASTEST
-    case DetectionStrategy.FAST:
-      return DetectionStrategy.FAST
-    case DetectionStrategy.ACCURATE:
-      return DetectionStrategy.ACCURATE
-    case DetectionStrategy.ADAPTIVE:
-      return DetectionStrategy.ADAPTIVE
-    default:
-      if (defaultValue !== undefined) {
-        return defaultValue
-      }
-      throw new Error(
-        `Invalid DetectionStrategy: "${value}". ` +
-        `Valid options are: ${Object.values(DetectionStrategy).join(', ')}`
-      )
-  }
-}
-
-/**
- * 判断字符串是否是有效的检测策略
- * 
- * @param value - 字符串值
- * @returns true 如果是有效的检测策略
- */
-export function isValidDetectionStrategy(value: string): boolean {
-  return Object.values(DetectionStrategy).includes(value as DetectionStrategy)
-}
-
-/**
  * 详细的级联检测过程日志
  */
 export interface CascadeDetectionDebugInfo {
-  strategy: DetectionStrategy
   startTime: number
   endTime: number
   totalTimeMs: number
@@ -126,7 +59,6 @@ export class ScreenCaptureDetectionResult {
   
   riskLevel: 'low' | 'medium' | 'high'
   processingTimeMs: number
-  strategy: DetectionStrategy
   debug?: CascadeDetectionDebugInfo
 
   constructor(
@@ -140,7 +72,6 @@ export class ScreenCaptureDetectionResult {
     }>,
     riskLevel: 'low' | 'medium' | 'high',
     processingTimeMs: number,
-    strategy: DetectionStrategy,
     skippedMethods?: string[],
     debug?: CascadeDetectionDebugInfo
   ) {
@@ -150,7 +81,6 @@ export class ScreenCaptureDetectionResult {
     this.skippedMethods = skippedMethods
     this.riskLevel = riskLevel
     this.processingTimeMs = processingTimeMs
-    this.strategy = strategy
     this.debug = debug
   }
 
@@ -172,7 +102,6 @@ export class ScreenCaptureDetectionResult {
 
 export interface ScreenCaptureDetectorOptions {
   confidenceThreshold?: number
-  detectionStrategy?: DetectionStrategy
   moireThreshold?: number
   moireEnableDCT?: boolean
   moireEnableEdgeDetection?: boolean
@@ -200,7 +129,6 @@ export interface ScreenCaptureDetectorOptions {
 export class ScreenCaptureDetector {
   private cv: any = null
   private confidenceThreshold: number = 0.6
-  private detectionStrategy: DetectionStrategy = DetectionStrategy.ADAPTIVE
   
   private moirePatternConfig: MoirePatternDetectionConfig
   private screenColorConfig: ScreenColorDetectionConfig
@@ -208,9 +136,6 @@ export class ScreenCaptureDetector {
 
   constructor(options: Partial<ScreenCaptureDetectorOptions> = {}) {
     this.confidenceThreshold = options.confidenceThreshold ?? 0.6
-    this.detectionStrategy = options.detectionStrategy
-      ? stringToDetectionStrategy(options.detectionStrategy as any, DetectionStrategy.ADAPTIVE)
-      : DetectionStrategy.ADAPTIVE
     
     this.moirePatternConfig = {
       moire_threshold: options.moireThreshold ?? 0.65,
@@ -242,73 +167,32 @@ export class ScreenCaptureDetector {
   }
 
   /**
-   * 最快检测：适用于实时性要求高的场景
-   * 仅使用RGB发光检测 (~10ms)
-   * 精准度: 70-80%
+   * 检测屏幕捕捉
+   * 使用三层判定逻辑：
+   * 1. 任意方法能明确判定为屏幕捕捉时，直接返回
+   * 2. 都不能明确判定时，计算加权置信度
+   * 3. 用加权置信度判定最终结果
    * 
    * @param bgrMat - BGR格式图像
+   * @param grayMat - 灰度图像（用于莫尔纹检测）
+   * @param debugMode - 是否启用调试模式，返回详细日志
    * @returns 检测结果
    */
-  detectFastest(bgrMat: any): ScreenCaptureDetectionResult {
-    return this.detectScreenCaptureWithStrategy(bgrMat, null, DetectionStrategy.FASTEST)
+  detect(bgrMat: any, grayMat: any, debugMode: boolean = false): ScreenCaptureDetectionResult {
+    return this.detectWithLogic(bgrMat, grayMat, debugMode)
   }
 
   /**
-   * 快速检测：平衡速度和精准度
-   * RGB发光检测 + 色彩特征检测 (~30-40ms)
-   * 精准度: 85-90%
+   * 核心检测方法：三层判定逻辑
+   * 1. 任意方法能明确判定为屏幕捕捉时，直接返回
+   * 2. 都不能明确判定时，计算加权置信度
+   * 3. 用加权置信度判定最终结果
    * 
-   * @param bgrMat - BGR格式图像
-   * @returns 检测结果
+   * 检测顺序：RGB 发光 → 颜色异常 → 莫尔纹
    */
-  detectFast(bgrMat: any): ScreenCaptureDetectionResult {
-    return this.detectScreenCaptureWithStrategy(bgrMat, null, DetectionStrategy.FAST)
-  }
-
-  /**
-   * 精准检测：使用所有三种方法
-   * RGB发光 + 色彩特征 + 莫尔纹检测 (~100-150ms)
-   * 精准度: 95%+
-   * 
-   * @param bgrMat - BGR格式图像
-   * @param grayMat - 灰度图像（莫尔纹检测需要）
-   * @returns 检测结果
-   */
-  detectAccurate(bgrMat: any, grayMat: any): ScreenCaptureDetectionResult {
-    return this.detectScreenCaptureWithStrategy(bgrMat, grayMat, DetectionStrategy.ACCURATE)
-  }
-
-  /**
-   * 自适应检测：根据前几个检测结果自动调整
-   * 
-   * 策略：
-   * - 先执行RGB发光检测 (~10ms)
-   * - 结果明确时直接返回
-   * - 结果模糊时继续执行色彩检测 (~20ms)
-   * - 仍模糊则执行莫尔纹检测以获得最终确定 (~80ms)
-   * 
-   * 处理时间: 10-130ms (取决于结果确定性)
-   * 精准度: 95%+ (自动选择最优方法组合)
-   * 
-   * @param bgrMat - BGR格式图像
-   * @param grayMat - 灰度图像
-   * @returns 检测结果
-   */
-  detectAdaptive(bgrMat: any, grayMat: any): ScreenCaptureDetectionResult {
-    return this.detectScreenCaptureWithStrategy(bgrMat, grayMat, DetectionStrategy.ADAPTIVE)
-  }
-
-  detectAuto(bgrMat: any, grayMat: any): ScreenCaptureDetectionResult {
-    return this.detectScreenCaptureWithStrategy(bgrMat, grayMat, this.detectionStrategy)
-  }
-
-  /**
-   * 核心检测方法：支持多种策略的级联检测
-   */
-  private detectScreenCaptureWithStrategy(
+  private detectWithLogic(
     bgrMat: any,
-    grayMat: any | null,
-    strategy: DetectionStrategy,
+    grayMat: any | null = null,
     enableDebug: boolean = false
   ): ScreenCaptureDetectionResult {
     if (!this.cv) {
@@ -322,11 +206,8 @@ export class ScreenCaptureDetector {
       confidence: number
       details?: any
     }> = []
-    const skippedMethods: string[] = []
-    let decisiveMethod: string | undefined
 
     const debug: CascadeDetectionDebugInfo | undefined = enableDebug ? {
-      strategy,
       startTime,
       endTime: 0,
       totalTimeMs: 0,
@@ -338,7 +219,7 @@ export class ScreenCaptureDetector {
     } : undefined
 
     try {
-      // ========== 阶段1: RGB发光检测 (最快) ==========
+      // ========== 阶段1: RGB发光检测 ==========
       const stage1Start = performance.now()
       const rgbEmissionResult = detectRGBEmissionPattern(this.cv, bgrMat, this.rgbEmissionConfig)
       const stage1Time = performance.now() - stage1Start
@@ -362,22 +243,32 @@ export class ScreenCaptureDetector {
         })
       }
 
-      // 在FASTEST模式下直接返回
-      if (strategy === DetectionStrategy.FASTEST) {
-        return this.buildResult(
-          rgbEmissionResult.isScreenCapture,
+      // 明确判定为屏幕捕捉时，直接返回
+      const rgbCanDetermine = rgbEmissionResult.isScreenCapture && rgbEmissionResult.confidence > 0.75
+      if (rgbCanDetermine) {
+        const totalTime = performance.now() - startTime
+        if (debug) {
+          debug.endTime = performance.now()
+          debug.totalTimeMs = totalTime
+          debug.finalDecision = {
+            isScreenCapture: true,
+            confidenceScore: rgbEmissionResult.confidence,
+            decisiveMethod: 'RGB Emission Pattern Detection',
+          }
+        }
+        
+        return new ScreenCaptureDetectionResult(
+          true,
           rgbEmissionResult.confidence,
           executedMethods,
-          skippedMethods,
-          strategy,
-          startTime,
-          'RGB Emission Pattern Detection',
-          debug,
-          ['Screen Color Profile Detection', 'Moiré Pattern Detection']
+          'medium',
+          totalTime,
+          ['Screen Color Profile Detection', 'Moiré Pattern Detection'],
+          debug
         )
       }
 
-      // ========== 阶段2: 色彩特征检测 ==========
+      // ========== 阶段2: 颜色异常检测 ==========
       const stage2Start = performance.now()
       const colorResult = detectScreenColorProfile(this.cv, bgrMat, this.screenColorConfig)
       const stage2Time = performance.now() - stage2Start
@@ -401,112 +292,106 @@ export class ScreenCaptureDetector {
         })
       }
 
-      // 在FAST模式下或自适应模式下结论明确时返回
-      if (strategy === DetectionStrategy.FAST) {
-        const avgConfidence = (rgbEmissionResult.confidence + colorResult.confidence) / 2
-        const screenCaptureCount = [rgbEmissionResult.isScreenCapture, colorResult.isScreenCapture]
-          .filter(v => v).length
-
-        return this.buildResult(
-          screenCaptureCount >= 1 && avgConfidence > this.confidenceThreshold,
-          avgConfidence,
+      // 明确判定为屏幕捕捉时，直接返回
+      const colorCanDetermine = colorResult.isScreenCapture && colorResult.confidence > 0.75
+      if (colorCanDetermine) {
+        const totalTime = performance.now() - startTime
+        if (debug) {
+          debug.endTime = performance.now()
+          debug.totalTimeMs = totalTime
+          debug.finalDecision = {
+            isScreenCapture: true,
+            confidenceScore: colorResult.confidence,
+            decisiveMethod: 'Screen Color Profile Detection',
+          }
+        }
+        
+        return new ScreenCaptureDetectionResult(
+          true,
+          colorResult.confidence,
           executedMethods,
-          skippedMethods,
-          strategy,
-          startTime,
-          screenCaptureCount >= 1 ? 'Combined RGB + Color Detection' : undefined,
-          debug,
-          ['Moiré Pattern Detection']
+          'medium',
+          totalTime,
+          ['Moiré Pattern Detection'],
+          debug
         )
       }
 
-      // 自适应模式：检查结论是否明确
-      if (strategy === DetectionStrategy.ADAPTIVE) {
-        const stage1Confident = this.isConfidentResult(
-          rgbEmissionResult.isScreenCapture,
-          rgbEmissionResult.confidence
-        )
-        const stage2Confident = this.isConfidentResult(
-          colorResult.isScreenCapture,
-          colorResult.confidence
-        )
+      // ========== 阶段3: 莫尔纹检测 ==========
+      let moireResult: any = { isScreenCapture: false, confidence: 0, moireStrength: 0, dominantFrequencies: [] }
+      
+      if (grayMat) {
+        const stage3Start = performance.now()
+        moireResult = detectMoirePattern(this.cv, grayMat, this.moirePatternConfig)
+        const stage3Time = performance.now() - stage3Start
 
-        // 如果两个检测都高度确定（>0.8或<0.2），可以提前终止
-        if (stage1Confident && stage2Confident) {
-          const avgConfidence = (rgbEmissionResult.confidence + colorResult.confidence) / 2
-          return this.buildResult(
-            (rgbEmissionResult.isScreenCapture || colorResult.isScreenCapture) &&
-            avgConfidence > this.confidenceThreshold,
-            avgConfidence,
+        executedMethods.push({
+          method: 'Moiré Pattern Detection',
+          isScreenCapture: moireResult.isScreenCapture,
+          confidence: moireResult.confidence,
+          details: {
+            moireStrength: moireResult.moireStrength,
+            dominantFrequencies: moireResult.dominantFrequencies,
+          },
+        })
+
+        if (debug) {
+          debug.stages.push({
+            method: 'Moiré Pattern Detection',
+            completed: true,
+            timeMs: stage3Time,
+            result: {
+              isScreenCapture: moireResult.isScreenCapture,
+              confidence: moireResult.confidence,
+            }
+          })
+        }
+
+        // 明确判定为屏幕捕捉时，直接返回
+        const moireCanDetermine = moireResult.isScreenCapture && moireResult.confidence > 0.75
+        if (moireCanDetermine) {
+          const totalTime = performance.now() - startTime
+          if (debug) {
+            debug.endTime = performance.now()
+            debug.totalTimeMs = totalTime
+            debug.finalDecision = {
+              isScreenCapture: true,
+              confidenceScore: moireResult.confidence,
+              decisiveMethod: 'Moiré Pattern Detection',
+            }
+          }
+          
+          return new ScreenCaptureDetectionResult(
+            true,
+            moireResult.confidence,
             executedMethods,
-            skippedMethods,
-            strategy,
-            startTime,
-            'Adaptive Early Exit (RGB + Color)',
-            debug,
-            ['Moiré Pattern Detection']
+            'medium',
+            totalTime,
+            undefined,
+            debug
           )
         }
       }
 
-      // ========== 阶段3: 莫尔纹检测 (最精准但最耗时) ==========
-      if (!grayMat) {
-        throw new Error('grayMat required for Moiré Pattern Detection')
-      }
-
-      const stage3Start = performance.now()
-      const moireResult = detectMoirePattern(this.cv, grayMat, this.moirePatternConfig)
-      const stage3Time = performance.now() - stage3Start
-
-      executedMethods.push({
-        method: 'Moiré Pattern Detection',
-        isScreenCapture: moireResult.isScreenCapture,
-        confidence: moireResult.confidence,
-        details: {
-          moireStrength: moireResult.moireStrength,
-          dominantFrequencies: moireResult.dominantFrequencies,
-        },
-      })
-
-      if (debug) {
-        debug.stages.push({
-          method: 'Moiré Pattern Detection',
-          completed: true,
-          timeMs: stage3Time,
-          result: {
-            isScreenCapture: moireResult.isScreenCapture,
-            confidence: moireResult.confidence,
-          }
-        })
-      }
-
-      // ========== 综合三种方法的结果 ==========
-      const screenCaptureCount = [
-        rgbEmissionResult.isScreenCapture,
-        colorResult.isScreenCapture,
-        moireResult.isScreenCapture,
-      ].filter(v => v).length
-
-      const allConfidences = [
-        rgbEmissionResult.confidence,
-        colorResult.confidence,
-        moireResult.confidence,
-      ]
-
-      const avgConfidence = allConfidences.reduce((a, b) => a + b, 0) / allConfidences.length
-
-      // 决策逻辑：至少2个方法检测到屏幕采集，且平均置信度超过阈值
-      const isScreenCapture = screenCaptureCount >= 2 && avgConfidence > this.confidenceThreshold
-
+      // 都不能明确判定，计算加权置信度
+      const weightedConfidence = 
+        rgbEmissionResult.confidence * 0.5 +    // RGB权重 50%
+        colorResult.confidence * 0.3 +            // Color权重 30%
+        moireResult.confidence * 0.2              // Moiré权重 20%
+      
+      // 第 3 层：用加权置信度判定最终结果
+      const isScreenCapture = weightedConfidence > this.confidenceThreshold
+      
+      // 根据加权置信度判断风险等级
       let riskLevel: 'low' | 'medium' | 'high' = 'low'
-      if (screenCaptureCount === 3) riskLevel = 'high'
-      else if (screenCaptureCount === 2) riskLevel = 'medium'
-
-      // 确定哪个方法是关键决策者
-      if (moireResult.isScreenCapture && moireResult.confidence > 0.8) {
-        decisiveMethod = 'Moiré Pattern Detection'
-      } else if (screenCaptureCount >= 2) {
-        decisiveMethod = 'Consensus (2+ methods)'
+      if (isScreenCapture) {
+        if (weightedConfidence > 0.8) {
+          riskLevel = 'high'
+        } else if (weightedConfidence > 0.6) {
+          riskLevel = 'medium'
+        } else {
+          riskLevel = 'low'
+        }
       }
 
       const totalTime = performance.now() - startTime
@@ -516,25 +401,24 @@ export class ScreenCaptureDetector {
         debug.totalTimeMs = totalTime
         debug.finalDecision = {
           isScreenCapture,
-          confidenceScore: avgConfidence,
-          decisiveMethod,
+          confidenceScore: weightedConfidence,
+          decisiveMethod: isScreenCapture ? 'Weighted Decision (RGB + Color + Moiré)' : undefined,
         }
       }
 
       return new ScreenCaptureDetectionResult(
         isScreenCapture,
-        isScreenCapture ? avgConfidence : 1 - avgConfidence,
+        weightedConfidence,
         executedMethods,
         riskLevel,
         totalTime,
-        strategy,
         undefined,
         debug
       )
     } catch (error) {
       console.error('[ScreenCaptureDetector] Detection error:', error)
       
-      // 出错时，使用已有结果的最保守决策
+      // 出错时，返回保守结果
       const totalTime = performance.now() - startTime
       const avgConfidence = executedMethods.length > 0
         ? executedMethods.reduce((sum, m) => sum + m.confidence, 0) / executedMethods.length
@@ -555,74 +439,9 @@ export class ScreenCaptureDetector {
         executedMethods,
         'low',
         totalTime,
-        strategy,
-        skippedMethods,
+        undefined,
         debug
       )
     }
-  }
-
-  /**
-   * 判断结果是否足够明确，无需进一步检测
-   * 
-   * @param isScreenCapture 检测结果
-   * @param confidence 置信度（0-1）
-   * @returns true 如果结果足够明确
-   */
-  private isConfidentResult(isScreenCapture: boolean, confidence: number): boolean {
-    // 如果置信度 > 0.8 或 < 0.2，认为结论足够明确
-    return confidence > 0.8 || confidence < 0.2
-  }
-
-  /**
-   * 构建检测结果对象
-   */
-  private buildResult(
-    isScreenCapture: boolean,
-    confidence: number,
-    executedMethods: Array<{
-      method: string
-      isScreenCapture: boolean
-      confidence: number
-      details?: any
-    }>,
-    skippedMethods: string[],
-    strategy: DetectionStrategy,
-    startTime: number,
-    decisiveMethod: string | undefined,
-    debug: CascadeDetectionDebugInfo | undefined,
-    additionalSkipped?: string[]
-  ): ScreenCaptureDetectionResult {
-    const totalTime = performance.now() - startTime
-    
-    if (additionalSkipped) {
-      skippedMethods.push(...additionalSkipped)
-    }
-
-    let riskLevel: 'low' | 'medium' | 'high' = 'low'
-    if (isScreenCapture) {
-      riskLevel = executedMethods.filter(m => m.isScreenCapture).length >= 2 ? 'high' : 'medium'
-    }
-
-    if (debug) {
-      debug.endTime = performance.now()
-      debug.totalTimeMs = totalTime
-      debug.finalDecision = {
-        isScreenCapture,
-        confidenceScore: confidence,
-        decisiveMethod,
-      }
-    }
-
-    return new ScreenCaptureDetectionResult(
-      isScreenCapture,
-      isScreenCapture ? confidence : 1 - confidence,
-      executedMethods,
-      riskLevel,
-      totalTime,
-      strategy,
-      skippedMethods,
-      debug
-    )
   }
 }

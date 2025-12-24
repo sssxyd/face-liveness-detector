@@ -13,6 +13,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   human_model_path: undefined,
   tensorflow_wasm_path: undefined,
   tensorflow_backend: 'auto',
+  debug_mode: false,
 
   // Detection Settings
   detect_video_ideal_width: 1920,
@@ -57,27 +58,30 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   motion_liveness_strict_photo_detection: false,
 
   // Screen Capture Detection Settings
-  screen_capture_confidence_threshold: 0.7,
-  screen_capture_detection_strategy: 'accurate',
+  // Lowered threshold to improve detection of mobile photos (0.7 → 0.5)
+  screen_capture_confidence_threshold: 0.5,
 
-  screen_moire_pattern_threshold: 0.65,
+  // Moiré Pattern Detection - Increased sensitivity for mobile photos
+  screen_moire_pattern_threshold: 0.50,  // Reduced from 0.65 to 0.50
   screen_moire_pattern_enable_dct: true,
   screen_moire_pattern_enable_edge_detection: true,
 
-  screen_color_saturation_threshold: 40,
-  screen_color_rgb_correlation_threshold: 0.75,
-  screen_color_pixel_entropy_threshold: 6.5,
-  screen_color_gradient_smoothness_threshold: 0.7,
-  screen_color_confidence_threshold: 0.65,
+  // Screen Color Profile Detection - Optimized parameters
+  screen_color_saturation_threshold: 35,  // Reduced from 40 to 35
+  screen_color_rgb_correlation_threshold: 0.80,  // Increased from 0.75 to 0.80
+  screen_color_pixel_entropy_threshold: 6.0,  // Reduced from 6.5 to 6.0
+  screen_color_gradient_smoothness_threshold: 0.65,  // Reduced from 0.7 to 0.65
+  screen_color_confidence_threshold: 0.50,  // Reduced from 0.65 to 0.50
 
-  screen_rgb_low_freq_start_percent: 0.15,
-  screen_rgb_low_freq_end_percent: 0.35,
-  screen_rgb_energy_ratio_normalization_factor: 10,
-  screen_rgb_channel_difference_normalization_factor: 50,
-  screen_rgb_energy_score_weight: 0.40,
-  screen_rgb_asymmetry_score_weight: 0.40,
+  // RGB Emission Pattern Detection - Optimized for mobile photos
+  screen_rgb_low_freq_start_percent: 0.12,  // Reduced from 0.15 to 0.12
+  screen_rgb_low_freq_end_percent: 0.40,  // Increased from 0.35 to 0.40
+  screen_rgb_energy_ratio_normalization_factor: 8,  // Reduced from 10 to 8
+  screen_rgb_channel_difference_normalization_factor: 40,  // Reduced from 50 to 40
+  screen_rgb_energy_score_weight: 0.45,  // Increased from 0.40 to 0.45
+  screen_rgb_asymmetry_score_weight: 0.35,  // Reduced from 0.40 to 0.35
   screen_rgb_difference_factor_weight: 0.20,
-  screen_rgb_confidence_threshold: 0.65,
+  screen_rgb_confidence_threshold: 0.40,  // Significantly reduced from 0.65 to 0.40
 }
 
 /**

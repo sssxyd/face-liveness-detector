@@ -1,6 +1,6 @@
 import { DetectionPeriod, LivenessAction, LivenessActionStatus } from "./enums"
 import { MotionLivenessDetector } from "./motion-liveness-detector"
-import { ScreenCaptureDetector, stringToDetectionStrategy } from './screen-capture-detector'
+import { ScreenCaptureDetector } from './screen-capture-detector'
 import { ResolvedEngineOptions } from "./types"
 
 /**
@@ -102,7 +102,6 @@ export function createDetectionState(options: ResolvedEngineOptions): DetectionS
     })
     detectionState.screenDetector = new ScreenCaptureDetector({
         confidenceThreshold: options.screen_capture_confidence_threshold,
-        detectionStrategy: stringToDetectionStrategy(options.screen_capture_detection_strategy),
         moireThreshold: options.screen_moire_pattern_threshold,
         moireEnableDCT: options.screen_moire_pattern_enable_dct,
         moireEnableEdgeDetection: options.screen_moire_pattern_enable_edge_detection,

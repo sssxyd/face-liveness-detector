@@ -38,6 +38,8 @@ export interface FaceDetectionEngineOptions {
   tensorflow_wasm_path?: string
   /** TensorFlow 后端选择 */
   tensorflow_backend?: 'auto' | 'webgl' | 'wasm'
+  /** 调试模式 */
+  debug_mode?: boolean
 
   /** 视频流建议分辨率宽度（默认 1920） */
   detect_video_ideal_width?: number
@@ -95,8 +97,6 @@ export interface FaceDetectionEngineOptions {
 
   /** 屏幕采集的置信度阈值（0-1，默认 0.7） */
   screen_capture_confidence_threshold?: number
-  /** 屏幕采集检测策略（默认 'adaptive'） */
-  screen_capture_detection_strategy?: 'fastest' | 'fast' | 'accurate' | 'adaptive'
 
   /** 综合莫尔纹置信度阈值（0-1，默认 0.65） */
   screen_moire_pattern_threshold?: number
