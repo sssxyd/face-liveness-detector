@@ -10,6 +10,11 @@
 import { detectScreenColorProfile, ScreenColorDetectionConfig } from './screen-color-profile-detect'
 import { detectMoirePattern, MoirePatternDetectionConfig } from './screen-moire-pattern-detect'
 import { detectRGBEmissionPattern, RgbEmissionDetectionConfig } from './screen-rgb-emission-detect'
+import { ScreenFlickerDetector, ScreenFlickerDetectorConfig } from './screen-flicker-detector'
+import { ScreenResponseTimeDetector, ScreenResponseTimeDetectorConfig } from './screen-response-time-detector'
+import { DLPColorWheelDetector, DLPColorWheelDetectorConfig } from './dlp-color-wheel-detector'
+import { OpticalDistortionDetector, OpticalDistortionDetectorConfig } from './optical-distortion-detector'
+import { ScreenFrameCollector } from './screen-frame-collector'
 
 /**
  * 详细的级联检测过程日志
@@ -101,24 +106,63 @@ export class ScreenCaptureDetectionResult {
 }
 
 export interface ScreenCaptureDetectorOptions {
-  confidenceThreshold?: number
-  moireThreshold?: number
-  moireEnableDCT?: boolean
-  moireEnableEdgeDetection?: boolean
-  colorSaturationThreshold?: number
-  colorRgbCorrelationThreshold?: number
-  colorPixelEntropyThreshold?: number
-  colorConfidenceThreshold?: number
+  // 预期的视频帧率
+  fpsEstimate?: number
 
+  // 视频闪烁检测配置
+  flickerBufferSize?: number
+  flickerFpsEstimate?: number
+  flickerMinPeriod?: number
+  flickerMaxPeriod?: number
+  flickerCorrelationThreshold?: number
+  flickerPassingPixelRatio?: number
+  flickerSamplingStride?: number
 
-  rgbLowFreqStartPercent?: number
-  rgbLowFreqEndPercent?: number
-  rgbEnergyRatioNormalizationFactor?: number
-  rgbChannelDifferenceNormalizationFactor?: number
-  rgbEnergyScoreWeight?: number
-  rgbAsymmetryScoreWeight?: number
-  rgbDifferenceFactorWeight?: number
-  rgbConfidenceThreshold?: number  
+  // 响应时间检测配置（墨水屏）
+  responseTimeBufferSize?: number
+  responseTimeFpsEstimate?: number
+  responseTimeThreshold?: number
+  responseTimePassingPixelRatio?: number
+
+  // DLP色轮检测配置 (DLP投影仪)
+  dlpColorWheelBufferSize?: number
+  dlpEdgeThreshold?: number
+  dlpChannelSeparationThreshold?: number
+  dlpConfidenceThreshold?: number
+
+  // 光学畸变检测配置 (其他光学投影仪)
+  opticalDistortionBufferSize?: number
+  opticalKeystoneThreshold?: number
+  opticalBarrelThreshold?: number
+  opticalChromaticThreshold?: number
+  opticalVignetteThreshold?: number
+}
+
+/**
+ * ScreenCaptureDetectorOptions 的默认值
+ */
+const DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS: Required<ScreenCaptureDetectorOptions> = {
+  fpsEstimate: 30,
+  flickerBufferSize: 30,
+  flickerFpsEstimate: 30,
+  flickerMinPeriod: 1,
+  flickerMaxPeriod: 8,
+  flickerCorrelationThreshold: 0.65,
+  flickerPassingPixelRatio: 0.40,
+  flickerSamplingStride: 2,
+  responseTimeBufferSize: 60,
+  responseTimeFpsEstimate: 30,
+  responseTimeThreshold: 100,
+  responseTimePassingPixelRatio: 0.45,
+  dlpColorWheelBufferSize: 30,
+  dlpEdgeThreshold: 80,
+  dlpChannelSeparationThreshold: 2,
+  dlpConfidenceThreshold: 0.65,
+  opticalDistortionBufferSize: 1,
+  opticalKeystoneThreshold: 0.15,
+  opticalBarrelThreshold: 0.10,
+  opticalChromaticThreshold: 3.0,
+  opticalVignetteThreshold: 0.20,
 }
 
 /**
@@ -128,42 +172,118 @@ export interface ScreenCaptureDetectorOptions {
  */
 export class ScreenCaptureDetector {
   private cv: any = null
-  private confidenceThreshold: number = 0.6
   
-  private moirePatternConfig: MoirePatternDetectionConfig
-  private screenColorConfig: ScreenColorDetectionConfig
-  private rgbEmissionConfig: RgbEmissionDetectionConfig
+  private frameCollector: ScreenFrameCollector
+  private flickerDetector: ScreenFlickerDetector
+  private responseTimeDetector: ScreenResponseTimeDetector
+  private dlpColorWheelDetector: DLPColorWheelDetector
+  private opticalDistortionDetector: OpticalDistortionDetector
 
   constructor(options: Partial<ScreenCaptureDetectorOptions> = {}) {
-    this.confidenceThreshold = options.confidenceThreshold ?? 0.6
-    
-    this.moirePatternConfig = {
-      moire_threshold: options.moireThreshold ?? 0.65,
-      enable_dct: options.moireEnableDCT ?? true,
-      enable_edge_detection: options.moireEnableEdgeDetection ?? true,
-    }
-    
-    this.screenColorConfig = {
-      saturation_threshold: options.colorSaturationThreshold ?? 40,
-      rgb_correlation_threshold: options.colorRgbCorrelationThreshold ?? 0.85,
-      pixel_entropy_threshold: options.colorPixelEntropyThreshold ?? 6.5,
-      confidence_threshold: options.colorConfidenceThreshold ?? 0.65,
-    }
-    
-    this.rgbEmissionConfig = {
-      low_freq_start_percent: options.rgbLowFreqStartPercent ?? 0.15,
-      low_freq_end_percent: options.rgbLowFreqEndPercent ?? 0.35,
-      energy_ratio_normalization_factor: options.rgbEnergyRatioNormalizationFactor ?? 10,
-      channel_difference_normalization_factor: options.rgbChannelDifferenceNormalizationFactor ?? 50,
-      energy_score_weight: options.rgbEnergyScoreWeight ?? 0.40,
-      asymmetry_score_weight: options.rgbAsymmetryScoreWeight ?? 0.40,
-      difference_factor_weight: options.rgbDifferenceFactorWeight ?? 0.20,
-      confidence_threshold: options.rgbConfidenceThreshold ?? 0.60,
-    }
+    // 合并用户提供的选项和默认值
+    const config = { ...DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS, ...options }
+
+    const bufferSize = Math.max(
+      config.flickerBufferSize,
+      config.responseTimeBufferSize,
+      config.dlpColorWheelBufferSize,
+      config.opticalDistortionBufferSize,
+      config.fpsEstimate
+    )
+
+    // 创建公共帧采集器
+    this.frameCollector = new ScreenFrameCollector({
+      bufferSize: bufferSize,
+      fpsEstimate: config.fpsEstimate,
+    })
+
+    // 初始化视频闪烁检测器 (LCD/OLED)
+    this.flickerDetector = new ScreenFlickerDetector(this.frameCollector, {
+      bufferSize: config.flickerBufferSize,
+      minFlickerPeriodFrames: config.flickerMinPeriod,
+      maxFlickerPeriodFrames: config.flickerMaxPeriod,
+      correlationThreshold: config.flickerCorrelationThreshold,
+      passingPixelRatio: config.flickerPassingPixelRatio,
+      samplingStride: config.flickerSamplingStride,
+    })
+
+    // 初始化响应时间检测器（墨水屏）
+    this.responseTimeDetector = new ScreenResponseTimeDetector(this.frameCollector, {
+      bufferSize: config.responseTimeBufferSize,
+      minPixelDelta: 30,
+      einkResponseTimeThreshold: config.responseTimeThreshold,
+      samplingStride: 2,
+      passingPixelRatio: config.responseTimePassingPixelRatio,
+    })
+
+    // 初始化DLP色轮检测器 (DLP投影仪)
+    this.dlpColorWheelDetector = new DLPColorWheelDetector(this.frameCollector, {
+      bufferSize: config.dlpColorWheelBufferSize,
+      edgeThreshold: config.dlpEdgeThreshold,
+      minChannelSeparationPixels: config.dlpChannelSeparationThreshold,
+      separationConfidenceThreshold: config.dlpConfidenceThreshold,
+    })
+
+    // 初始化光学畸变检测器 (其他投影仪)
+    this.opticalDistortionDetector = new OpticalDistortionDetector(this.frameCollector, {
+      keystoneThreshold: config.opticalKeystoneThreshold,
+      barrelDistortionThreshold: config.opticalBarrelThreshold,
+      chromaticAberrationThreshold: config.opticalChromaticThreshold,
+      vignetteThreshold: config.opticalVignetteThreshold,
+    })
   }
 
   setCVInstance(cvInstance: any): void {
     this.cv = cvInstance
+  }
+
+  /**
+   * 向视频检测器添加一帧（用于实时视频处理）
+   * 建议每收到一帧就调用此方法
+   */
+  addVideoFrame(grayMat: any, bgrMat?: any): void {
+    // 将帧添加到公共采集器
+    this.frameCollector.addFrame(grayMat, bgrMat)
+  }
+
+  /**
+   * 获取视频帧缓冲状态
+   */
+  getVideoFrameBufferStatus(): { 
+    flicker: { buffered: number; required: number }
+    responseTime: { buffered: number; required: number }
+    dlpColorWheel: { buffered: number; required: number }
+    opticalDistortion: { buffered: number; required: number }
+  } {
+    return {
+      flicker: {
+        buffered: this.flickerDetector.getBufferedFrameCount(),
+        required: 5,
+      },
+      responseTime: {
+        buffered: this.responseTimeDetector.getBufferedFrameCount(),
+        required: 10,
+      },
+      dlpColorWheel: {
+        buffered: this.dlpColorWheelDetector.getBufferedFrameCount(),
+        required: 3,
+      },
+      opticalDistortion: {
+        buffered: this.opticalDistortionDetector.getBufferedFrameCount(),
+        required: 1,
+      },
+    }
+  }
+
+  /**
+   * 重置所有视频帧缓冲区
+   */
+  resetVideoFrameBuffer(): void {
+    this.frameCollector.reset()
+    this.flickerDetector.reset()
+    this.responseTimeDetector.reset()
+    this.dlpColorWheelDetector.reset()
+    this.opticalDistortionDetector.reset()
   }
 
   /**
@@ -176,24 +296,27 @@ export class ScreenCaptureDetector {
    * @param bgrMat - BGR格式图像
    * @param grayMat - 灰度图像（用于莫尔纹检测）
    * @param debugMode - 是否启用调试模式，返回详细日志
+   * @param useVideoAnalysis - 是否使用已积累的视频帧进行闪烁检测
    * @returns 检测结果
    */
-  detect(bgrMat: any, grayMat: any, debugMode: boolean = false): ScreenCaptureDetectionResult {
-    return this.detectWithLogic(bgrMat, grayMat, debugMode)
+  detect(bgrMat: any, grayMat: any, debugMode: boolean = false, useVideoAnalysis: boolean = false): ScreenCaptureDetectionResult {
+    return this.detectWithLogic(bgrMat, grayMat, debugMode, useVideoAnalysis)
   }
 
   /**
-   * 核心检测方法：三层判定逻辑
-   * 1. 任意方法能明确判定为屏幕捕捉时，直接返回
-   * 2. 都不能明确判定时，计算加权置信度
-   * 3. 用加权置信度判定最终结果
+   * 核心检测方法：多屏幕类型级联检测
    * 
-   * 检测顺序：RGB 发光 → 颜色异常 → 莫尔纹
+   * 检测顺序（按可靠性排序）：
+   * 1. 视频闪烁（LCD/OLED）- 最可靠的物理特性
+   * 2. 响应时间（墨水屏）- 像素变化速度特征
+   * 3. DLP色轮（DLP投影）- 色轮干涉的独特特征
+   * 4. 光学畸变（其他投影）- 投影光学系统的失真
    */
   private detectWithLogic(
     bgrMat: any,
     grayMat: any | null = null,
-    enableDebug: boolean = false
+    enableDebug: boolean = false,
+    useVideoAnalysis: boolean = false
   ): ScreenCaptureDetectionResult {
     if (!this.cv) {
       throw new Error('OpenCV instance not initialized. Call setCVInstance() first.')
@@ -219,210 +342,282 @@ export class ScreenCaptureDetector {
     } : undefined
 
     try {
-      // ========== 阶段1: RGB发光检测 ==========
-      const stage1Start = performance.now()
-      const rgbEmissionResult = detectRGBEmissionPattern(this.cv, bgrMat, this.rgbEmissionConfig)
-      const stage1Time = performance.now() - stage1Start
+      // ========== Stage 0: 视频闪烁检测 (LCD/OLED) ==========
+      let flickerResult: any = { isScreenCapture: false, confidence: 0 }
       
-      executedMethods.push({
-        method: 'RGB Emission Pattern Detection',
-        isScreenCapture: rgbEmissionResult.isScreenCapture,
-        confidence: rgbEmissionResult.confidence,
-        details: rgbEmissionResult.details,
-      })
-
-      if (debug) {
-        debug.stages.push({
-          method: 'RGB Emission Pattern Detection',
-          completed: true,
-          timeMs: stage1Time,
-          result: {
-            isScreenCapture: rgbEmissionResult.isScreenCapture,
-            confidence: rgbEmissionResult.confidence,
-          }
-        })
-      }
-
-      // 明确判定为屏幕捕捉时，直接返回
-      // 完整高分辨率图像：RGB信号应该很强
-      const rgbCanDetermine = rgbEmissionResult.isScreenCapture && rgbEmissionResult.confidence > 0.65
-      if (rgbCanDetermine) {
-        const totalTime = performance.now() - startTime
-        if (debug) {
-          debug.endTime = performance.now()
-          debug.totalTimeMs = totalTime
-          debug.finalDecision = {
-            isScreenCapture: true,
-            confidenceScore: rgbEmissionResult.confidence,
-            decisiveMethod: 'RGB Emission Pattern Detection',
-          }
-        }
-        
-        return new ScreenCaptureDetectionResult(
-          true,
-          rgbEmissionResult.confidence,
-          executedMethods,
-          'medium',
-          totalTime,
-          ['Screen Color Profile Detection', 'Moiré Pattern Detection'],
-          debug
-        )
-      }
-
-      // ========== 阶段2: 颜色异常检测 ==========
-      const stage2Start = performance.now()
-      const colorResult = detectScreenColorProfile(this.cv, bgrMat, this.screenColorConfig)
-      const stage2Time = performance.now() - stage2Start
-
-      executedMethods.push({
-        method: 'Screen Color Profile Detection',
-        isScreenCapture: colorResult.isScreenCapture,
-        confidence: colorResult.confidence,
-        details: colorResult.metrics,
-      })
-
-      if (debug) {
-        debug.stages.push({
-          method: 'Screen Color Profile Detection',
-          completed: true,
-          timeMs: stage2Time,
-          result: {
-            isScreenCapture: colorResult.isScreenCapture,
-            confidence: colorResult.confidence,
-          }
-        })
-      }
-
-      // 明确判定为屏幕捕捉时，直接返回
-      // 完整高分辨率图像：色彩特征应该清晰
-      const colorCanDetermine = colorResult.isScreenCapture && colorResult.confidence > 0.65
-      if (colorCanDetermine) {
-        const totalTime = performance.now() - startTime
-        if (debug) {
-          debug.endTime = performance.now()
-          debug.totalTimeMs = totalTime
-          debug.finalDecision = {
-            isScreenCapture: true,
-            confidenceScore: colorResult.confidence,
-            decisiveMethod: 'Screen Color Profile Detection',
-          }
-        }
-        
-        return new ScreenCaptureDetectionResult(
-          true,
-          colorResult.confidence,
-          executedMethods,
-          'medium',
-          totalTime,
-          ['Moiré Pattern Detection'],
-          debug
-        )
-      }
-
-      // ========== 阶段3: 莫尔纹检测 ==========
-      let moireResult: any = { isScreenCapture: false, confidence: 0, moireStrength: 0, dominantFrequencies: [] }
-      
-      if (grayMat) {
-        const stage3Start = performance.now()
-        moireResult = detectMoirePattern(this.cv, grayMat, this.moirePatternConfig)
-        const stage3Time = performance.now() - stage3Start
+      if (useVideoAnalysis && this.flickerDetector.getBufferedFrameCount() >= 5) {
+        const stage0Start = performance.now()
+        flickerResult = this.flickerDetector.analyze()
+        const stage0Time = performance.now() - stage0Start
 
         executedMethods.push({
-          method: 'Moiré Pattern Detection',
-          isScreenCapture: moireResult.isScreenCapture,
-          confidence: moireResult.confidence,
+          method: 'Screen Flicker Detection (LCD/OLED)',
+          isScreenCapture: flickerResult.isScreenCapture,
+          confidence: flickerResult.confidence,
           details: {
-            moireStrength: moireResult.moireStrength,
-            dominantFrequencies: moireResult.dominantFrequencies,
+            dominantPeriod: flickerResult.dominantFlickerPeriod,
+            estimatedRefreshRate: flickerResult.estimatedScreenRefreshRate,
           },
         })
 
         if (debug) {
           debug.stages.push({
-            method: 'Moiré Pattern Detection',
+            method: 'Screen Flicker Detection (LCD/OLED)',
             completed: true,
-            timeMs: stage3Time,
+            timeMs: stage0Time,
             result: {
-              isScreenCapture: moireResult.isScreenCapture,
-              confidence: moireResult.confidence,
+              isScreenCapture: flickerResult.isScreenCapture,
+              confidence: flickerResult.confidence,
             }
           })
         }
 
-        // 明确判定为屏幕捕捉时，直接返回
-        // 完整高分辨率图像：莫尔纹应该很清晰
-        const moireCanDetermine = moireResult.isScreenCapture && moireResult.confidence > 0.65
-        if (moireCanDetermine) {
+        if (flickerResult.isScreenCapture && flickerResult.confidence > 0.70) {
           const totalTime = performance.now() - startTime
           if (debug) {
             debug.endTime = performance.now()
             debug.totalTimeMs = totalTime
             debug.finalDecision = {
               isScreenCapture: true,
-              confidenceScore: moireResult.confidence,
-              decisiveMethod: 'Moiré Pattern Detection',
+              confidenceScore: flickerResult.confidence,
+              decisiveMethod: 'Screen Flicker Detection',
             }
           }
           
           return new ScreenCaptureDetectionResult(
             true,
-            moireResult.confidence,
+            flickerResult.confidence,
             executedMethods,
-            'medium',
+            'high',
             totalTime,
-            undefined,
+            [],
             debug
           )
         }
       }
 
-      // 都不能明确判定，计算加权置信度
-      // 优化权重比例：针对完整高分辨率图像（1920×1080+）
-      const weightedConfidence = 
-        rgbEmissionResult.confidence * 0.50 +    // RGB权重 50%
-        colorResult.confidence * 0.25 +           // Color权重 25%
-        moireResult.confidence * 0.25             // Moiré权重 25% (提升，完整图像中莫尔纹清晰)
+      // ========== Stage 1: 响应时间检测 (墨水屏) ==========
+      let responseTimeResult: any = { isScreenCapture: false, confidence: 0 }
       
-      // 第 3 层：用加权置信度判定最终结果
-      const isScreenCapture = weightedConfidence > this.confidenceThreshold
-      
-      // 根据加权置信度判断风险等级
-      let riskLevel: 'low' | 'medium' | 'high' = 'low'
-      if (isScreenCapture) {
-        if (weightedConfidence > 0.8) {
-          riskLevel = 'high'
-        } else if (weightedConfidence > 0.6) {
-          riskLevel = 'medium'
-        } else {
-          riskLevel = 'low'
+      if (useVideoAnalysis && this.responseTimeDetector.getBufferedFrameCount() >= 10) {
+        const stage1Start = performance.now()
+        responseTimeResult = this.responseTimeDetector.analyze()
+        const stage1Time = performance.now() - stage1Start
+
+        executedMethods.push({
+          method: 'Response Time Detection (E-Ink)',
+          isScreenCapture: responseTimeResult.isScreenCapture,
+          confidence: responseTimeResult.confidence,
+          details: {
+            averageResponseTime: responseTimeResult.averageResponseTimeMs,
+            estimatedScreenType: responseTimeResult.estimatedScreenType,
+          },
+        })
+
+        if (debug) {
+          debug.stages.push({
+            method: 'Response Time Detection (E-Ink)',
+            completed: true,
+            timeMs: stage1Time,
+            result: {
+              isScreenCapture: responseTimeResult.isScreenCapture,
+              confidence: responseTimeResult.confidence,
+            }
+          })
+        }
+
+        if (responseTimeResult.isScreenCapture && responseTimeResult.confidence > 0.65) {
+          const totalTime = performance.now() - startTime
+          if (debug) {
+            debug.endTime = performance.now()
+            debug.totalTimeMs = totalTime
+            debug.finalDecision = {
+              isScreenCapture: true,
+              confidenceScore: responseTimeResult.confidence,
+              decisiveMethod: 'Response Time Detection (E-Ink)',
+            }
+          }
+
+          return new ScreenCaptureDetectionResult(
+            true,
+            responseTimeResult.confidence,
+            executedMethods,
+            'high',
+            totalTime,
+            [],
+            debug
+          )
         }
       }
 
-      const totalTime = performance.now() - startTime
+      // ========== Stage 2: DLP色轮检测 (DLP投影) ==========
+      let dlpResult: any = { isScreenCapture: false, confidence: 0 }
+      
+      if (useVideoAnalysis && bgrMat && this.dlpColorWheelDetector.getBufferedFrameCount() >= 3) {
+        const stage2Start = performance.now()
+        dlpResult = this.dlpColorWheelDetector.analyze()
+        const stage2Time = performance.now() - stage2Start
 
+        executedMethods.push({
+          method: 'DLP Color Wheel Detection',
+          isScreenCapture: dlpResult.isScreenCapture,
+          confidence: dlpResult.confidence,
+          details: {
+            hasColorSeparation: dlpResult.hasColorSeparation,
+            colorSeparationPixels: dlpResult.colorSeparationPixels,
+          },
+        })
+
+        if (debug) {
+          debug.stages.push({
+            method: 'DLP Color Wheel Detection',
+            completed: true,
+            timeMs: stage2Time,
+            result: {
+              isScreenCapture: dlpResult.isScreenCapture,
+              confidence: dlpResult.confidence,
+            }
+          })
+        }
+
+        if (dlpResult.isScreenCapture && dlpResult.confidence > 0.65) {
+          const totalTime = performance.now() - startTime
+          if (debug) {
+            debug.endTime = performance.now()
+            debug.totalTimeMs = totalTime
+            debug.finalDecision = {
+              isScreenCapture: true,
+              confidenceScore: dlpResult.confidence,
+              decisiveMethod: 'DLP Color Wheel Detection',
+            }
+          }
+
+          return new ScreenCaptureDetectionResult(
+            true,
+            dlpResult.confidence,
+            executedMethods,
+            'high',
+            totalTime,
+            [],
+            debug
+          )
+        }
+      }
+
+      // ========== Stage 3: 光学畸变检测 (其他投影) ==========
+      let opticalResult: any = { isScreenCapture: false, confidence: 0 }
+      
+      if (useVideoAnalysis && grayMat && this.opticalDistortionDetector.getBufferedFrameCount() >= 1) {
+        const stage3Start = performance.now()
+        opticalResult = this.opticalDistortionDetector.analyze()
+        const stage3Time = performance.now() - stage3Start
+
+        executedMethods.push({
+          method: 'Optical Distortion Detection',
+          isScreenCapture: opticalResult.isScreenCapture,
+          confidence: opticalResult.confidence,
+          details: {
+            distortionFeatures: opticalResult.distortionFeatures,
+            estimatedProjectorType: opticalResult.estimatedProjectorType,
+          },
+        })
+
+        if (debug) {
+          debug.stages.push({
+            method: 'Optical Distortion Detection',
+            completed: true,
+            timeMs: stage3Time,
+            result: {
+              isScreenCapture: opticalResult.isScreenCapture,
+              confidence: opticalResult.confidence,
+            }
+          })
+        }
+
+        if (opticalResult.isScreenCapture && opticalResult.confidence > 0.60) {
+          const totalTime = performance.now() - startTime
+          if (debug) {
+            debug.endTime = performance.now()
+            debug.totalTimeMs = totalTime
+            debug.finalDecision = {
+              isScreenCapture: true,
+              confidenceScore: opticalResult.confidence,
+              decisiveMethod: 'Optical Distortion Detection',
+            }
+          }
+
+          return new ScreenCaptureDetectionResult(
+            true,
+            opticalResult.confidence,
+            executedMethods,
+            'medium',
+            totalTime,
+            [],
+            debug
+          )
+        }
+      }
+
+      // 综合多个视频检测器的结果
+      if (useVideoAnalysis) {
+        const compositeConfidence = Math.max(
+          flickerResult.confidence,
+          responseTimeResult.confidence,
+          dlpResult.confidence,
+          opticalResult.confidence
+        )
+
+        const isScreenCapture = compositeConfidence > 0.50
+        const riskLevel = compositeConfidence > 0.7 ? 'high' : (compositeConfidence > 0.5 ? 'medium' : 'low')
+
+        const totalTime = performance.now() - startTime
+
+        if (debug) {
+          debug.endTime = performance.now()
+          debug.totalTimeMs = totalTime
+          debug.finalDecision = {
+            isScreenCapture,
+            confidenceScore: compositeConfidence,
+            decisiveMethod: isScreenCapture ? 'Video Analysis (Composite)' : undefined,
+          }
+        }
+
+        console.log(`[ScreenCaptureDetector] Video composite: flicker=${flickerResult.confidence?.toFixed(3) ?? '0'}, responseTime=${responseTimeResult.confidence?.toFixed(3) ?? '0'}, dlp=${dlpResult.confidence?.toFixed(3) ?? '0'}, optical=${opticalResult.confidence?.toFixed(3) ?? '0'}, composite=${compositeConfidence.toFixed(3)}`)
+
+        return new ScreenCaptureDetectionResult(
+          isScreenCapture,
+          compositeConfidence,
+          executedMethods,
+          riskLevel,
+          totalTime,
+          [],
+          debug
+        )
+      }
+
+      // 没有视频分析，返回中立结果
+      const totalTime = performance.now() - startTime
       if (debug) {
         debug.endTime = performance.now()
         debug.totalTimeMs = totalTime
         debug.finalDecision = {
-          isScreenCapture,
-          confidenceScore: weightedConfidence,
-          decisiveMethod: isScreenCapture ? 'Weighted Decision (RGB + Color + Moiré)' : undefined,
+          isScreenCapture: false,
+          confidenceScore: 0,
         }
       }
 
       return new ScreenCaptureDetectionResult(
-        isScreenCapture,
-        weightedConfidence,
+        false,
+        0,
         executedMethods,
-        riskLevel,
+        'low',
         totalTime,
-        undefined,
+        [],
         debug
       )
     } catch (error) {
       console.error('[ScreenCaptureDetector] Detection error:', error)
       
-      // 出错时，返回保守结果
       const totalTime = performance.now() - startTime
       const avgConfidence = executedMethods.length > 0
         ? executedMethods.reduce((sum, m) => sum + m.confidence, 0) / executedMethods.length

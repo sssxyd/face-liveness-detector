@@ -147,7 +147,9 @@ export class MotionLivenessDetector {
   private readonly strictPhotoDetection: boolean
 
   // 状态
-  private frameBuffer: any[] = [] // 存储 cv.Mat (gray)
+  private frameBuffer: Uint8Array[] = [] // 存储灰度帧数据
+  private frameWidth: number = 0
+  private frameHeight: number = 0
   private keypointHistory: Array<FaceKeypoints> = []
   private faceAreaHistory: number[] = []
   private eyeAspectRatioHistory: number[] = []
@@ -182,11 +184,9 @@ export class MotionLivenessDetector {
    * 重置运动检测状态
    */
   reset(): void {
-    // 清理所有缓存的 Mat 对象
-    this.frameBuffer.forEach(mat => {
-      if (mat && mat.delete) mat.delete()
-    })
     this.frameBuffer = []
+    this.frameWidth = 0
+    this.frameHeight = 0
     this.keypointHistory = []
     this.faceAreaHistory = []
     this.eyeAspectRatioHistory = []
@@ -320,16 +320,20 @@ export class MotionLivenessDetector {
    * 将帧添加到循环缓冲区
    */
   private addFrameToBuffer(grayMat: any): void {
-
     try {
-      const gray = grayMat.clone()
-      
-      this.frameBuffer.push(gray)
-      
-      // 清理旧的 Mat 对象
+      // 存储帧尺寸（首帧时）
+      if (this.frameWidth === 0) {
+        this.frameWidth = grayMat.cols
+        this.frameHeight = grayMat.rows
+      }
+
+      // 转换为 Uint8Array 并存储
+      const grayData = new Uint8Array(grayMat.data)
+      this.frameBuffer.push(grayData)
+
+      // 清理旧的数据
       if (this.frameBuffer.length > this.frameBufferSize) {
-        const oldMat = this.frameBuffer.shift()
-        if (oldMat) oldMat.delete()
+        this.frameBuffer.shift()
       }
     } catch (error) {
       console.warn('[MotionLivenessDetector] Failed to add frame:', error)
@@ -488,24 +492,33 @@ export class MotionLivenessDetector {
    * 检测帧之间的像素运动
    */
   private analyzeOpticalFlow(): number {
-    if (!this.cv || this.frameBuffer.length < 2) {
+    if (!this.cv || this.frameBuffer.length < 2 || this.frameWidth === 0 || this.frameHeight === 0) {
       return 0
     }
 
     try {
-      const prevFrame = this.frameBuffer[this.frameBuffer.length - 2]
-      const currFrame = this.frameBuffer[this.frameBuffer.length - 1]
+      // 从 Uint8Array 创建 Mat 对象进行光流计算
+      const prevFrameData = this.frameBuffer[this.frameBuffer.length - 2]
+      const currFrameData = this.frameBuffer[this.frameBuffer.length - 1]
 
-      // 直接使用已经是灰度图的 Mat，无需转换
+      // 创建临时 Mat 对象
+      const prevMat = this.cv.matFromArray(this.frameHeight, this.frameWidth, this.cv.CV_8U, prevFrameData)
+      const currMat = this.cv.matFromArray(this.frameHeight, this.frameWidth, this.cv.CV_8U, currFrameData)
+
+      // 计算光流
       const flow = new this.cv.Mat()
       this.cv.calcOpticalFlowFarneback(
-        prevFrame,
-        currFrame,
+        prevMat,
+        currMat,
         flow,
         0.5, 3, 15, 3, 5, 1.2, 0
       )
 
       const magnitude = this.calculateFlowMagnitude(flow)
+
+      // 清理临时对象
+      prevMat.delete()
+      currMat.delete()
       flow.delete()
 
       return magnitude

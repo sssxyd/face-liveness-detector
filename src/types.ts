@@ -95,43 +95,7 @@ export interface FaceDetectionEngineOptions {
   /** 是否启用严格照片检测模式（默认 false） */
   motion_liveness_strict_photo_detection?: boolean
 
-  /** 屏幕采集的置信度阈值（0-1，默认 0.7） */
-  screen_capture_confidence_threshold?: number
-
-  /** 综合莫尔纹置信度阈值（0-1，默认 0.65） */
-  screen_moire_pattern_threshold?: number
-  /** 是否启用 DCT 分析（默认 true） */
-  screen_moire_pattern_enable_dct?: boolean
-  /** 是否启用边缘检测（默认 true） */
-  screen_moire_pattern_enable_edge_detection?: boolean
   
-  /** 色彩饱和度阈值（0-100%，屏幕图像通常 < 40%，默认 40） */
-  screen_color_saturation_threshold?: number
-  /** RGB通道相关性阈值（0-1，屏幕通常 > 0.85，默认 0.75） */
-  screen_color_rgb_correlation_threshold?: number
-  /** 像素值熵阈值（0-8，屏幕通常 < 6.5，默认 6.5） */
-  screen_color_pixel_entropy_threshold?: number
-  /** 梯度平滑性阈值（0-1，屏幕通常 > 0.7，默认 0.7） */
-  screen_color_gradient_smoothness_threshold?: number
-  /** 综合置信度阈值（0-1，用于判定是否为屏幕拍摄，默认 0.65） */
-  screen_color_confidence_threshold?: number
-
-  /** 低频段开始位置（相对于频谱长度的百分比，默认 0.15） */
-  screen_rgb_low_freq_start_percent?: number
-  /** 低频段结束位置（相对于频谱长度的百分比，默认 0.35） */
-  screen_rgb_low_freq_end_percent?: number
-  /** 能量比归一化因子（默认 10） */
-  screen_rgb_energy_ratio_normalization_factor?: number
-  /** 通道均值差异的归一化因子（默认 50） */
-  screen_rgb_channel_difference_normalization_factor?: number
-  /** RGB 周期性能量权重（默认 0.40） */
-  screen_rgb_energy_score_weight?: number
-  /** RGB 通道不同步程度权重（默认 0.40） */
-  screen_rgb_asymmetry_score_weight?: number
-  /** 通道均值差异权重（默认 0.20） */
-  screen_rgb_difference_factor_weight?: number
-  /** RGB 屏幕拍摄的置信度阈值（默认 0.65） */
-  screen_rgb_confidence_threshold?: number
 }
 
 /**
