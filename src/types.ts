@@ -80,18 +80,6 @@ export interface FaceDetectionEngineOptions {
   /** 最小嘴部张开百分比（默认 0.2） */
   action_liveness_min_mouth_open_percent?: number
 
-  /** 通过活体检查的最小运动分数（0-1，默认 0.15） */
-  motion_liveness_min_motion_score?: number
-  /** 自然运动的最小关键点方差（0-1，默认 0.02） */
-  motion_liveness_min_keypoint_variance?: number
-  /** 用于运动分析的帧缓冲区数量（默认 5） */
-  motion_liveness_frame_buffer_size?: number
-  /** 眨眼检测的眼睛长宽比阈值（默认 0.15） */
-  motion_liveness_eye_aspect_ratio_threshold?: number
-  /** 光流和关键点方差一致性阈值 (0-1，默认 0.3) - 防止照片微动 */
-  motion_liveness_motion_consistency_threshold?: number
-  /** 最小光流幅度阈值 - 照片几乎无光流 (0-1，默认 0.02) */
-  motion_liveness_min_optical_flow_threshold?: number
   /** 是否启用严格照片检测模式（默认 false） */
   motion_liveness_strict_photo_detection?: boolean
 

@@ -1,19 +1,12 @@
 /**
- * 优化版屏幕采集检测器 - 快速检测策略
+ * 第三版屏幕采集检测器
  * 
- * 核心思想：级联检测 (Cascade Detection)
- * - 按检测速度从快到慢排序：RGB发光 → 色彩特征 → 莫尔纹
- * - 尽早排除，减少不必要的计算
- * - 平衡精准度和速度
  */
 
-import { detectScreenColorProfile, ScreenColorDetectionConfig } from './screen-color-profile-detect'
-import { detectMoirePattern, MoirePatternDetectionConfig } from './screen-moire-pattern-detect'
-import { detectRGBEmissionPattern, RgbEmissionDetectionConfig } from './screen-rgb-emission-detect'
-import { ScreenFlickerDetector, ScreenFlickerDetectorConfig } from './screen-flicker-detector'
-import { ScreenResponseTimeDetector, ScreenResponseTimeDetectorConfig } from './screen-response-time-detector'
-import { DLPColorWheelDetector, DLPColorWheelDetectorConfig } from './dlp-color-wheel-detector'
-import { OpticalDistortionDetector, OpticalDistortionDetectorConfig } from './optical-distortion-detector'
+import { ScreenFlickerDetector } from './screen-flicker-detector'
+import { ScreenResponseTimeDetector } from './screen-response-time-detector'
+import { DLPColorWheelDetector } from './dlp-color-wheel-detector'
+import { OpticalDistortionDetector } from './optical-distortion-detector'
 import { VideoFrameCollector } from './video-frame-collector'
 
 /**
@@ -154,11 +147,11 @@ const DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS: Required<ScreenCaptureDetectorOpt
   flickerCorrelationThreshold: 0.65,
   flickerPassingPixelRatio: 0.40,
   flickerSamplingStride: 1, // 100%采样以捕捉闪烁周期
-  responseTimeBufferSize: 30, // 30帧 @ 30fps = 1秒，足以检测墨水屏响应速度
-  responseTimeMinPixelDelta: 30, // 像素值变化至少30级，减少噪声影响
-  responseTimeSamplingStride: 1, // 100%采样以测量响应时间
-  responseTimeThreshold: 150, // 150ms阈值，更准确地检测墨水屏(200-500ms)
-  responseTimePassingPixelRatio: 0.45,
+  responseTimeBufferSize: 15, // 15帧 @ 30fps = 0.5秒（墨水屏响应时间200-500ms，0.5秒足够）
+  responseTimeMinPixelDelta: 25, // 像素值变化至少25级（较为宽松，适应各种光照）
+  responseTimeSamplingStride: 2, // 50%采样以加快计算（相邻帧变化缓慢，50%采样足够）
+  responseTimeThreshold: 200, // 200ms阈值（更准确匹配墨水屏响应时间范围200-500ms）
+  responseTimePassingPixelRatio: 0.40, // 40%像素达到要求（略降低，适应真实场景变化）
   dlpColorWheelBufferSize: 20, // 20帧 @ 30fps = 0.67秒，足以检测DLP色轮干涉
   dlpEdgeThreshold: 80,
   dlpChannelSeparationThreshold: 3, // RGB分离至少3像素，减少误报
@@ -189,9 +182,10 @@ function calcOptionsByFPS(fps: number): Partial<ScreenCaptureDetectorOptions> {
   return {
     // 缓冲区大小：按FPS比例调整，保持时间窗口一致
     flickerBufferSize: Math.max(5, Math.round(15 * fpsRatio)), // 保持约0.5秒时间窗口
-    responseTimeBufferSize: Math.max(10, Math.round(30 * fpsRatio)), // 保持约1秒时间窗口
+    responseTimeBufferSize: Math.max(8, Math.round(15 * fpsRatio)), // 保持约0.5秒时间窗口（墨水屏响应200-500ms）
     dlpColorWheelBufferSize: Math.max(8, Math.round(20 * fpsRatio)), // 保持约0.67秒时间窗口
     opticalDistortionBufferSize: Math.max(1, Math.round(3 * fpsRatio)), // 保持帧数配置
+    frameDropRate: Math.min(0.1, 0.03 * (30 / fps)), // 高FPS时降低丢帧率，保持稳定性
   }
 }
 
@@ -202,6 +196,7 @@ function calcOptionsByFPS(fps: number): Partial<ScreenCaptureDetectorOptions> {
  */
 export class ScreenCaptureDetector {
   private cv: any = null
+  private fps: number
   private config: Required<ScreenCaptureDetectorOptions>
   
   private frameCollector: VideoFrameCollector
@@ -213,9 +208,9 @@ export class ScreenCaptureDetector {
 
   constructor(fps?: number) {
 
-
+    this.fps = fps ?? 30
     // 根据fps动态调整参数
-    const fpsOptions = calcOptionsByFPS(fps ?? 30)
+    const fpsOptions = calcOptionsByFPS(this.fps)
 
     // 合并：默认值 → FPS调整值 → 用户选项（后面的覆盖前面的）
     this.config = { 
@@ -284,12 +279,16 @@ export class ScreenCaptureDetector {
     this.cv = cvInstance
   }
 
+  getFPS(): number {
+    return this.fps
+  }
+
   /**
    * 向视频检测器添加一帧（用于实时视频处理）
    * 建议每收到一帧就调用此方法
    * 
    * @param grayMat 灰度图像矩阵
-   * @param bgrMat 彩色图像矩阵（可选）
+   * @param bgrMat 彩色图像矩阵
    * @returns 帧是否被接受（true表示被处理，false表示被随机丢弃）
    */
   addVideoFrame(grayMat: any, bgrMat: any): boolean {
@@ -305,33 +304,14 @@ export class ScreenCaptureDetector {
     return true
   }
 
-  /**
-   * 获取视频帧缓冲状态
-   */
-  getVideoFrameBufferStatus(): { 
-    flicker: { buffered: number; required: number }
-    responseTime: { buffered: number; required: number }
-    dlpColorWheel: { buffered: number; required: number }
-    opticalDistortion: { buffered: number; required: number }
-  } {
-    return {
-      flicker: {
-        buffered: this.flickerDetector.getBufferedFrameCount(),
-        required: 5,
-      },
-      responseTime: {
-        buffered: this.responseTimeDetector.getBufferedFrameCount(),
-        required: 10,
-      },
-      dlpColorWheel: {
-        buffered: this.dlpColorWheelDetector.getBufferedFrameCount(),
-        required: 3,
-      },
-      opticalDistortion: {
-        buffered: this.opticalDistortionDetector.getBufferedFrameCount(),
-        required: 1,
-      },
-    }
+  isReady(): boolean {
+    const cachedBufferSize = this.frameCollector.getBufferedFrameCount()
+    return cachedBufferSize >= Math.max(
+      this.config.flickerBufferSize,
+      this.config.responseTimeBufferSize,
+      this.config.dlpColorWheelBufferSize,
+      this.config.opticalDistortionBufferSize,
+    )
   }
 
   /**
@@ -347,22 +327,13 @@ export class ScreenCaptureDetector {
     }
   }
 
-  /**
-   * 重置丢帧计数
-   */
-  resetFrameDropStats(): void {
+  reset(): void {
     this.droppedFramesCount = 0
-  }
-
-  /**
-   * 重置所有视频帧缓冲区
-   */
-  resetVideoFrameBuffer(): void {
     this.frameCollector.reset()
     this.flickerDetector.reset()
     this.responseTimeDetector.reset()
     this.dlpColorWheelDetector.reset()
-    this.opticalDistortionDetector.reset()
+    this.opticalDistortionDetector.reset()    
   }
 
   /**
@@ -372,14 +343,12 @@ export class ScreenCaptureDetector {
    * 2. 都不能明确判定时，计算加权置信度
    * 3. 用加权置信度判定最终结果
    * 
-   * @param bgrMat - BGR格式图像
-   * @param grayMat - 灰度图像（用于莫尔纹检测）
    * @param debugMode - 是否启用调试模式，返回详细日志
    * @param useVideoAnalysis - 是否使用已积累的视频帧进行闪烁检测
    * @returns 检测结果
    */
-  detect(bgrMat: any, grayMat: any, debugMode: boolean = false, useVideoAnalysis: boolean = false): ScreenCaptureDetectionResult {
-    return this.detectWithLogic(bgrMat, grayMat, debugMode, useVideoAnalysis)
+  detect(debugMode: boolean = false, useVideoAnalysis: boolean = false): ScreenCaptureDetectionResult {
+    return this.detectWithLogic(debugMode, useVideoAnalysis)
   }
 
   /**
@@ -392,8 +361,6 @@ export class ScreenCaptureDetector {
    * 4. 光学畸变（其他投影）- 投影光学系统的失真
    */
   private detectWithLogic(
-    bgrMat: any,
-    grayMat: any | null = null,
     enableDebug: boolean = false,
     useVideoAnalysis: boolean = false
   ): ScreenCaptureDetectionResult {
@@ -532,7 +499,7 @@ export class ScreenCaptureDetector {
       // ========== Stage 2: DLP色轮检测 (DLP投影) ==========
       let dlpResult: any = { isScreenCapture: false, confidence: 0 }
       
-      if (useVideoAnalysis && bgrMat && this.dlpColorWheelDetector.getBufferedFrameCount() >= 3) {
+      if (useVideoAnalysis && this.dlpColorWheelDetector.getBufferedFrameCount() >= 3) {
         const stage2Start = performance.now()
         dlpResult = this.dlpColorWheelDetector.analyze()
         const stage2Time = performance.now() - stage2Start
@@ -586,7 +553,7 @@ export class ScreenCaptureDetector {
       // ========== Stage 3: 光学畸变检测 (其他投影) ==========
       let opticalResult: any = { isScreenCapture: false, confidence: 0 }
       
-      if (useVideoAnalysis && grayMat && this.opticalDistortionDetector.getBufferedFrameCount() >= 1) {
+      if (useVideoAnalysis && this.opticalDistortionDetector.getBufferedFrameCount() >= 1) {
         const stage3Start = performance.now()
         opticalResult = this.opticalDistortionDetector.analyze()
         const stage3Time = performance.now() - stage3Start

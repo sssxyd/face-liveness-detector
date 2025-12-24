@@ -20,6 +20,7 @@ export class DetectionState {
     lastFrontalScore: number = 1
     motionDetector: MotionLivenessDetector | null = null
     liveness: boolean = false
+    realness: boolean = false
     screenDetector: ScreenCaptureDetector | null = null
 
     constructor(options: Partial<DetectionState>) {
@@ -40,6 +41,17 @@ export class DetectionState {
         this.screenDetector = savedScreenDetector
     }
 
+    updateVideoFPS(fps: number): void {
+        if(this.screenDetector === null){
+            this.screenDetector = new ScreenCaptureDetector(fps)
+            return
+        }
+        if(this.screenDetector.getFPS() !== fps){
+            this.screenDetector.reset()
+            this.screenDetector = new ScreenCaptureDetector(fps)
+        }
+    }
+
     // 默认方法
     needFrontalFace(): boolean {
         return this.period !== DetectionPeriod.VERIFY
@@ -48,7 +60,7 @@ export class DetectionState {
     // 是否准备好进行动作验证
     isReadyToVerify(minCollectCount: number): boolean {
         if (this.period === DetectionPeriod.COLLECT 
-            && this.liveness 
+            && this.liveness && this.realness
             && this.collectCount >= minCollectCount)
             {
             return true
@@ -92,14 +104,9 @@ export class DetectionState {
 
  // <-- Add this import at the top if ResolvedEngineOptions is defined in types.ts
 
-export function createDetectionState(options: ResolvedEngineOptions): DetectionState {
+export function createDetectionState(options: ResolvedEngineOptions, fps: number): DetectionState {
     const detectionState = new DetectionState({})
-    detectionState.motionDetector = new MotionLivenessDetector({
-        minMotionThreshold: options.motion_liveness_min_motion_score,
-        minKeypointVariance: options.motion_liveness_min_keypoint_variance,
-        frameBufferSize: options.motion_liveness_frame_buffer_size,
-        eyeAspectRatioThreshold: options.motion_liveness_eye_aspect_ratio_threshold
-    })
-    detectionState.screenDetector = new ScreenCaptureDetector()
+    detectionState.motionDetector = new MotionLivenessDetector(options.motion_liveness_strict_photo_detection)
+    detectionState.screenDetector = new ScreenCaptureDetector(fps)
     return detectionState
 }
