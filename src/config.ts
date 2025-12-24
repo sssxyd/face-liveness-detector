@@ -58,7 +58,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
 
   // Screen Capture Detection Settings
   screen_capture_confidence_threshold: 0.7,
-  screen_capture_detection_strategy: 'adaptive',
+  screen_capture_detection_strategy: 'accurate',
 
   screen_moire_pattern_threshold: 0.65,
   screen_moire_pattern_enable_dct: true,

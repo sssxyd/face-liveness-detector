@@ -757,6 +757,21 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.resetDetectionState()
         this.scheduleNextDetection(this.options.detect_error_retry_delay)
         return
+      } else {
+        this.emitDebug('screen-capture-detection', 'No screen capture detected', {
+          isScreenCapture: screenResult.isScreenCapture,
+          overallConfidence: screenResult.confidenceScore,
+          minConfidenceThreshold: this.options.screen_capture_confidence_threshold,
+          detectionStrategy: screenResult.strategy,
+          riskLevel: screenResult.riskLevel,
+          processingTimeMs: screenResult.processingTimeMs,
+          executedMethods: screenResult.executedMethods.map((m: any) => ({
+            method: m.method,
+            isScreenCapture: m.isScreenCapture,
+            confidence: m.confidence
+          })),
+          skippedMethods: screenResult.skippedMethods
+        })
       }
 
       // 运动检测
@@ -962,6 +977,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     if (this.detectionState.period !== DetectionPeriod.DETECT){
+      this.emitDebug('detection', 'Multiple or no faces detected, resetting detection state', { faceCount })
       this.resetDetectionState()
     }
 
