@@ -169,6 +169,121 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     return this.engineState
   }
 
+  // ==================== State Management Methods ====================
+
+  /**
+   * Atomically transition engine state with validation
+   * Ensures state transitions follow the valid state machine
+   * @param newState - Target engine state
+   * @param context - Debug context for logging
+   * @returns true if transition succeeded, false otherwise
+   */
+  private transitionEngineState(newState: EngineState, context?: string): boolean {
+    const oldState = this.engineState
+    
+    // Validate transition
+    const isValidTransition = this.isValidStateTransition(oldState, newState)
+    if (!isValidTransition) {
+      this.emitDebug('state-management', 'Invalid state transition blocked', {
+        from: oldState,
+        to: newState,
+        context: context || 'unknown'
+      }, 'warn')
+      return false
+    }
+    
+    this.engineState = newState
+    this.emitDebug('state-management', 'State transitioned', {
+      from: oldState,
+      to: newState,
+      context: context || 'unknown'
+    }, 'info')
+    
+    return true
+  }
+
+  /**
+   * Check if state transition is valid according to state machine rules
+   * Valid transitions:
+   * - IDLE -> INITIALIZING, INITIALIZING -> READY, READY -> DETECTING, DETECTING -> READY
+   * - Any -> IDLE (error recovery)
+   */
+  private isValidStateTransition(from: EngineState, to: EngineState): boolean {
+    // Same state is not a transition
+    if (from === to) return true
+    
+    // Allow recovery to IDLE from any state
+    if (to === EngineState.IDLE) return true
+    
+    // Valid forward transitions
+    const validTransitions: Record<EngineState, EngineState[]> = {
+      [EngineState.IDLE]: [EngineState.INITIALIZING],
+      [EngineState.INITIALIZING]: [EngineState.READY, EngineState.IDLE],
+      [EngineState.READY]: [EngineState.DETECTING, EngineState.INITIALIZING],
+      [EngineState.DETECTING]: [EngineState.READY, EngineState.IDLE]
+    }
+    
+    return validTransitions[from]?.includes(to) ?? false
+  }
+
+  /**
+   * Transition detection period state
+   * @param newPeriod - Target detection period
+   * @returns true if transition succeeded
+   */
+  private transitionDetectionPeriod(newPeriod: DetectionPeriod): boolean {
+    const oldPeriod = this.detectionState.period
+    
+    if (oldPeriod === newPeriod) return true
+    
+    this.detectionState.period = newPeriod
+    this.emitDebug('detection-period', 'Period transitioned', {
+      from: oldPeriod,
+      to: newPeriod
+    }, 'info')
+    
+    return true
+  }
+
+  /**
+   * Partially reset detection state (keeps engine initialized)
+   * Used when detection fails but engine should remain ready
+   */
+  private partialResetDetectionState(): void {
+    this.emitDebug('detection', 'Partial reset: Resetting detection state only')
+    this.detectionState.reset()
+    
+    // Reset frame counters
+    this.frameIndex = 0
+    this.lastDetectionFrameIndex = 0
+    this.lastScreenFeatureDetectionFrameIndex = 0
+    
+    // Keep Mat pool and canvas (they'll be reused)
+    // Don't set isDetectingFrameActive = false here (let finally handle it)
+  }
+
+  /**
+   * Fully reset detection state and resources
+   * Used when stopping detection or reinitializing
+   */
+  private fullResetDetectionState(): void {
+    this.emitDebug('detection', 'Full reset: Resetting all detection resources')
+    this.detectionState.reset()
+    
+    // Reset frame counters
+    this.frameIndex = 0
+    this.lastDetectionFrameIndex = 0
+    this.lastScreenFeatureDetectionFrameIndex = 0
+    
+    // Clean up Mat pool and canvas
+    this.cleanupMatPool()
+    this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+    this.clearFrameCanvas()
+    
+    // Ensure detection frame flag is cleared
+    this.isDetectingFrameActive = false
+  }
+
   /**
    * Initialize the detection engine
    * Loads Human.js and OpenCV.js libraries
@@ -181,7 +296,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    this.engineState = EngineState.INITIALIZING
+    // Transition to INITIALIZING state
+    if (!this.transitionEngineState(EngineState.INITIALIZING, 'initialize() start')) {
+      return
+    }
+
     this.emitDebug('initialization', 'Starting to load detection libraries...')
 
     try {
@@ -195,16 +314,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }
         this.emit('detector-error', cvError)
         this.emitDebug('initialization', 'OpenCV loading failed: module is null or invalid', {}, 'error')
-        return
+        this.emit('detector-loaded' as any, { success: false, error: cvError.message })
+        throw new Error(cvError.message)
       }
+      
       this.cv = cv
       const cv_version = getOpenCVVersion()
-      this.emitDebug('initialization', 'OpenCV loaded successfully', {
-        version: cv_version
-      })
-      console.log('[FaceDetectionEngine] OpenCV loaded successfully', {
-        version: cv_version
-      })
+      this.emitDebug('initialization', 'OpenCV loaded successfully', { version: cv_version })
+      console.log('[FaceDetectionEngine] OpenCV loaded successfully', { version: cv_version })
 
       // Inject OpenCV instance into motion detector and screen detector
       this.detectionState.setCVInstance(this.cv)
@@ -214,13 +331,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('initialization', 'Loading Human.js...')
       const humanStartTime = performance.now()
       
+      let loadError: any = null
       try {
         this.human = await loadHuman(this.options.human_model_path, this.options.tensorflow_wasm_path, this.options.tensorflow_backend)
       } catch (humanError) {
-        const errorInfo = this.extractErrorInfo(humanError)
+        loadError = humanError
+      }
+
+      if (loadError) {
+        const errorInfo = this.extractErrorInfo(loadError)
         const errorMsg = errorInfo.message
         
-        // 分析错误类型，提供针对性的建议
         let errorContext: any = {
           error: errorMsg,
           stack: errorInfo.stack,
@@ -233,57 +354,43 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           source: 'human.js'
         }
         
-        // 特定错误类型的诊断
+        // Diagnostic hints
         if (errorMsg.includes('inputs')) {
           errorContext.diagnosis = 'Human.js internal error: Model structure incomplete'
-          errorContext.rootCause = 'Human.js library issue - models not fully loaded or WASM backend initialization incomplete'
-          errorContext.suggestion = 'This is a Human.js library issue. Models may not have proper executor or inputs structure. Check WASM initialization and model integrity.'
         } else if (errorMsg.includes('timeout')) {
           errorContext.diagnosis = 'Model loading timeout'
-          errorContext.suggestion = 'Network issue or model file too large - check network conditions'
         } else if (errorMsg.includes('Critical models not loaded')) {
           errorContext.diagnosis = 'Human.js failed to load required models'
-          errorContext.rootCause = 'Models (face, antispoof, liveness) are missing or incomplete'
-          errorContext.suggestion = 'Check model files and ensure WASM backend is properly initialized'
         } else if (errorMsg.includes('empty')) {
           errorContext.diagnosis = 'Models object is empty after loading'
-          errorContext.suggestion = 'Model path may be incorrect or HTTP response failed'
         } else if (errorMsg.includes('incomplete')) {
           errorContext.diagnosis = 'Models loaded but structure is incomplete'
-          errorContext.rootCause = 'Human.js internal issue - missing executor, inputs, or modelUrl'
-          errorContext.suggestion = 'Ensure all model resources are fully loaded and accessible'
         }
         
-        const humanErrorEventData: DetectorErrorEventData = {
+        console.error('[FaceDetectionEngine] Human.js loading failed:', errorContext)
+        this.emitDebug('initialization', 'Human.js loading failed', errorContext, 'error')
+        const errorEventData: DetectorErrorEventData = {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
-          message: `Human.js loading error: ${errorContext.diagnosis || errorMsg}`,
+          message: `Human.js loading error: ${errorContext.diagnosis || errorMsg}`
         }
-        console.error('[FaceDetectionEngine] Human.js loading failed with detailed error:', errorContext)
-        this.emitDebug('initialization', 'Human.js loading failed with exception', errorContext, 'error')
-        this.emit('detector-loaded' as any, {
-          success: false,
-          error: `Failed to load Human.js: ${errorMsg}`,
-          details: errorContext
-        })
-        this.emit('detector-error', humanErrorEventData)
-        return
+        this.emit('detector-loaded' as any, { success: false, error: errorMsg, details: errorContext })
+        this.emit('detector-error', errorEventData)
+        throw new Error(errorMsg)
       }
-      
+
       const humanLoadTime = performance.now() - humanStartTime
       
       if (!this.human) {
         const errorMsg = 'Failed to load Human.js: instance is null'
         console.error('[FaceDetectionEngine] ' + errorMsg)
         this.emitDebug('initialization', errorMsg, { loadTime: humanLoadTime }, 'error')
-        this.emit('detector-loaded' as any, {
-          success: false,
-          error: errorMsg
-        })
-        this.emit('detector-error' as any, {
+        this.emit('detector-loaded' as any, { success: false, error: errorMsg })
+        const errorEventData: DetectorErrorEventData = {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
           message: errorMsg
-        })
-        return
+        }
+        this.emit('detector-error', errorEventData)
+        throw new Error(errorMsg)
       }
       
       // Verify Human.js instance has required properties
@@ -295,33 +402,33 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           hasDetect: typeof this.human.detect === 'function',
           instanceKeys: Object.keys(this.human || {})
         }, 'error')
-        this.emit('detector-loaded' as any, {
-          success: false,
-          error: errorMsg
-        })
-        this.emit('detector-error' as any, {
+        this.emit('detector-loaded' as any, { success: false, error: errorMsg })
+        const errorEventData: DetectorErrorEventData = {
           code: ErrorCode.DETECTOR_NOT_INITIALIZED,
           message: errorMsg
-        })
-        return
+        }
+        this.emit('detector-error', errorEventData)
+        throw new Error(errorMsg)
       }
       
       this.emitDebug('initialization', 'Human.js loaded successfully', {
         loadTime: `${humanLoadTime.toFixed(2)}ms`,
         version: this.human.version,
-        backend: this.human.config?.backend || 'unknown',
-        config: this.human.config
+        backend: this.human.config?.backend || 'unknown'
       })
       console.log('[FaceDetectionEngine] Human.js loaded successfully', {
         loadTime: `${humanLoadTime.toFixed(2)}ms`,
-        version: this.human.version,
-        backend: this.human.config?.backend || 'unknown'
+        version: this.human.version
       })
 
-      this.engineState = EngineState.READY
+      // Transition to READY state on success
+      if (!this.transitionEngineState(EngineState.READY, 'initialize() success')) {
+        throw new Error('Failed to transition to READY state')
+      }
+
       const loadedData: DetectorLoadedEventData = {
         success: true,
-        opencv_version: cv_version,
+        opencv_version: getOpenCVVersion(),
         human_version: this.human.version
       }
       console.log('[FaceDetectionEngine] Engine initialized and ready', {
@@ -333,24 +440,19 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
       const errorMsg = errorInfo.message
-      this.emit('detector-loaded' as any, {
-        success: false,
-        error: errorMsg
-      })
+      
+      // Transition back to IDLE on error
+      this.transitionEngineState(EngineState.IDLE, 'initialize() error')
+      
+      this.emit('detector-loaded' as any, { success: false, error: errorMsg })
       this.emit('detector-error' as any, {
         code: ErrorCode.DETECTOR_NOT_INITIALIZED,
         message: errorMsg
       })
       this.emitDebug('initialization', 'Failed to load libraries', {
         error: errorMsg,
-        stack: errorInfo.stack,
-        name: errorInfo.name,
-        cause: errorInfo.cause
+        stack: errorInfo.stack
       }, 'error')
-    } finally {
-      if (this.engineState === EngineState.INITIALIZING) {
-        this.engineState = EngineState.IDLE
-      }
     }
   }
 
@@ -369,8 +471,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     this.videoElement = videoElement
-
-    this.resetDetectionState()
+    this.fullResetDetectionState()
 
     try {
       this.emitDebug('video-setup', 'Requesting camera access...')
@@ -437,11 +538,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
             this.actualVideoWidth = settings.width
             this.actualVideoHeight = settings.height
           }
-          const fps = settings.frameRate  // 获取摄像头FPS            
+          const fps = settings.frameRate
           this.emitDebug('video-setup', 'Video stream resolution detected', {
             width: this.actualVideoWidth,
             height: this.actualVideoHeight,
-            fps: fps  // 通常30或60
+            fps: fps
           })
           if(fps){
             this.updateVideoFPS(fps)
@@ -495,7 +596,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }
       })
 
-      this.engineState = EngineState.DETECTING
+      // Transition to DETECTING state atomically
+      if (!this.transitionEngineState(EngineState.DETECTING, 'startDetection() video ready')) {
+        throw new Error('Failed to transition to DETECTING state')
+      }
 
       this.cancelPendingDetection()
 
@@ -503,7 +607,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.detect()
       })  
       
-      // 预分配Mat对象池以提高性能
+      // Preallocate Mat objects for performance
       this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
       
       this.emitDebug('video-setup', 'Detection started')
@@ -529,7 +633,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @param success - Whether to display the best collected image
    */
   stopDetection(success: boolean): void {
-    this.engineState = EngineState.READY
+    // Only transition if we're actually detecting
+    if (this.engineState === EngineState.DETECTING) {
+      this.transitionEngineState(EngineState.READY, 'stopDetection()')
+    }
 
     const finishData: DetectorFinishEventData = {
       success: success,
@@ -544,7 +651,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     this.cancelPendingDetection()
 
-    this.resetDetectionState()
+    this.fullResetDetectionState()
 
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop())
@@ -554,9 +661,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.videoElement) {
       this.videoElement.srcObject = null
     }
-
-    // 确保检测帧标志被清除
-    this.isDetectingFrameActive = false
 
     this.emitDebug('detection', 'Detection stopped', { success })
   }
@@ -570,29 +674,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   // ==================== Private Methods ====================
-
-  /**
-   * Reset detection state
-   */
-  private resetDetectionState(): void {
-    this.emitDebug('detection', 'Resetting detection state...')
-    this.detectionState.reset()
-    
-    // 重置帧计数（为下一个检测周期做准备）
-    this.frameIndex = 0
-    this.lastDetectionFrameIndex = 0
-    this.lastScreenFeatureDetectionFrameIndex = 0
-    
-    // 重置帧图像池
-    this.cleanupMatPool()
-    this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
-
-    // 清理Canvas
-    this.clearFrameCanvas()
-    
-    // 确保检测帧标志被清除
-    this.isDetectingFrameActive = false
-  }
 
   private updateVideoFPS(fps: number): void {
     if(this.videoFPS === fps) return
@@ -725,7 +806,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // 备选方案：如果是周期的最后一帧，且本周期还未执行过特征检测
     const isLastFrameInCycle = currentPositionInCycle === (mainInterval - 1)
     if (isLastFrameInCycle) {
-      const cycleStartFrame = this.frameIndex - currentPositionInCycle
+      // 计算当前周期的起始帧（>=0 的最小值）
+      const cycleStartFrame = Math.floor(this.frameIndex / mainInterval) * mainInterval
+      // 检查此周期是否已执行过特征检测
       const hasExecutedInThisCycle = this.lastScreenFeatureDetectionFrameIndex >= cycleStartFrame
       return !hasExecutedInThisCycle
     }
@@ -741,22 +824,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       cancelAnimationFrame(this.animationFrameId)
       this.animationFrameId = null
     }
-  }
-
-  private drawCurrentFrameToMat(): any {
-    // 采集当前帧，转为gray mat
-    const frameCanvas = this.drawVideoToCanvas()
-    if (!frameCanvas) {
-      this.emitDebug('detection', 'Failed to draw video frame to canvas', {}, 'warn')
-      return null
-    }
-    // 当前帧图片 - 使用预分配的Mat对象，避免频繁new
-    const bgrFrame = this.matPool?.bgr || drawCanvasToMat(this.cv, frameCanvas, false)
-    if (!bgrFrame) {
-      this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
-      return null
-    }
-    return bgrFrame
   }
 
   /**
@@ -808,191 +875,242 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Main detection loop
    * Called every frame via requestAnimationFrame
-   * Performs face detection only if enough time has passed since the last detection
+   * Orchestrates the detection pipeline with clear separation of concerns
    */
   private async detect(): Promise<void> {
-    // 防止并发调用：如果已有检测帧在处理中，则跳过
+    // 防止并发调用
     if (this.isDetectingFrameActive) {
       return
     }
 
+    // 状态和前置条件检查
     if (this.engineState !== EngineState.DETECTING || !this.videoElement || !this.human) {
       return
     }
 
-    // Check video is ready
     if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       return
     }
 
     // 设置检测帧活跃标志
     this.isDetectingFrameActive = true
-    
-    // Increment frame counter for frame-based scheduling
     this.frameIndex++
     
     let bgrFrame: any = null
     let grayFrame: any = null
-    try{
-      const shouldCaptureFrame = this.shouldPerformMainDetection() 
-      || this.shouldPerformScreenCornersDetection()
-      || this.shouldPerformScreenFeatureDetection()
-      || this.detectionState.period !== DetectionPeriod.DETECT
+    
+    try {
+      // 确定是否需要捕获帧
+      if (!this.shouldCaptureFrame()) {
+        return
+      }
+      
+      // 采集和准备帧（BGR + Gray）
+      const frameData = this.captureAndPrepareFrames()
+      if (!frameData) {
+        return
+      }
+      bgrFrame = frameData.bgrFrame
+      grayFrame = frameData.grayFrame
 
-      // IDLE帧，不需要做任何事情，直接返回
-      if (!shouldCaptureFrame) {
-        return
-      }
-      
-      // 采集当前帧，转为gray mat
-      const frameCapturStartTime = performance.now()
-      bgrFrame = this.drawCurrentFrameToMat()
-      if(!bgrFrame){
-        return
-      }
-      const bgrFrameTime = performance.now() - frameCapturStartTime
-      
-      // 当前帧灰度图片 - 使用优化的转换方法
-      const grayConversionStartTime = performance.now()
-      if (this.matPool?.gray) {
-        // 优化方案：使用预分配的灰度Mat，复用内存
-        this.cv.cvtColor(bgrFrame, this.matPool.gray, this.cv.COLOR_BGR2GRAY)
-        grayFrame = this.matPool.gray
-      } else {
-        // 降级方案：创建临时灰度Mat（应该不会执行到这里）
-        grayFrame = new this.cv.Mat()
-        this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
-      }
-      const grayConversionTime = performance.now() - grayConversionStartTime
-      
-      if (!grayFrame) {
-        this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
-        return
-      }
-      
-      // 记录帧采集性能信息
-      const totalFrameProcessingTime = bgrFrameTime + grayConversionTime
-      if (totalFrameProcessingTime > 50) {
-        this.emitDebug('performance', 'Frame capture slow', {
-          bgrFrameCapture: bgrFrameTime.toFixed(2) + 'ms',
-          grayConversion: grayConversionTime.toFixed(2) + 'ms',
-          total: totalFrameProcessingTime.toFixed(2) + 'ms',
-          videoResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`,
-          matPoolUsed: !!this.matPool?.gray
-        }, 'warn')
-      }
-
-      // 采集当前帧到屏幕检测器缓冲区
-      if(this.detectionState.period !== DetectionPeriod.DETECT){
+      // 添加到屏幕检测器缓冲
+      if (this.detectionState.period !== DetectionPeriod.DETECT) {
         this.detectionState.screenDetector?.addVideoFrame(grayFrame, bgrFrame)
       }
 
-      // 在当前帧执行屏幕边角检测
-      if (this.shouldPerformScreenCornersDetection()) {
-        try{
-          const isScreenDetected = this.detectScreenCorners(grayFrame)
-          if (isScreenDetected) {
-            this.resetDetectionState()
-            return
-          }
-        } catch(screenDetectError){
-          const errorInfo = this.extractErrorInfo(screenDetectError)
-          const errorMsg = errorInfo.message
-          this.emitDebug('screen-detection', 'Screen corners detection failed', {
-            error: errorMsg,
-            stack: errorInfo.stack,
-            name: errorInfo.name
-          }, 'error')
-        }
+      // 执行屏幕检测（边角 + 多帧特征）
+      if (this.performScreenDetection(grayFrame)) {
+        return
       }
 
-      // 在当前帧执行屏幕多帧特征检测
-      if (this.shouldPerformScreenFeatureDetection()) {
-        this.lastScreenFeatureDetectionFrameIndex = this.frameIndex
-        try{
-          const isScreenDetected = this.detectScreenFeatures()
-          if (isScreenDetected) {
-            this.resetDetectionState()
-            return
-          }
-        } catch(screenDetectError){
-          const errorInfo = this.extractErrorInfo(screenDetectError)
-          const errorMsg = errorInfo.message
-          this.emitDebug('screen-detection', 'Screen feature detection failed', {
-            error: errorMsg,
-            stack: errorInfo.stack,
-            name: errorInfo.name
-          }, 'error')
-        }
-      }
-
-      // 在当前帧执行主人脸检测
-      if (this.shouldPerformMainDetection()) {
-        this.lastDetectionFrameIndex = this.frameIndex
-
-        // Perform face detection
-        let result
-        try {
-          result = await this.human.detect(this.videoElement)
-          if (!result) {
-            this.emitDebug('detection', 'Face detection returned null result', {}, 'warn')
-            return
-          }          
-        } catch (detectError) {
-          const errorInfo = this.extractErrorInfo(detectError)
-          const errorMsg = errorInfo.message
-          this.emitDebug('detection', 'Human.detect() call failed', {
-            error: errorMsg,
-            stack: errorInfo.stack,
-            name: errorInfo.name,
-            hasHuman: !!this.human,
-            humanVersion: this.human?.version,
-            videoReadyState: this.videoElement?.readyState,
-            videoWidth: this.videoElement?.videoWidth,
-            videoHeight: this.videoElement?.videoHeight
-          }, 'error')
-          return
-        }
-
-        const faces = result.face || []
-        const gestures = result.gesture || []
-
-        if (faces.length === 1) {
-          this.handleSingleFace(faces[0], gestures, grayFrame, bgrFrame)
-        } else {
-          this.handleMultipleFaces(faces.length)
-        }
-      }
-    }
-    catch(error){
+      // 执行主人脸检测
+      await this.performFaceDetection(grayFrame, bgrFrame)
+    } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
-      const errorMsg = errorInfo.message
       this.emitDebug('detection', 'Unexpected error in detection loop', {
-        error: errorMsg,
+        error: errorInfo.message,
         stack: errorInfo.stack,
         name: errorInfo.name,
         cause: errorInfo.cause
       }, 'error')
-    }
-    finally{
+    } finally {
       // 清理非池化的Mat对象
-      try {
-        if(bgrFrame && bgrFrame !== this.matPool?.bgr){
-          bgrFrame.delete()
-          bgrFrame = null
-        }
-        if(grayFrame && grayFrame !== this.matPool?.gray){
-          grayFrame.delete()
-          grayFrame = null
-        }
-      } catch (cleanupError) {
-        this.emitDebug('detection', 'Error during Mat cleanup', {
-          error: (cleanupError as Error).message
-        }, 'warn')
-      }
-      
+      this.cleanupFrames(bgrFrame, grayFrame)
       // 清除检测帧活跃标志
       this.isDetectingFrameActive = false
+    }
+  }
+
+  /**
+   * Check if current frame should be captured based on detection scheduling
+   */
+  private shouldCaptureFrame(): boolean {
+    return this.shouldPerformMainDetection() 
+      || this.shouldPerformScreenCornersDetection()
+      || this.shouldPerformScreenFeatureDetection()
+      || this.detectionState.period !== DetectionPeriod.DETECT
+  }
+
+  /**
+   * Capture video frame and convert to BGR and Grayscale Mat objects
+   * @returns {Object | null} Object with bgrFrame and grayFrame, or null if failed
+   */
+  private captureAndPrepareFrames(): { bgrFrame: any; grayFrame: any } | null {
+    // 采集当前帧，转为BGR mat
+    const frameCapturStartTime = performance.now()
+
+    // 采集当前帧，转为gray mat
+    const frameCanvas = this.drawVideoToCanvas()
+    if (!frameCanvas) {
+      this.emitDebug('detection', 'Failed to draw video frame to canvas', {}, 'warn')
+      return null
+    }
+    // 当前帧图片 - 使用预分配的Mat对象，避免频繁new
+    const bgrFrame = this.matPool?.bgr || drawCanvasToMat(this.cv, frameCanvas, false)
+    if (!bgrFrame) {
+      this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
+      return null
+    }
+    
+    const bgrFrameTime = performance.now() - frameCapturStartTime
+    
+    // 当前帧灰度图片 - 使用优化的转换方法
+    const grayConversionStartTime = performance.now()
+    let grayFrame: any
+    if (this.matPool?.gray) {
+      // 优化方案：使用预分配的灰度Mat，复用内存
+      this.cv.cvtColor(bgrFrame, this.matPool.gray, this.cv.COLOR_BGR2GRAY)
+      grayFrame = this.matPool.gray
+    } else {
+      // 降级方案：创建临时灰度Mat
+      grayFrame = new this.cv.Mat()
+      this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
+    }
+    const grayConversionTime = performance.now() - grayConversionStartTime
+    
+    if (!grayFrame) {
+      this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
+      return null
+    }
+    
+    // 记录帧采集性能信息
+    const totalFrameProcessingTime = bgrFrameTime + grayConversionTime
+    if (totalFrameProcessingTime > 50) {
+      this.emitDebug('performance', 'Frame capture slow', {
+        bgrFrameCapture: bgrFrameTime.toFixed(2) + 'ms',
+        grayConversion: grayConversionTime.toFixed(2) + 'ms',
+        total: totalFrameProcessingTime.toFixed(2) + 'ms',
+        videoResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`,
+        matPoolUsed: !!this.matPool?.gray
+      }, 'warn')
+    }
+
+    return { bgrFrame, grayFrame }
+  }
+
+  /**
+   * Perform screen detection (corners and multi-frame features)
+   * @returns true if screen is detected, false otherwise
+   */
+  private performScreenDetection(grayFrame: any): boolean {
+    // 执行屏幕边角检测
+    if (this.shouldPerformScreenCornersDetection()) {
+      try {
+        const isScreenDetected = this.detectScreenCorners(grayFrame)
+        if (isScreenDetected) {
+          this.partialResetDetectionState()
+          return true
+        }
+      } catch (screenDetectError) {
+        const errorInfo = this.extractErrorInfo(screenDetectError)
+        this.emitDebug('screen-detection', 'Screen corners detection failed', {
+          error: errorInfo.message,
+          stack: errorInfo.stack,
+          name: errorInfo.name
+        }, 'error')
+      }
+    }
+
+    // 执行屏幕多帧特征检测
+    if (this.shouldPerformScreenFeatureDetection()) {
+      this.lastScreenFeatureDetectionFrameIndex = this.frameIndex
+      try {
+        const isScreenDetected = this.detectScreenFeatures()
+        if (isScreenDetected) {
+          this.partialResetDetectionState()
+          return true
+        }
+      } catch (screenDetectError) {
+        const errorInfo = this.extractErrorInfo(screenDetectError)
+        this.emitDebug('screen-detection', 'Screen feature detection failed', {
+          error: errorInfo.message,
+          stack: errorInfo.stack,
+          name: errorInfo.name
+        }, 'error')
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Perform main face detection and handle results
+   */
+  private async performFaceDetection(grayFrame: any, bgrFrame: any): Promise<void> {
+    if (!this.shouldPerformMainDetection()) {
+      return
+    }
+
+    this.lastDetectionFrameIndex = this.frameIndex
+
+    // Perform face detection
+    let result
+    try {
+      result = await this.human?.detect(this.videoElement)
+      if (!result) {
+        this.emitDebug('detection', 'Face detection returned null result', {}, 'warn')
+        return
+      }          
+    } catch (detectError) {
+      const errorInfo = this.extractErrorInfo(detectError)
+      this.emitDebug('detection', 'Human.detect() call failed', {
+        error: errorInfo.message,
+        stack: errorInfo.stack,
+        name: errorInfo.name,
+        hasHuman: !!this.human,
+        humanVersion: this.human?.version,
+        videoReadyState: this.videoElement?.readyState,
+        videoWidth: this.videoElement?.videoWidth,
+        videoHeight: this.videoElement?.videoHeight
+      }, 'error')
+      return
+    }
+
+    const faces = result.face || []
+    const gestures = result.gesture || []
+
+    if (faces.length === 1) {
+      this.handleSingleFace(faces[0], gestures, grayFrame, bgrFrame)
+    } else {
+      this.handleMultipleFaces(faces.length)
+    }
+  }
+
+  /**
+   * Clean up frame Mat objects
+   */
+  private cleanupFrames(bgrFrame: any, grayFrame: any): void {
+    try {
+      if (bgrFrame && bgrFrame !== this.matPool?.bgr) {
+        bgrFrame.delete()
+      }
+      if (grayFrame && grayFrame !== this.matPool?.gray) {
+        grayFrame.delete()
+      }
+    } catch (cleanupError) {
+      this.emitDebug('detection', 'Error during Mat cleanup', {
+        error: (cleanupError as Error).message
+      }, 'warn')
     }
   }
 
@@ -1116,6 +1234,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         code: ErrorCode.INTERNAL_ERROR,
         message: 'Motion liveness detector is not initialized'
       })
+      // Clear the detecting flag before stopping to avoid deadlock
+      this.isDetectingFrameActive = false
       this.stopDetection(false)
       return
     }
@@ -1140,7 +1260,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           keypointVariance: motionResult.keypointVariance,
           motionType: motionResult.motionType
         })
-        this.resetDetectionState()
+        this.partialResetDetectionState()
         return        
       }
       // 只有ready状态的检测器的success结果才可信
@@ -1203,7 +1323,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           minCollectCount: this.options.collect_min_collect_count
         })
         if (this.getPerformActionCount() > 0) {
-          this.detectionState.period = DetectionPeriod.VERIFY
+          this.transitionDetectionPeriod(DetectionPeriod.VERIFY)
           this.emitDebug('detection', 'Entering action verification phase')
         } else {
           this.stopDetection(true)
@@ -1230,7 +1350,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Handle detect phase
    */
   private handleDetectPhase(): void {
-    this.detectionState.period = DetectionPeriod.COLLECT
+    this.transitionDetectionPeriod(DetectionPeriod.COLLECT)
     this.emitDebug('detection', 'Entering image collection phase')
   }
 
@@ -1303,7 +1423,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     if (this.detectionState.period !== DetectionPeriod.DETECT){
       this.emitDebug('detection', 'Multiple or no faces detected, resetting detection state', { faceCount })
-      this.resetDetectionState()
+      this.partialResetDetectionState()
     }
   }
 
@@ -1390,7 +1510,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       status: LivenessActionStatus.STARTED
     }
     this.emit('detector-action', actionStart)
-    this.emitDebug('liveness', 'Action selected', { action: this.detectionState.currentAction })
+    this.emitDebug('liveness', 'Action selected', { action: nextAction })
 
     this.detectionState.onActionStarted(nextAction, this.options.action_liveness_verify_timeout, () => {
         this.emitDebug('liveness', 'Action verify timeout', {
@@ -1401,7 +1521,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           action: nextAction,
           status: LivenessActionStatus.TIMEOUT
         })
-        this.resetDetectionState()      
+        this.partialResetDetectionState()      
     })
 
     return true
