@@ -880,15 +880,34 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private async detect(): Promise<void> {
     // 防止并发调用
     if (this.isDetectingFrameActive) {
+      this.emitDebug('detection', '检测帧正在处理中，跳过本帧', {}, 'info')
       return
     }
 
     // 状态和前置条件检查
-    if (this.engineState !== EngineState.DETECTING || !this.videoElement || !this.human) {
+    if (this.engineState !== EngineState.DETECTING) {
+      this.emitDebug('detection', '引擎状态不是DETECTING，无法继续检测', {
+        currentState: this.engineState,
+        expectedState: EngineState.DETECTING
+      }, 'warn')
+      return
+    }
+
+    if (!this.videoElement) {
+      this.emitDebug('detection', '视频元素未初始化', {}, 'error')
+      return
+    }
+
+    if (!this.human) {
+      this.emitDebug('detection', 'Human.js实例未初始化', {}, 'error')
       return
     }
 
     if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      this.emitDebug('detection', '视频尚未准备好，readyState不足', {
+        readyState: this.videoElement.readyState,
+        requiredState: HTMLMediaElement.HAVE_CURRENT_DATA
+      }, 'info')
       return
     }
 
@@ -896,35 +915,66 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.isDetectingFrameActive = true
     this.frameIndex++
     
+    this.emitDebug('detection', '进入检测帧循环', {
+      frameIndex: this.frameIndex,
+      period: this.detectionState.period,
+      engineState: this.engineState,
+      videoReadyState: this.videoElement.readyState
+    }, 'info')
+    
     let bgrFrame: any = null
     let grayFrame: any = null
     
     try {
       // 确定是否需要捕获帧
       if (!this.shouldCaptureFrame()) {
+        this.emitDebug('detection', '不需要捕获本帧', {
+          frameIndex: this.frameIndex,
+          shouldPerformMainDetection: this.shouldPerformMainDetection(),
+          shouldPerformScreenCornersDetection: this.shouldPerformScreenCornersDetection(),
+          shouldPerformScreenFeatureDetection: this.shouldPerformScreenFeatureDetection(),
+          period: this.detectionState.period
+        }, 'info')
         return
       }
       
-      // 采集和准备帧（BGR + Gray）
+      this.emitDebug('detection', '准备采集帧数据', { frameIndex: this.frameIndex }, 'info')
       const frameData = this.captureAndPrepareFrames()
       if (!frameData) {
+        this.emitDebug('detection', '帧采集失败，无法继续检测', {
+          frameIndex: this.frameIndex
+        }, 'warn')
         return
       }
+      this.emitDebug('detection', '帧采集成功，准备进行检测', {
+        frameIndex: this.frameIndex,
+        hasBgrFrame: !!frameData.bgrFrame,
+        hasGrayFrame: !!frameData.grayFrame
+      }, 'info')
       bgrFrame = frameData.bgrFrame
       grayFrame = frameData.grayFrame
 
       // 添加到屏幕检测器缓冲
       if (this.detectionState.period !== DetectionPeriod.DETECT) {
         this.detectionState.screenDetector?.addVideoFrame(grayFrame, bgrFrame)
+        this.emitDebug('detection', '已添加帧数据到屏幕检测器缓冲', {
+          frameIndex: this.frameIndex
+        }, 'info')
       }
 
       // 执行屏幕检测（边角 + 多帧特征）
+      this.emitDebug('detection', '开始执行屏幕检测', { frameIndex: this.frameIndex }, 'info')
       if (this.performScreenDetection(grayFrame)) {
+        this.emitDebug('detection', '屏幕检测：检测到屏幕，返回', {
+          frameIndex: this.frameIndex
+        }, 'warn')
         return
       }
 
       // 执行主人脸检测
+      this.emitDebug('detection', '开始执行人脸检测', { frameIndex: this.frameIndex }, 'info')
       await this.performFaceDetection(grayFrame, bgrFrame)
+      this.emitDebug('detection', '人脸检测完成', { frameIndex: this.frameIndex }, 'info')
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
       this.emitDebug('detection', 'Unexpected error in detection loop', {
@@ -971,7 +1021,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
       return null
     }
-    
+
     const bgrFrameTime = performance.now() - frameCapturStartTime
     
     // 当前帧灰度图片 - 使用优化的转换方法
