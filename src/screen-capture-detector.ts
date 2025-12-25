@@ -3,10 +3,10 @@
  * 
  */
 
-import { ScreenFlickerDetector } from './screen-flicker-detector'
-import { ScreenResponseTimeDetector } from './screen-response-time-detector'
-import { DLPColorWheelDetector } from './dlp-color-wheel-detector'
-import { OpticalDistortionDetector } from './optical-distortion-detector'
+import { ScreenFlickerDetectionResult, ScreenFlickerDetector } from './screen-flicker-detector'
+import { ScreenResponseTimeDetectionResult, ScreenResponseTimeDetector } from './screen-response-time-detector'
+import { DLPColorWheelDetectionResult, DLPColorWheelDetector } from './dlp-color-wheel-detector'
+import { OpticalDistortionDetectionResult, OpticalDistortionDetector } from './optical-distortion-detector'
 import { VideoFrameCollector } from './video-frame-collector'
 
 /**
@@ -52,9 +52,6 @@ export class ScreenCaptureDetectionResult {
     details?: any
   }>
   
-  // 未执行的方法（因为已经有结论）
-  skippedMethods?: string[]
-  
   riskLevel: 'low' | 'medium' | 'high'
   processingTimeMs: number
   debug?: CascadeDetectionDebugInfo
@@ -70,13 +67,11 @@ export class ScreenCaptureDetectionResult {
     }>,
     riskLevel: 'low' | 'medium' | 'high',
     processingTimeMs: number,
-    skippedMethods?: string[],
     debug?: CascadeDetectionDebugInfo
   ) {
     this.isScreenCapture = isScreenCapture
     this.confidenceScore = confidenceScore
     this.executedMethods = executedMethods
-    this.skippedMethods = skippedMethods
     this.riskLevel = riskLevel
     this.processingTimeMs = processingTimeMs
     this.debug = debug
@@ -135,6 +130,15 @@ export interface ScreenCaptureDetectorOptions {
 
   // 摄像头采集配置
   frameDropRate?: number // 随机丢帧率 (0-1)，用于模拟摄像头帧频不稳定
+
+  // 检测结果判定阈值
+  flickerConfidenceThreshold?: number // 闪烁检测置信度阈值（默认 0.70）
+  responseTimeConfidenceThreshold?: number // 响应时间检测置信度阈值（默认 0.65）
+  dlpConfidenceThresholdResult?: number // DLP色轮检测置信度阈值（默认 0.65）
+  opticalConfidenceThresholdResult?: number // 光学畸变检测置信度阈值（默认 0.60）
+  compositeConfidenceThresholdScreenCapture?: number // 综合置信度判定为屏幕捕捉的阈值（默认 0.50）
+  compositeConfidenceThresholdHighRisk?: number // 高风险等级阈值（默认 0.70）
+  compositeConfidenceThresholdMediumRisk?: number // 中等风险等级阈值（默认 0.50）
 }
 
 /**
@@ -168,6 +172,15 @@ const DEFAULT_SCREEN_CAPTURE_DETECTOR_OPTIONS: Required<ScreenCaptureDetectorOpt
   opticalFeatureChromatic: 0.20, // 色差（可能被其他因素影响）
   opticalFeatureVignette: 0.15, // 晕影（最微妙，易受环境光影响）
   frameDropRate: 0.03, // 3% 丢帧率（模拟真实摄像头，30fps下约丢1帧/秒）
+  
+  // 检测结果判定阈值
+  flickerConfidenceThreshold: 0.70,
+  responseTimeConfidenceThreshold: 0.65,
+  dlpConfidenceThresholdResult: 0.65,
+  opticalConfidenceThresholdResult: 0.60,
+  compositeConfidenceThresholdScreenCapture: 0.50,
+  compositeConfidenceThresholdHighRisk: 0.70,
+  compositeConfidenceThresholdMediumRisk: 0.50,
 }
 
 function calcOptionsByFPS(fps: number): Partial<ScreenCaptureDetectorOptions> {
@@ -292,15 +305,15 @@ export class ScreenCaptureDetector {
    * @returns 帧是否被接受（true表示被处理，false表示被随机丢弃）
    */
   addVideoFrame(grayMat: any, bgrMat: any): boolean {
-    // 随机丢帧模拟摄像头采集不稳定
+    // 1. 只保留基础的随机丢帧（模拟真实摄像头）
     if (this.config.frameDropRate > 0 && Math.random() < this.config.frameDropRate) {
       this.droppedFramesCount++
-      console.log(`[ScreenCaptureDetector] Frame dropped (total: ${this.droppedFramesCount})`)
       return false
     }
 
-    // 将帧添加到公共采集器
+    // 2. 添加帧到缓冲区
     this.frameCollector.addFrame(grayMat, bgrMat)
+    
     return true
   }
 
@@ -389,7 +402,8 @@ export class ScreenCaptureDetector {
 
     try {
       // ========== Stage 0: 视频闪烁检测 (LCD/OLED) ==========
-      let flickerResult: any = { isScreenCapture: false, confidence: 0 }
+      let flickerResult: ScreenFlickerDetectionResult = { isScreenCapture: false, 
+        confidence: 0, passingPixelRatio: 0, sampledPixelCount: 0 }
       
       if (useVideoAnalysis && this.flickerDetector.getBufferedFrameCount() >= 5) {
         const stage0Start = performance.now()
@@ -411,14 +425,11 @@ export class ScreenCaptureDetector {
             method: 'Screen Flicker Detection (LCD/OLED)',
             completed: true,
             timeMs: stage0Time,
-            result: {
-              isScreenCapture: flickerResult.isScreenCapture,
-              confidence: flickerResult.confidence,
-            }
+            result: { ... flickerResult}
           })
         }
 
-        if (flickerResult.isScreenCapture && flickerResult.confidence > 0.70) {
+        if (flickerResult.isScreenCapture && flickerResult.confidence > this.config.flickerConfidenceThreshold) {
           const totalTime = performance.now() - startTime
           if (debug) {
             debug.endTime = performance.now()
@@ -436,14 +447,14 @@ export class ScreenCaptureDetector {
             executedMethods,
             'high',
             totalTime,
-            [],
             debug
           )
         }
       }
 
       // ========== Stage 1: 响应时间检测 (墨水屏) ==========
-      let responseTimeResult: any = { isScreenCapture: false, confidence: 0 }
+      let responseTimeResult: ScreenResponseTimeDetectionResult = { isScreenCapture: false, 
+        confidence: 0, passingPixelRatio: 0, sampledPixelCount: 0 }
       
       if (useVideoAnalysis && this.responseTimeDetector.getBufferedFrameCount() >= 10) {
         const stage1Start = performance.now()
@@ -465,14 +476,11 @@ export class ScreenCaptureDetector {
             method: 'Response Time Detection (E-Ink)',
             completed: true,
             timeMs: stage1Time,
-            result: {
-              isScreenCapture: responseTimeResult.isScreenCapture,
-              confidence: responseTimeResult.confidence,
-            }
+            result: { ... responseTimeResult }
           })
         }
 
-        if (responseTimeResult.isScreenCapture && responseTimeResult.confidence > 0.65) {
+        if (responseTimeResult.isScreenCapture && responseTimeResult.confidence > this.config.responseTimeConfidenceThreshold) {
           const totalTime = performance.now() - startTime
           if (debug) {
             debug.endTime = performance.now()
@@ -490,14 +498,14 @@ export class ScreenCaptureDetector {
             executedMethods,
             'high',
             totalTime,
-            [],
             debug
           )
         }
       }
 
       // ========== Stage 2: DLP色轮检测 (DLP投影) ==========
-      let dlpResult: any = { isScreenCapture: false, confidence: 0 }
+      let dlpResult: DLPColorWheelDetectionResult = { isScreenCapture: false, 
+        confidence: 0, hasColorSeparation: false, colorSeparationPixels: 0, sampledEdgePixelCount: 0 }
       
       if (useVideoAnalysis && this.dlpColorWheelDetector.getBufferedFrameCount() >= 3) {
         const stage2Start = performance.now()
@@ -519,14 +527,11 @@ export class ScreenCaptureDetector {
             method: 'DLP Color Wheel Detection',
             completed: true,
             timeMs: stage2Time,
-            result: {
-              isScreenCapture: dlpResult.isScreenCapture,
-              confidence: dlpResult.confidence,
-            }
+            result: { ... dlpResult }
           })
         }
 
-        if (dlpResult.isScreenCapture && dlpResult.confidence > 0.65) {
+        if (dlpResult.isScreenCapture && dlpResult.confidence > this.config.dlpConfidenceThresholdResult) {
           const totalTime = performance.now() - startTime
           if (debug) {
             debug.endTime = performance.now()
@@ -544,14 +549,24 @@ export class ScreenCaptureDetector {
             executedMethods,
             'high',
             totalTime,
-            [],
             debug
           )
         }
       }
 
       // ========== Stage 3: 光学畸变检测 (其他投影) ==========
-      let opticalResult: any = { isScreenCapture: false, confidence: 0 }
+      let opticalResult: OpticalDistortionDetectionResult = { 
+        isScreenCapture: false, confidence: 0, overallOpticalDistortionScore: 0, 
+        distortionFeatures: {
+          keystoneDetected: false,
+          keystoneLevel: 0,
+          barrelDistortionDetected: false,
+          barrelDistortionLevel: 0,
+          chromaticAberrationDetected: false,
+          chromaticAberrationLevel: 0,
+          vignetteDetected: false,
+          vignetteLevel: 0,
+        } }
       
       if (useVideoAnalysis && this.opticalDistortionDetector.getBufferedFrameCount() >= 1) {
         const stage3Start = performance.now()
@@ -573,14 +588,11 @@ export class ScreenCaptureDetector {
             method: 'Optical Distortion Detection',
             completed: true,
             timeMs: stage3Time,
-            result: {
-              isScreenCapture: opticalResult.isScreenCapture,
-              confidence: opticalResult.confidence,
-            }
+            result: { ... opticalResult }
           })
         }
 
-        if (opticalResult.isScreenCapture && opticalResult.confidence > 0.60) {
+        if (opticalResult.isScreenCapture && opticalResult.confidence > this.config.opticalConfidenceThresholdResult) {
           const totalTime = performance.now() - startTime
           if (debug) {
             debug.endTime = performance.now()
@@ -598,7 +610,6 @@ export class ScreenCaptureDetector {
             executedMethods,
             'medium',
             totalTime,
-            [],
             debug
           )
         }
@@ -613,8 +624,8 @@ export class ScreenCaptureDetector {
           opticalResult.confidence
         )
 
-        const isScreenCapture = compositeConfidence > 0.50
-        const riskLevel = compositeConfidence > 0.7 ? 'high' : (compositeConfidence > 0.5 ? 'medium' : 'low')
+        const isScreenCapture = compositeConfidence > this.config.compositeConfidenceThresholdScreenCapture
+        const riskLevel = compositeConfidence > this.config.compositeConfidenceThresholdHighRisk ? 'high' : (compositeConfidence > this.config.compositeConfidenceThresholdMediumRisk ? 'medium' : 'low')
 
         const totalTime = performance.now() - startTime
 
@@ -636,7 +647,6 @@ export class ScreenCaptureDetector {
           executedMethods,
           riskLevel,
           totalTime,
-          [],
           debug
         )
       }
@@ -658,7 +668,6 @@ export class ScreenCaptureDetector {
         executedMethods,
         'low',
         totalTime,
-        [],
         debug
       )
     } catch (error) {
@@ -684,7 +693,6 @@ export class ScreenCaptureDetector {
         executedMethods,
         'low',
         totalTime,
-        undefined,
         debug
       )
     }

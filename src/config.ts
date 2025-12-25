@@ -20,8 +20,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 100,
-  detect_error_retry_delay: 200,
+  detect_frame_delay: 150,
 
   // Collection Settings
   collect_min_collect_count: 3,

@@ -49,10 +49,8 @@ export interface FaceDetectionEngineOptions {
   detect_video_mirror?: boolean
   /** 加载视频流的超时时间（毫秒，默认 5000） */
   detect_video_load_timeout?: number
-  /** 检测帧之间的延迟（毫秒，默认 100） */
+  /** 检测帧之间的延迟（毫秒，默认 150） */
   detect_frame_delay?: number
-  /** 错误后重试前的延迟（毫秒，默认 200） */
-  detect_error_retry_delay?: number
 
   /** 要采集的静默检测次数（默认 3） */
   collect_min_collect_count?: number

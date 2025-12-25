@@ -910,6 +910,10 @@ export class MotionLivenessDetector {
   /**
    * 根据运动分析确定面部是否活跃
    * 修复：改进对真实面部运动的识别，减少误判
+   * 
+   * 策略：
+   * - 数据不足（frameBuffer < bufferSize）时：采用保守策略，只有绝对确定是照片才判定为非活体
+   * - 数据充足（frameBuffer >= bufferSize）时：执行完整检查，较为严格
    */
   private determineLiveness(
     motionScore: number,
@@ -924,6 +928,26 @@ export class MotionLivenessDetector {
     // - 光流几乎为零 (< 0.08) ← 最明显的照片特征
     // - 运动类型 = 'none'
 
+    // 数据不足时的保守策略：只有绝对确定才判定为非活体
+    const isDataSufficient = this.frameBuffer.length >= this.config.frameBufferSize
+    
+    if (!isDataSufficient) {
+      // 保守策略：只有最强的照片特征才能判定为非活体
+      // 只检查最可靠的指标
+      
+      // 指标1：光流 - 照片无法产生光流，这是最确定的指标
+      // 只有光流极低且运动类型为'none'，才考虑是照片
+      if (opticalFlow < this.config.minOpticalFlowThreshold * 0.5 && motionType === 'none') {
+        // 双重确认：光流极低且没有运动类型
+        return false
+      }
+      
+      // 其他情况都假设是活体（保守判定）
+      return true
+    }
+
+    // 数据充足时的完整检查（原有逻辑）
+    
     // 检查1：必须有有意义的光流（照片的最弱点）
     // 照片无法产生光流，这是最可靠的指标
     if (opticalFlow < this.config.minOpticalFlowThreshold) {

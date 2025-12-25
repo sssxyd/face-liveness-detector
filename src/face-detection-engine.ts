@@ -20,7 +20,7 @@ import { SimpleEventEmitter } from './event-emitter'
 import { calcFaceFrontal } from './face-frontal-calculator'
 import { calcImageQuality } from './image-quality-calculator'
 import { loadOpenCV, loadHuman, getOpenCVVersion, detectBrowserEngine } from './library-loader'
-import { drawCanvasToMat, matToGray } from './browser_utils'
+import { drawCanvasToMat, matToBase64Jpeg, matToGray } from './browser_utils'
 import { createDetectionState, DetectionState } from './face-detection-state'
 
 /**
@@ -59,14 +59,20 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private stream: MediaStream | null = null  
   private frameCanvasElement: HTMLCanvasElement | null = null
   private frameCanvasContext: CanvasRenderingContext2D | null = null
-  private faceCanvasElement: HTMLCanvasElement | null = null
-  private faceCanvasContext: CanvasRenderingContext2D | null = null
 
-  private detectionFrameId: number | null = null
-  private lastDetectionTime: number = 0
+  private animationFrameId: number | null = null
 
   private actualVideoWidth: number = 0
   private actualVideoHeight: number = 0
+
+  // Frame-based detection scheduling
+  private frameIndex: number = 0
+  private lastDetectionFrameIndex: number = 0
+  private lastScreenDetectionFrameIndex: number = 0
+
+  // Mat object pool for performance optimization
+  private matPool: { bgr: any; gray: any } | null = null
+  private shouldPreallocateMats: boolean = true
 
   private detectionState: DetectionState
 
@@ -77,7 +83,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   constructor(options?: Partial<FaceDetectionEngineOptions>) {
     super()
     this.options = mergeOptions(options)
-    this.detectionState = createDetectionState(this.options, this.videoFPS)
+    this.detectionState = createDetectionState(this.videoFPS, this.options.motion_liveness_strict_photo_detection)
   }
 
   /**
@@ -145,7 +151,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.stopDetection(false)
     }
     this.options = mergeOptions(options)
-    this.detectionState = createDetectionState(this.options, this.videoFPS)
+    this.detectionState = createDetectionState(this.videoFPS, this.options.motion_liveness_strict_photo_detection)
     this.detectionState.setCVInstance(this.cv)
   }
 
@@ -481,16 +487,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       this.engineState = EngineState.DETECTING
 
-      if (this.detectionFrameId !== null) {
-        cancelAnimationFrame(this.detectionFrameId)
-      }
+      this.cancelPendingDetection()
 
-      this.detectionFrameId = requestAnimationFrame(() => {
+      this.animationFrameId = requestAnimationFrame(() => {
         this.detect()
       })  
-
-      this.scheduleNextDetection(0)
-
+      
+      // 预分配Mat对象池以提高性能
+      this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+      
       this.emitDebug('video-setup', 'Detection started')
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
@@ -515,11 +520,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   stopDetection(success: boolean): void {
     this.engineState = EngineState.READY
-
-    if (this.detectionFrameId !== null) {
-      cancelAnimationFrame(this.detectionFrameId)
-      this.detectionFrameId = null
-    }    
 
     const finishData: DetectorFinishEventData = {
       success: success,
@@ -564,11 +564,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private resetDetectionState(): void {
     this.emitDebug('detection', 'Resetting detection state...')
     this.detectionState.reset()
-    this.lastDetectionTime = 0
-    this.actualVideoWidth = 0
-    this.actualVideoHeight = 0
+    
+    // 重置帧计数（为下一个检测周期做准备）
+    this.frameIndex = 0
+    this.lastDetectionFrameIndex = 0
+    this.lastScreenDetectionFrameIndex = 0
+    
+    // 重置帧图像池
+    this.cleanupMatPool()
+    this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+
+    // 清理Canvas
     this.clearFrameCanvas()
-    this.clearFaceCanvas()
   }
 
   private updateVideoFPS(fps: number): void {
@@ -580,21 +587,57 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * Schedule next detection frame
-   * Uses requestAnimationFrame to call detect() every frame
+   * Get the frame interval for main face detection based on videoFPS and detect_frame_delay
+   * @returns Number of frames between detections
    */
-  private scheduleNextDetection(delayMs: number = this.options.detect_frame_delay): void {
-    if (this.engineState !== EngineState.DETECTING) return
-    this.lastDetectionTime = performance.now() - (this.options.detect_frame_delay - delayMs)
+  private getDetectionFrameInterval(): number {
+    // detect_frame_delay (ms) / frame duration (ms) = frame interval
+    return Math.max(1, Math.round(this.options.detect_frame_delay * this.videoFPS / 1000))
+  }
+
+  /**
+   * Get the frame interval for screen detection
+   * Screen detection runs at 0.5x the main detection interval to interleave frames
+   * @returns Number of frames between screen detections
+   */
+  private getScreenDetectionFrameInterval(): number {
+    const mainInterval = this.getDetectionFrameInterval()
+    // Run screen detection roughly every half interval to distribute load
+    return Math.max(1, Math.floor(mainInterval * 0.5))
+  }
+
+  /**
+   * Check if main face detection should be performed this frame
+   * @returns true if enough frames have passed since last detection
+   */
+  private shouldPerformMainDetection(): boolean {
+    const mainInterval = this.getDetectionFrameInterval()
+    return (this.frameIndex - this.lastDetectionFrameIndex) >= mainInterval
+  }
+
+  /**
+   * Check if screen corner detection should be performed this frame
+   * Ensures screen detection doesn't run on the same frame as main detection
+   * @returns true if enough frames have passed since last screen detection and not on main detection frame
+   */
+  private shouldPerformScreenDetection(): boolean {
+    // 未开始采集前，不执行屏幕检测
+    if(this.detectionState.period === DetectionPeriod.DETECT)
+      return false
+    const screenInterval = this.getScreenDetectionFrameInterval()
+    return (
+      (this.frameIndex - this.lastScreenDetectionFrameIndex) >= screenInterval &&
+      !this.shouldPerformMainDetection() // Prevent running on same frame as main detection
+    )
   }
 
   /**
    * Cancel pending detection frame
    */
   private cancelPendingDetection(): void {
-    if (this.detectionFrameId !== null) {
-      cancelAnimationFrame(this.detectionFrameId)
-      this.detectionFrameId = null
+    if (this.animationFrameId !== null) {
+      cancelAnimationFrame(this.animationFrameId)
+      this.animationFrameId = null
     }
   }
 
@@ -605,13 +648,59 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('detection', 'Failed to draw video frame to canvas', {}, 'warn')
       return null
     }
-    // 当前帧图片
-    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
+    // 当前帧图片 - 使用预分配的Mat对象，避免频繁new
+    const bgrFrame = this.matPool?.bgr || drawCanvasToMat(this.cv, frameCanvas, false)
     if (!bgrFrame) {
       this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
       return null
     }
     return bgrFrame
+  }
+
+  /**
+   * 预分配Mat对象以提高性能
+   * 避免每帧都创建新的Mat对象，而是复用同一对象
+   */
+  private preallocateMats(width: number, height: number): void {
+    if (!this.cv || !this.shouldPreallocateMats || width <= 0 || height <= 0) return
+    
+    try {
+      if (!this.matPool) {        
+        // 预分配BGR和Gray Mat对象
+        this.matPool = {
+          bgr: new this.cv.Mat(height, width, this.cv.CV_8UC3),
+          gray: new this.cv.Mat(height, width, this.cv.CV_8U)
+        }
+        
+        this.emitDebug('performance', 'Mat object pool preallocated', {
+          width,
+          height,
+          format: 'BGR and Grayscale'
+        })
+      }
+    } catch (error) {
+      this.emitDebug('performance', 'Failed to preallocate Mats', {
+        error: (error as Error).message
+      }, 'warn')
+      this.shouldPreallocateMats = false
+    }
+  }
+
+  /**
+   * 清理Mat对象池
+   */
+  private cleanupMatPool(): void {
+    if (this.matPool) {
+      try {
+        if (this.matPool.bgr) this.matPool.bgr.delete()
+        if (this.matPool.gray) this.matPool.gray.delete()
+      } catch (error) {
+        this.emitDebug('performance', 'Error cleaning up Mat pool', {
+          error: (error as Error).message
+        }, 'warn')
+      }
+      this.matPool = null
+    }
   }
 
   /**
@@ -628,41 +717,97 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       return
     }
-
     
-    // 当前帧是否需要进行检测
-    const currentTime = performance.now()
-    const shouldPerformDetection = currentTime - this.lastDetectionTime >= this.options.detect_frame_delay
+    // Increment frame counter for frame-based scheduling
+    this.frameIndex++
     
     let bgrFrame: any = null
     let grayFrame: any = null
     try{
-      // 需要进入检测流程或者当前阶段不是DETECT阶段，则都需要采集当前帧
-      if(shouldPerformDetection || this.detectionState.period !== DetectionPeriod.DETECT){
-        // 采集当前帧，转为gray mat
-        bgrFrame = this.drawCurrentFrameToMat()
-        if(!bgrFrame){
-          return
-        }
-        // 当前帧灰度图片
-        grayFrame = matToGray(this.cv, bgrFrame)
-        if (!grayFrame) {
-          this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
-          return
-        }
+      const shouldCaptureFrame = this.shouldPerformMainDetection() 
+      || this.shouldPerformScreenDetection()
+      || this.detectionState.period !== DetectionPeriod.DETECT
+
+      // IDLE帧，不需要做任何事情，直接返回
+      if (!shouldCaptureFrame) {
+        return
+      }
+      
+      // 采集当前帧，转为gray mat
+      const frameCapturStartTime = performance.now()
+      bgrFrame = this.drawCurrentFrameToMat()
+      if(!bgrFrame){
+        return
+      }
+      const bgrFrameTime = performance.now() - frameCapturStartTime
+      
+      // 当前帧灰度图片 - 使用优化的转换方法
+      const grayConversionStartTime = performance.now()
+      if (!this.matPool?.gray) {
+        const grayMat = new cv.Mat()
+        cv.cvtColor(bgrFrame, grayMat, cv.COLOR_BGR2GRAY)
+        grayFrame = grayMat
+      } else {
+        // 优化方案：使用预分配的灰度Mat，复用内存
+        this.cv.cvtColor(bgrFrame, this.matPool.gray, this.cv.COLOR_BGR2GRAY)
+        grayFrame = this.matPool.gray
+      }
+      const grayConversionTime = performance.now() - grayConversionStartTime
+      
+      if (!grayFrame) {
+        this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
+        return
+      }
+      
+      // 记录帧采集性能信息
+      const totalFrameProcessingTime = bgrFrameTime + grayConversionTime
+      if (totalFrameProcessingTime > 50) {
+        this.emitDebug('performance', 'Frame capture slow', {
+          bgrFrameCapture: bgrFrameTime.toFixed(2) + 'ms',
+          grayConversion: grayConversionTime.toFixed(2) + 'ms',
+          total: totalFrameProcessingTime.toFixed(2) + 'ms',
+          videoResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`,
+          matPoolUsed: !!this.matPool?.gray
+        }, 'warn')
       }
 
+      // 采集当前帧到屏幕检测器缓冲区
       if(this.detectionState.period !== DetectionPeriod.DETECT){
         this.detectionState.screenDetector?.addVideoFrame(grayFrame, bgrFrame)
       }
 
-      if (shouldPerformDetection) {
-        this.lastDetectionTime = currentTime
+      // 在当前帧执行屏幕检测
+      if (this.shouldPerformScreenDetection()) {
+        this.lastScreenDetectionFrameIndex = this.frameIndex
+        try{
+          const isScreenDetected = this.detectVideoAttach(grayFrame)
+          if (isScreenDetected) {
+            this.resetDetectionState()
+            return
+          }
+        } catch(screenDetectError){
+          const errorInfo = this.extractErrorInfo(screenDetectError)
+          const errorMsg = errorInfo.message
+          this.emitDebug('screen-detection', 'Screen detection failed', {
+            error: errorMsg,
+            stack: errorInfo.stack,
+            name: errorInfo.name
+          }, 'error')
+        }
+      }
+
+      // 在当前帧执行主人脸检测
+      if (this.shouldPerformMainDetection()) {
+        this.lastDetectionFrameIndex = this.frameIndex
 
         // Perform face detection
         let result
         try {
           result = await this.human.detect(this.videoElement)
+          if (!result) {
+            this.emitDebug('detection', 'Face detection returned null result', {}, 'warn')
+            return
+          }          
         } catch (detectError) {
           const errorInfo = this.extractErrorInfo(detectError)
           const errorMsg = errorInfo.message
@@ -676,13 +821,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
             videoWidth: this.videoElement?.videoWidth,
             videoHeight: this.videoElement?.videoHeight
           }, 'error')
-          this.scheduleNextDetection(this.options.detect_error_retry_delay)
-          return
-        }
-
-        if (!result) {
-          this.emitDebug('detection', 'Face detection returned null result', {}, 'warn')
-          this.scheduleNextDetection(this.options.detect_error_retry_delay)
           return
         }
 
@@ -690,13 +828,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         const gestures = result.gesture || []
 
         if (faces.length === 1) {
-          this.handleSingleFace(faces[0], gestures, grayFrame)
+          this.handleSingleFace(faces[0], gestures, grayFrame, bgrFrame)
         } else {
           this.handleMultipleFaces(faces.length)
         }
-        this.scheduleNextDetection()
-      }      
-
+      }
     }
     catch(error){
       const errorInfo = this.extractErrorInfo(error)
@@ -709,10 +845,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }, 'error')
     }
     finally{
-      if(bgrFrame){
+      // 只删除非池化的Mat对象
+      if(bgrFrame && bgrFrame !== this.matPool?.bgr){
         bgrFrame.delete()
       }
-      if(grayFrame){
+      if(grayFrame && grayFrame !== this.matPool?.gray){
         grayFrame.delete()
       }
     }
@@ -730,25 +867,101 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     return Math.min(this.options.action_liveness_action_count, actionListLength)
   }
 
+  private detectVideoAttach(grayFrame: any): boolean {
+    // 屏幕边角、轮廓检测（快速检测）
+      const cornersContourResult = this.detectionState.cornersContourDetector?.detect(grayFrame)
+      if (cornersContourResult?.isScreenCapture) {
+        this.emitDebug('screen-corners-detection', 'Screen boundary detected - possible screen capture', {
+          confidence: cornersContourResult.confidence,
+          lineCount: cornersContourResult.lineCount,
+          contourCount: cornersContourResult.contourCount,
+          screenBoundaryRatio: cornersContourResult.screenBoundaryRatio,
+          processingTimeMs: cornersContourResult.processingTimeMs,
+          details: cornersContourResult.details
+        }, 'warn')
+        this.emitDetectorInfo({
+          code: DetectionCode.FACE_NOT_REAL,
+          message: 'Screen capture detected by corners/contour analysis',
+          screenConfidence: cornersContourResult.confidence
+        })
+        return true
+      }
+      if (cornersContourResult) {
+        this.emitDebug('screen-corners-detection', 'Screen boundary not detected', {
+          confidence: cornersContourResult.confidence,
+          lineCount: cornersContourResult.lineCount,
+          contourCount: cornersContourResult.contourCount,
+          screenBoundaryRatio: cornersContourResult.screenBoundaryRatio,
+          processingTimeMs: cornersContourResult.processingTimeMs
+        }, 'info')
+      }
+
+      // 屏幕捕获检测
+      const screenResult = this.detectionState.screenDetector?.detect(this.options.debug_mode, true)
+      if(screenResult?.isScreenCapture){
+        this.emitDebug('screen-detection', 'Screen capture detected - possible video replay attack', {
+          screenConfidence: screenResult.confidenceScore,
+          riskLevel: screenResult.riskLevel,
+          processingTimeMs: screenResult.processingTimeMs,
+          executedMethods: screenResult.executedMethods.map((m: any) => ({
+            method: m.method,
+            isScreenCapture: m.isScreenCapture,
+            confidence: m.confidence,
+            details: m.details
+          })),
+          stageDetails: screenResult.debug?.stages.map((s: any) => ({
+            method: s.method,
+            completed: s.completed,
+            timeMs: s.timeMs,
+            result: s.result
+          })),
+          finalDecision: screenResult.debug?.finalDecision
+        }, 'warn')
+        this.emitDetectorInfo({
+          code: DetectionCode.FACE_NOT_REAL,
+          message: screenResult.getMessage(),
+          screenConfidence: screenResult.confidenceScore
+        })
+        return true
+      }
+      if(screenResult) {
+        this.emitDebug('screen-detection', 'Screen capture not detected', {
+          screenConfidence: screenResult.confidenceScore,
+          riskLevel: screenResult.riskLevel,
+          processingTimeMs: screenResult.processingTimeMs,
+          executedMethods: screenResult.executedMethods.map((m: any) => ({
+            method: m.method,
+            isScreenCapture: m.isScreenCapture,
+            confidence: m.confidence,
+            details: m.details
+          })),
+          stageDetails: screenResult.debug?.stages.map((s: any) => ({
+            method: s.method,
+            completed: s.completed,
+            timeMs: s.timeMs,
+            result: s.result
+          })),
+          finalDecision: screenResult.debug?.finalDecision
+        }, 'info')
+      }
+   
+      // 只有ready状态的检测器的success结果才可信
+      if (this.detectionState.screenDetector?.isReady()) {
+        this.detectionState.realness = !screenResult?.isScreenCapture
+      }
+
+      return false
+  }
+
   /**
    * Handle single face detection
    */
-  private handleSingleFace(face: FaceResult, gestures: GestureResult[], grayFrame: any): void {
+  private handleSingleFace(face: FaceResult, gestures: GestureResult[], grayFrame: any, bgrFrame: any): void {
     const faceBox = face.box || face.boxRaw
 
     if (!faceBox) {
       console.warn('[FaceDetector] Face detected but no box/boxRaw property')
       this.emitDebug('detection', 'Face box is missing - face detected but no box/boxRaw property', {}, 'warn')
-      this.scheduleNextDetection()
-      return
-    }
-
-    if(!this.detectionState.screenDetector) {
-      this.emit('detector-error' as any, {
-        code: ErrorCode.INTERNAL_ERROR,
-        message: 'Screen capture detector is not initialized'
-      })
-      this.stopDetection(false)
       return
     }
 
@@ -759,54 +972,33 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       })
       this.stopDetection(false)
       return
-    }    
+    }
     
     try {
-      // 屏幕捕获检测
-      if(this.detectionState.screenDetector.isReady()){
-        const screenResult = this.detectionState.screenDetector.detect(this.options.debug_mode, true)
-        if(screenResult.isScreenCapture){
-          this.emitDebug('screen-detection', 'Screen capture detected - possible video replay attack', {
-            screenConfidence: screenResult.confidenceScore,
-            details: screenResult.debug
-          }, 'warn')
-          this.emitDetectorInfo({
-            code: DetectionCode.FACE_NOT_REAL,
-            message: screenResult.getMessage(),
-            screenConfidence: screenResult.confidenceScore
-          })
-          this.resetDetectionState()
-          this.scheduleNextDetection(this.options.detect_error_retry_delay)
-          return
-        }
-        this.detectionState.realness = !screenResult.isScreenCapture
-      }
-
       // 运动检测
       const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, face, faceBox)
+      if(!motionResult.isLively) {
+        this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
+          motionScore: motionResult.motionScore,
+          keypointVariance: motionResult.keypointVariance,
+          opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
+          eyeMotionScore: motionResult.eyeMotionScore,
+          mouthMotionScore: motionResult.mouthMotionScore,
+          motionType: motionResult.motionType,
+          details: motionResult.details
+        }, 'warn')
+        this.emitDetectorInfo({
+          code: DetectionCode.FACE_NOT_LIVE,
+          message: motionResult.getMessage(this.detectionState.motionDetector.getOptions().minMotionThreshold, this.detectionState.motionDetector.getOptions().minKeypointVariance),
+          motionScore: motionResult.motionScore,
+          keypointVariance: motionResult.keypointVariance,
+          motionType: motionResult.motionType
+        })
+        this.resetDetectionState()
+        return        
+      }
+      // 只有ready状态的检测器的success结果才可信
       if(this.detectionState.motionDetector.isReady()){
-        // 运动检测器已经准备就绪，其验证结果可信
-        if (!motionResult.isLively) {
-          this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
-            motionScore: motionResult.motionScore,
-            keypointVariance: motionResult.keypointVariance,
-            opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
-            eyeMotionScore: motionResult.eyeMotionScore,
-            mouthMotionScore: motionResult.mouthMotionScore,
-            motionType: motionResult.motionType,
-            details: motionResult.details
-          }, 'warn')
-          this.emitDetectorInfo({
-            code: DetectionCode.FACE_NOT_LIVE,
-            message: motionResult.getMessage(this.detectionState.motionDetector.getOptions().minMotionThreshold, this.detectionState.motionDetector.getOptions().minKeypointVariance),
-            motionScore: motionResult.motionScore,
-            keypointVariance: motionResult.keypointVariance,
-            motionType: motionResult.motionType
-          })
-          this.resetDetectionState()
-          this.scheduleNextDetection()
-          return
-        }
         this.detectionState.liveness = true
       }
 
@@ -815,14 +1007,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if (faceRatio <= this.options.collect_min_face_ratio!) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_SMALL, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
-        this.scheduleNextDetection()
         return
       }
 
       if (faceRatio >= this.options.collect_max_face_ratio!) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_LARGE, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
-        this.scheduleNextDetection()
         return
       }
 
@@ -835,7 +1025,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         if (frontal < this.options.collect_min_face_frontal) {
           this.emitDetectorInfo({ code: DetectionCode.FACE_NOT_FRONTAL, faceRatio: faceRatio, faceFrontal: frontal})
           this.emitDebug('detection', 'Face is not frontal to camera', { frontal: frontal.toFixed(4), minFrontal: this.options.collect_min_face_frontal! }, 'info')
-          this.scheduleNextDetection()
           return
         }
       }
@@ -845,7 +1034,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
         this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.options.collect_min_image_quality }, 'info')
-        this.scheduleNextDetection()
         return
       }
 
@@ -860,7 +1048,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       // 采集阶段，采集当前帧图像，记录采集次数, 达到指定次数后进入验证阶段
       if (this.detectionState.period === DetectionPeriod.COLLECT) {
-        this.handleCollectPhase(qualityResult.score, faceBox)
+        this.handleCollectPhase(bgrFrame, qualityResult.score, faceBox)
       }
 
       if (this.detectionState.isReadyToVerify(this.options.collect_min_collect_count)) {
@@ -879,9 +1067,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       if (this.detectionState.period === DetectionPeriod.VERIFY) {
         this.handleVerifyPhase(gestures)
-      } else {
-        // 采集阶段，继续调度下一次检测
-        this.scheduleNextDetection()
       }
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
@@ -892,7 +1077,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         name: errorInfo.name,
         cause: errorInfo.cause
       }, 'error')
-      this.scheduleNextDetection()
     }
   }
 
@@ -907,8 +1091,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Handle collect phase
    */
-  private handleCollectPhase(qualityScore: number, faceBox: Box): void {
-    this.collectHighQualityImage(qualityScore, faceBox)
+  private handleCollectPhase(bgrFrame: any, qualityScore: number, faceBox: Box): void {
+    this.collectHighQualityImage(bgrFrame, qualityScore, faceBox)
   }
 
   /**
@@ -925,14 +1109,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.stopDetection(false)
         return
       }
-      this.scheduleNextDetection()
       return
     }
 
     // Check if action detected
     const detected = this.detectAction(this.detectionState.currentAction, gestures)
     if (!detected) {
-      this.scheduleNextDetection()
       return
     }
 
@@ -961,7 +1143,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.stopDetection(false)
       return
     }
-    this.scheduleNextDetection()
   }
 
   /**
@@ -978,11 +1159,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.emitDebug('detection', 'Multiple or no faces detected, resetting detection state', { faceCount })
       this.resetDetectionState()
     }
-
-    this.scheduleNextDetection()
   }
 
-  private collectHighQualityImage(frameQuality: number, faceBox: Box): void{
+  private collectHighQualityImage(bgrFrame: any, frameQuality: number, faceBox: Box): void{
     if (this.detectionState.period !== DetectionPeriod.COLLECT){
       return
     }
@@ -992,12 +1171,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     try {
-      const frameImageData = this.captureFrame()
+      const frameImageData = matToBase64Jpeg(this.cv, bgrFrame)
       if (!frameImageData) {
         this.emitDebug('detection', 'Failed to capture current frame image', { frameQuality, bestQualityScore: this.detectionState.bestQualityScore }, 'warn')
         return
       }
-      const faceImageData = this.captureFrame(faceBox)
+      const faceMat = bgrFrame.roi(new this.cv.Rect(faceBox[0], faceBox[1], faceBox[2], faceBox[3]))
+      const faceImageData = matToBase64Jpeg(this.cv, faceMat)
+      faceMat.delete()
       if (!faceImageData) {
         this.emitDebug('detection', 'Failed to capture face image', { faceBox }, 'warn')
         return
@@ -1140,35 +1321,21 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       if (!this.videoElement) return null
       
-      // Use cached actual video stream resolution (obtained from getSettings)
-      // If cache is empty, try to get from video element's videoWidth/videoHeight
-      let videoWidth_actual = this.actualVideoWidth || this.videoElement.videoWidth 
-      let videoHeight_actual = this.actualVideoHeight || this.videoElement.videoHeight 
-      
-      this.actualVideoWidth = videoWidth_actual
-      this.actualVideoHeight = videoHeight_actual
-      
-      // Check again if values are valid
-      if (!videoWidth_actual || !videoHeight_actual) {
-        this.emitDebug('capture', 'invalid video size', { 
-          videoWidth_actual, 
-          videoHeight_actual, 
-          videoWidth: this.videoElement.videoWidth, 
-          videoHeight: this.videoElement.videoHeight,
-          width: this.videoElement.width,
-          height: this.videoElement.height
-        }, 'error')
-        return null
+      if(this.actualVideoWidth <= 0 || this.actualVideoHeight <= 0) {
+        this.actualVideoWidth = this.videoElement.videoWidth
+        this.actualVideoHeight = this.videoElement.videoHeight
+        this.cleanupMatPool()
+        this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
       }
-      
+
       // If cached canvas size does not match, recreate it
-      if (!this.frameCanvasElement || this.frameCanvasElement.width !== videoWidth_actual || this.frameCanvasElement.height !== videoHeight_actual) {
+      if (!this.frameCanvasElement || this.frameCanvasElement.width !== this.actualVideoWidth || this.frameCanvasElement.height !== this.actualVideoHeight) {
         this.clearFrameCanvas()
         this.frameCanvasElement = document.createElement('canvas')
-        this.frameCanvasElement.width = videoWidth_actual
-        this.frameCanvasElement.height = videoHeight_actual
+        this.frameCanvasElement.width = this.actualVideoWidth
+        this.frameCanvasElement.height = this.actualVideoHeight
         this.frameCanvasContext = this.frameCanvasElement.getContext('2d')
-        this.emitDebug('capture', 'Canvas created/resized', { width: videoWidth_actual, height: videoHeight_actual })
+        this.emitDebug('capture', 'Canvas created/resized', { width: this.actualVideoWidth, height: this.actualVideoHeight })
       }
       
       if (!this.frameCanvasContext) return null
@@ -1182,8 +1349,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return null
       }
       
-      this.frameCanvasContext.drawImage(this.videoElement, 0, 0, videoWidth_actual, videoHeight_actual)
-      this.emitDebug('capture', 'Frame drawn to canvas as ' + videoHeight_actual + 'x' + videoWidth_actual)
+      this.frameCanvasContext.drawImage(this.videoElement, 0, 0, this.actualVideoWidth, this.actualVideoHeight)
+      this.emitDebug('capture', 'Frame drawn to canvas as ' + this.actualVideoHeight + 'x' + this.actualVideoWidth)
       
       return this.frameCanvasElement
     } catch (e) {
@@ -1200,70 +1367,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.frameCanvasContext != null){
       this.frameCanvasContext.clearRect(0, 0, 0, 0)
       this.frameCanvasContext = null
-    }
-  }
-
-  private clearFaceCanvas(): void {
-    if(this.faceCanvasElement == null) return
-    this.faceCanvasElement.width = 0
-    this.faceCanvasElement.height = 0
-    this.faceCanvasElement = null
-    if (this.faceCanvasContext != null){
-      this.faceCanvasContext.clearRect(0, 0, 0, 0)
-      this.faceCanvasContext = null
-    }
-  }
-
-  /**
-   * 将 canvas 转换为 Base64 JPEG 图片数据
-   * @param {HTMLCanvasElement} canvas - 输入的 canvas
-   * @returns {string | null} Base64 格式的 JPEG 图片数据
-   */
-  private canvasToBase64(canvas: HTMLCanvasElement): string | null {
-    try {
-      const imageData = canvas.toDataURL('image/jpeg', 0.9)
-      this.emitDebug('capture', 'Image converted to Base64', { size: imageData.length })
-      return imageData
-    } catch (e) {
-      this.emitDebug('capture', 'Failed to convert to Base64', { error: (e as Error).message }, 'error')
-      return null
-    }
-  }
-
-  /**
-   * Capture current video frame (returns Base64)
-   * @param {Box} box - Face box
-   * @returns {string | null} Base64 encoded JPEG image data
-   */
-  private captureFrame(box?: Box): string | null {
-    if(!this.frameCanvasElement) {
-      this.emitDebug('capture', 'Frame canvas element is null, cannot capture frame', {}, 'error')
-      return null
-    }
-    if (!box) {
-      return this.canvasToBase64(this.frameCanvasElement)
-    }
-    try {
-      const x = box[0], y = box[1], width = box[2], height = box[3]
-      // If cached canvas size does not match, recreate it
-      if (!this.faceCanvasElement || this.faceCanvasElement.width !== width || this.faceCanvasElement.height !== height) {
-        this.clearFaceCanvas()
-        this.faceCanvasElement = document.createElement('canvas')
-        this.faceCanvasElement.width = width
-        this.faceCanvasElement.height = height
-        this.faceCanvasContext = this.faceCanvasElement.getContext('2d')
-      }
-      if(!this.faceCanvasContext) {
-        this.emitDebug('capture', 'Failed to get face canvas 2D context', { width, height }, 'error')
-        return null
-      }
-      this.faceCanvasElement.width = width
-      this.faceCanvasElement.height = height
-      this.faceCanvasContext.drawImage(this.frameCanvasElement, x, y, width, height, 0, 0, width, height)
-      return this.canvasToBase64(this.faceCanvasElement)
-    } catch (error) {
-      this.emitDebug('capture', 'Error during face frame capture', { box, error: (error as Error).message }, 'error')
-      return null
     }
   }
 }

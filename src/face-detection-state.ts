@@ -1,6 +1,7 @@
 import { DetectionPeriod, LivenessAction, LivenessActionStatus } from "./enums"
 import { MotionLivenessDetector } from "./motion-liveness-detector"
 import { ScreenCaptureDetector } from './screen-capture-detector'
+import { ScreenCornersContourDetector } from './screen-corners-contour-detector'
 import { ResolvedEngineOptions } from "./types"
 
 /**
@@ -22,6 +23,7 @@ export class DetectionState {
     liveness: boolean = false
     realness: boolean = false
     screenDetector: ScreenCaptureDetector | null = null
+    cornersContourDetector: ScreenCornersContourDetector | null = null
 
     constructor(options: Partial<DetectionState>) {
         Object.assign(this, options)
@@ -32,6 +34,7 @@ export class DetectionState {
 
         const savedMotionDetector = this.motionDetector
         const savedScreenDetector = this.screenDetector
+        const savedCornersContourDetector = this.cornersContourDetector
 
         savedMotionDetector?.reset()
 
@@ -39,6 +42,7 @@ export class DetectionState {
 
         this.motionDetector = savedMotionDetector
         this.screenDetector = savedScreenDetector
+        this.cornersContourDetector = savedCornersContourDetector
     }
 
     updateVideoFPS(fps: number): void {
@@ -89,6 +93,7 @@ export class DetectionState {
     setCVInstance(cvInstance: any): void {
         this.motionDetector?.setCVInstance(cvInstance)
         this.screenDetector?.setCVInstance(cvInstance)
+        this.cornersContourDetector?.setCVInstance(cvInstance)
     }
 
     /**
@@ -104,9 +109,10 @@ export class DetectionState {
 
  // <-- Add this import at the top if ResolvedEngineOptions is defined in types.ts
 
-export function createDetectionState(options: ResolvedEngineOptions, fps: number): DetectionState {
+export function createDetectionState(fps: number, strictPhotoDetection: boolean): DetectionState {
     const detectionState = new DetectionState({})
-    detectionState.motionDetector = new MotionLivenessDetector(options.motion_liveness_strict_photo_detection)
+    detectionState.motionDetector = new MotionLivenessDetector(strictPhotoDetection)
     detectionState.screenDetector = new ScreenCaptureDetector(fps)
+    detectionState.cornersContourDetector = new ScreenCornersContourDetector()
     return detectionState
 }
