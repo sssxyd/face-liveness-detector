@@ -65,6 +65,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private actualVideoWidth: number = 0
   private actualVideoHeight: number = 0
 
+  // 竞态条件控制：防止detect()并发执行
+  private isDetectingFrameActive: boolean = false
+
   // Frame-based detection scheduling
   private frameIndex: number = 0
   private lastDetectionFrameIndex: number = 0
@@ -148,13 +151,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   updateOptions(options?: Partial<FaceDetectionEngineOptions>): void {
-    if(this.engineState == EngineState.DETECTING){
+    // 如果正在检测，先停止检测
+    const wasDetecting = this.engineState === EngineState.DETECTING
+    if (wasDetecting) {
       this.stopDetection(false)
     }
+    
     this.options = mergeOptions(options)
     this.adjustDetectFrameDelay()
     this.detectionState = createDetectionState(this.videoFPS, this.options.motion_liveness_strict_photo_detection)
     this.detectionState.setCVInstance(this.cv)
+    
+    this.emitDebug('config', 'Engine options updated', { wasDetecting }, 'info')
   }
 
   getEngineState(): EngineState {
@@ -547,6 +555,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.videoElement.srcObject = null
     }
 
+    // 确保检测帧标志被清除
+    this.isDetectingFrameActive = false
+
     this.emitDebug('detection', 'Detection stopped', { success })
   }
 
@@ -578,6 +589,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     // 清理Canvas
     this.clearFrameCanvas()
+    
+    // 确保检测帧标志被清除
+    this.isDetectingFrameActive = false
   }
 
   private updateVideoFPS(fps: number): void {
@@ -797,6 +811,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Performs face detection only if enough time has passed since the last detection
    */
   private async detect(): Promise<void> {
+    // 防止并发调用：如果已有检测帧在处理中，则跳过
+    if (this.isDetectingFrameActive) {
+      return
+    }
+
     if (this.engineState !== EngineState.DETECTING || !this.videoElement || !this.human) {
       return
     }
@@ -805,6 +824,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       return
     }
+
+    // 设置检测帧活跃标志
+    this.isDetectingFrameActive = true
     
     // Increment frame counter for frame-based scheduling
     this.frameIndex++
@@ -832,14 +854,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       
       // 当前帧灰度图片 - 使用优化的转换方法
       const grayConversionStartTime = performance.now()
-      if (!this.matPool?.gray) {
-        const grayMat = new cv.Mat()
-        cv.cvtColor(bgrFrame, grayMat, cv.COLOR_BGR2GRAY)
-        grayFrame = grayMat
-      } else {
+      if (this.matPool?.gray) {
         // 优化方案：使用预分配的灰度Mat，复用内存
         this.cv.cvtColor(bgrFrame, this.matPool.gray, this.cv.COLOR_BGR2GRAY)
         grayFrame = this.matPool.gray
+      } else {
+        // 降级方案：创建临时灰度Mat（应该不会执行到这里）
+        grayFrame = new this.cv.Mat()
+        this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
       }
       const grayConversionTime = performance.now() - grayConversionStartTime
       
@@ -953,13 +975,24 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }, 'error')
     }
     finally{
-      // 只删除非池化的Mat对象
-      if(bgrFrame && bgrFrame !== this.matPool?.bgr){
-        bgrFrame.delete()
+      // 清理非池化的Mat对象
+      try {
+        if(bgrFrame && bgrFrame !== this.matPool?.bgr){
+          bgrFrame.delete()
+          bgrFrame = null
+        }
+        if(grayFrame && grayFrame !== this.matPool?.gray){
+          grayFrame.delete()
+          grayFrame = null
+        }
+      } catch (cleanupError) {
+        this.emitDebug('detection', 'Error during Mat cleanup', {
+          error: (cleanupError as Error).message
+        }, 'warn')
       }
-      if(grayFrame && grayFrame !== this.matPool?.gray){
-        grayFrame.delete()
-      }
+      
+      // 清除检测帧活跃标志
+      this.isDetectingFrameActive = false
     }
   }
 
@@ -1275,7 +1308,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   private collectHighQualityImage(bgrFrame: any, frameQuality: number, faceBox: Box): void{
-    if (this.detectionState.period !== DetectionPeriod.COLLECT){
+    // 检查期间周期不变（防止竞态条件）
+    const currentPeriod = this.detectionState.period
+    if (currentPeriod !== DetectionPeriod.COLLECT){
       return
     }
     if (frameQuality <= this.detectionState.bestQualityScore){
@@ -1284,6 +1319,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     try {
+      // 再次检查周期确保一致性
+      if (this.detectionState.period !== currentPeriod) {
+        return
+      }
+      
       const frameImageData = matToBase64Jpeg(this.cv, bgrFrame)
       if (!frameImageData) {
         this.emitDebug('detection', 'Failed to capture current frame image', { frameQuality, bestQualityScore: this.detectionState.bestQualityScore }, 'warn')
@@ -1296,10 +1336,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.emitDebug('detection', 'Failed to capture face image', { faceBox }, 'warn')
         return
       }
-      this.detectionState.collectCount++
-      this.detectionState.bestQualityScore = frameQuality
-      this.detectionState.bestFrameImage = frameImageData
-      this.detectionState.bestFaceImage = faceImageData
+      
+      // 最后检查周期，确保收集的图像与当前周期匹配
+      if (this.detectionState.period === currentPeriod) {
+        this.detectionState.collectCount++
+        this.detectionState.bestQualityScore = frameQuality
+        this.detectionState.bestFrameImage = frameImageData
+        this.detectionState.bestFaceImage = faceImageData
+      }
     } catch (error) {
       this.emitDebug('detection', 'Error during image collection', { error: (error as Error).message }, 'error')
     }
