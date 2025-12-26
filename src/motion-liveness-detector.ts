@@ -287,13 +287,17 @@ export class MotionLivenessDetector {
         motionConsistency
       )
 
+      // 计算人脸区域变化率（用于检测呼吸）
+      const faceAreaChangeRate = this.calculateFaceAreaChangeRate()
+
       // 确定活体性（加入额外检查）
-      const isLively = this.determineLiveness(
-        motionScore,
+      const isLively = this.determineLiveness(        
         keypointVariance,
         motionType,
         opticalFlowResult,
-        motionConsistency
+        eyeMotionScore,
+        mouthMotionScore,
+        faceAreaChangeRate
       )
 
       return new MotionDetectionResult(
@@ -493,6 +497,11 @@ export class MotionLivenessDetector {
   /**
    * 计算光流幅度（需要 OpenCV）
    * 检测帧之间的像素运动
+   * 
+   * 针对5帧短视频优化的参数：
+   * - pyr_scale: 0.8（更陡峭的金字塔，保留细节）
+   * - levels: 2（减少层级数，适合小尺寸视频）
+   * - winsize: 7（更小的窗口，捕捉微小运动）
    */
   private analyzeOpticalFlow(): number {
     if (!this.cv || this.frameBuffer.length < 2 || this.frameWidth === 0 || this.frameHeight === 0) {
@@ -514,7 +523,13 @@ export class MotionLivenessDetector {
         prevMat,
         currMat,
         flow,
-        0.5, 3, 15, 3, 5, 1.2, 0
+        0.8,  // pyr_scale: 更陡峭的金字塔
+        2,    // levels: 减少层级数
+        7,    // winsize: 更小的窗口
+        3,    // iterations
+        5,    // polyN
+        1.2,  // polySigma
+        0     // flags
       )
 
       const magnitude = this.calculateFlowMagnitude(flow)
@@ -532,31 +547,12 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 将 canvas 转换为 OpenCV Mat，支持可选的灰度转换
-   */
-  private canvasToMat(canvas: HTMLCanvasElement, type?: 'gray'): any {
-    if (!this.cv) return null
-
-    try {
-      const mat = this.cv.imread(canvas)
-      if (type === 'gray') {
-        const gray = new this.cv.Mat()
-        this.cv.cvtColor(mat, gray, this.cv.COLOR_RGBA2GRAY)
-        mat.delete()
-        return gray
-      }
-      return mat
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Canvas to Mat conversion failed:', error)
-      return null
-    }
-  }
-
-  /**
    * 计算光流的平均幅度
+   * 包含诊断日志用于调试
    */
   private calculateFlowMagnitude(flowMat: any): number {
     if (!flowMat || flowMat.empty()) {
+      console.debug('[MotionLivenessDetector] Flow matrix is empty')
       return 0
     }
 
@@ -564,6 +560,7 @@ export class MotionLivenessDetector {
       const flowData = new Float32Array(flowMat.data32F)
       let sumMagnitude = 0
       let count = 0
+      let maxMagnitude = 0
 
       // 处理光流向量（每个像素 2 个值：x 和 y 分量）
       for (let i = 0; i < flowData.length; i += 2) {
@@ -571,12 +568,25 @@ export class MotionLivenessDetector {
         const fy = flowData[i + 1]
         const mag = Math.sqrt(fx * fx + fy * fy)
         sumMagnitude += mag
+        maxMagnitude = Math.max(maxMagnitude, mag)
         count++
       }
 
-      // 归一化到 0-1 范围（最大预期光流约为 20 像素/帧）
+      // 计算平均光流
       const avgMagnitude = count > 0 ? sumMagnitude / count : 0
-      return Math.min(avgMagnitude / 20, 1)
+      // 归一化到 0-1 范围（最大预期光流约为 10 像素/帧，针对5帧优化）
+      const normalizedMagnitude = Math.min(avgMagnitude / 10, 1)
+
+      // 诊断日志
+      console.debug('[MotionLivenessDetector] Optical flow stats:', {
+        pixelCount: count,
+        sumMagnitude: sumMagnitude.toFixed(2),
+        avgMagnitude: avgMagnitude.toFixed(4),
+        maxMagnitude: maxMagnitude.toFixed(4),
+        normalizedResult: normalizedMagnitude.toFixed(4)
+      })
+
+      return normalizedMagnitude
     } catch (error) {
       console.warn('[MotionLivenessDetector] Flow magnitude calculation failed:', error)
       return 0
@@ -769,6 +779,35 @@ export class MotionLivenessDetector {
   }
 
   /**
+   * 计算面部中心（所有关键点的平均位置）
+   */
+  private calculateFaceCenter(landmarks: any[][]): number[] | null {
+    if (!landmarks || landmarks.length === 0) {
+      return null
+    }
+
+    try {
+      let sumX = 0
+      let sumY = 0
+      let validPoints = 0
+
+      for (const point of landmarks) {
+        if (point && point.length >= 2) {
+          sumX += point[0]
+          sumY += point[1]
+          validPoints++
+        }
+      }
+
+      if (validPoints === 0) return null
+
+      return [sumX / validPoints, sumY / validPoints]
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
    * 计算两个点之间的距离
    */
   private pointDistance(p1: any[], p2: any[]): number {
@@ -816,6 +855,35 @@ export class MotionLivenessDetector {
    */
   private calculateFaceAreaVariance(): number {
     return this.calculateVariance(this.faceAreaHistory)
+  }
+
+  /**
+   * 计算人脸区域的变化率 - 用于检测呼吸或其他微妙运动
+   * 活体在呼吸或说话时，面部区域会有微小的周期性变化
+   * 照片：变化很小或波动随机
+   */
+  private calculateFaceAreaChangeRate(): number {
+    if (this.faceAreaHistory.length < 2) {
+      return 0
+    }
+
+    const areas = this.faceAreaHistory
+    const changes: number[] = []
+
+    // 计算相邻帧之间的面积变化率
+    for (let i = 1; i < areas.length; i++) {
+      if (areas[i - 1] === 0) continue
+      const changeRate = Math.abs((areas[i] - areas[i - 1]) / areas[i - 1])
+      changes.push(changeRate)
+    }
+
+    if (changes.length === 0) {
+      return 0
+    }
+
+    // 返回平均变化率（转换为百分比形式，范围 0-1）
+    const avgChangeRate = changes.reduce((a, b) => a + b, 0) / changes.length
+    return Math.min(avgChangeRate * 100, 1)
   }
 
   /**
@@ -909,89 +977,119 @@ export class MotionLivenessDetector {
 
   /**
    * 根据运动分析确定面部是否活跃
-   * 修复：改进对真实面部运动的识别，减少误判
+   * 【针对5帧场景优化】：改为"多数票"制，使用6个独立指标
    * 
-   * 策略：
-   * - 数据不足（frameBuffer < bufferSize）时：采用保守策略，只有绝对确定是照片才判定为非活体
-   * - 数据充足（frameBuffer >= bufferSize）时：执行完整检查，较为严格
+   * 6个检测指标（互相独立）：
+   * 1. 关键点变化 - 照片无法改变关键点位置
+   * 2. 光流幅度 - 照片产生的光流极低
+   * 3. 运动类型 - 照片只能是'none'
+   * 4. 眼睛运动（眨眼）- 照片眼睛无法眨动
+   * 5. 嘴巴运动 - 照片嘴巴完全静止
+   * 6. 面部区域变化 - 照片无法产生呼吸迹象
+   * 
+   * 判决规则：
+   * - 数据充足（>= 5帧）：需要至少2个指标支持才判定为活体
+   * - 数据不足（< 5帧）：需要至少3个指标支持
    */
   private determineLiveness(
-    motionScore: number,
     keypointVariance: number,
     motionType: MotionType,
     opticalFlow: number,
-    motionConsistency: number
+    eyeMotionScore: number,
+    mouthMotionScore: number,
+    faceAreaChangeRate: number
   ): boolean {
-    // 照片特征：
-    // - 运动评分几乎为零 (< 0.15)
-    // - 关键点方差很低 (< 0.02)
-    // - 光流几乎为零 (< 0.08) ← 最明显的照片特征
-    // - 运动类型 = 'none'
+    // 【改进】：使用"多数票"制而非串联AND逻辑
+    // 这样可以识别不同类型的真实运动
+    // - 头部旋转：关键点变化明显，光流可能不足
+    // - 说话/微笑：嘴巴运动明显，整体光流不足
+    // - 眨眼：眼睛运动明显
+    // - 呼吸：面部区域规律变化
+    // - 眨眼+头动：多个弱指标组合
 
-    // 数据不足时的保守策略：只有绝对确定才判定为非活体
+    let livelyVotes = 0
     const isDataSufficient = this.frameBuffer.length >= this.config.frameBufferSize
-    
-    if (!isDataSufficient) {
-      // 保守策略：只有最强的照片特征才能判定为非活体
-      // 只检查最可靠的指标
-      
-      // 指标1：光流 - 照片无法产生光流，这是最确定的指标
-      // 只有光流极低且运动类型为'none'，才考虑是照片
-      if (opticalFlow < this.config.minOpticalFlowThreshold * 0.5 && motionType === 'none') {
-        // 双重确认：光流极低且没有运动类型
-        return false
+    const requiredVotes = isDataSufficient ? 2 : 3  // 数据不足时更严格
+
+    // 指标1：关键点变化 + 光流一致性
+    // 防御：照片旋转也会改变关键点位置，但光流会极低
+    // 真实旋转：关键点变化 + 有意义的光流
+    // 照片旋转：关键点变化 + 极低光流（< 0.02）
+    if (keypointVariance > 0.01 && opticalFlow > 0.02) {
+      // 关键点变化 + 中等光流 = 真实活体运动
+      livelyVotes++
+    }
+
+    // 指标2：光流幅度（照片的明显弱点）
+    // 照片几乎无法产生光流
+    if (opticalFlow > 0.03) {
+      livelyVotes++
+    }
+
+    // 指标3：运动类型 + 光流双重确认
+    // 防御：照片旋转会被检测为'rotation'，但光流极低
+    // 活体rotation：运动类型是rotation + 有意义的光流
+    // 照片rotation：运动类型是rotation + 极低光流
+    if (motionType !== 'none' && opticalFlow > 0.02) {
+      // 有明确的运动类型 + 足够的光流 = 活体
+      livelyVotes++
+    }
+
+    // 指标4：眼睛运动（眨眼）
+    // 照片的眼睛无法眨动，这是活体的明确特征
+    // eyeMotionScore = Math.min(variance / 0.05, 1)
+    // 要检测到眨眼，需要 eyeMotionScore > 0.5
+    if (eyeMotionScore > 0.5) {
+      livelyVotes++
+    }
+
+    // 指标5：嘴巴运动
+    // 说话、微笑、张嘴等动作会改变嘴巴宽高比
+    // mouthMotionScore = Math.min(mouthMotionVariance / 0.02, 1)
+    // 要使 mouthMotionVariance > 0.01，需要 mouthMotionScore > 0.5
+    if (mouthMotionScore > 0.5) {
+      livelyVotes++
+    }
+
+    // 指标6：面部区域变化
+    // 呼吸或其他微妙运动会导致面部整体面积变化
+    if (faceAreaChangeRate > 0.005) {
+      livelyVotes++
+    }
+
+    // 投票结果
+    if (livelyVotes >= requiredVotes) {
+      return true  // 足够多的指标支持，判定为活体
+    }
+
+    // 投票不足，进行额外严格检查
+    // 如果所有指标都强烈指向照片，则确定判定为非活体
+    if (opticalFlow < 0.02 && motionType === 'none' && keypointVariance < 0.005 && eyeMotionScore < 0.25 && mouthMotionScore < 0.25) {
+      return false  // 绝对确定是照片
+    }
+
+    // 如果投票数 = 1 但该指标非常强劲，也可以接受
+    if (livelyVotes === 1) {
+      // 关键点变化非常明显 => 活体
+      if (keypointVariance > 0.05) {
+        return true
       }
-      
-      // 其他情况都假设是活体（保守判定）
-      return true
+      // 眼睛运动非常明显（明显的眨眼） => 活体
+      if (eyeMotionScore > 1.0) {
+        return true
+      }
+      // 嘴巴运动非常明显 => 活体
+      if (mouthMotionScore > 1.0) {
+        return true
+      }
+      // 光流明显 => 活体
+      if (opticalFlow > 0.08) {
+        return true
+      }
     }
 
-    // 数据充足时的完整检查（原有逻辑）
-    
-    // 检查1：必须有有意义的光流（照片的最弱点）
-    // 照片无法产生光流，这是最可靠的指标
-    if (opticalFlow < this.config.minOpticalFlowThreshold) {
-      return false
-    }
-
-    // 检查2：必须有有意义的运动评分
-    if (motionScore < this.config.minMotionThreshold) {
-      return false
-    }
-
-    // 检查3：必须有关键点变化（自然运动）
-    if (keypointVariance < this.config.minKeypointVariance) {
-      return false
-    }
-
-    // 检查4：运动类型 'none' 表示静态照片
-    if (motionType === 'none') {
-      return false
-    }
-
-    // 检查5（改进）：运动一致性检查 - 但对真实面部运动更宽容
-    // 如果两个指标都强劲，则宽松一致性检查
-    const strongMotionIndicators = keypointVariance >= 0.5 && opticalFlow >= 0.1
-    const minConsistencyThreshold = strongMotionIndicators 
-      ? this.config.motionConsistencyThreshold * 0.5  // 放宽到 0.15（原来 0.3）
-      : this.config.motionConsistencyThreshold
-    
-    if (motionConsistency < minConsistencyThreshold) {
-      return false
-    }
-
-    // 检查6：验证物理约束（防止突跳式微动）
-    // 真实运动加速度平滑，照片微动会有突跳
-    if (!this.validatePhysicalConstraints()) {
-      return false
-    }
-
-    // 严格模式：需要更高的光流阈值
-    if (this.config.strictPhotoDetection && opticalFlow < this.config.minOpticalFlowThreshold * 1.5) {
-      return false
-    }
-
-    return true
+    // 默认判定为非活体
+    return false
   }
 
   /**
@@ -1015,45 +1113,6 @@ export class MotionLivenessDetector {
         mouthAspectRatioVariance: 0
       }
     )
-  }
-
-  /**
-   * 验证运动的物理约束
-   * 照片微动的运动往往会违反物理约束（如速度跳跃）
-   * 真实面部运动应该表现出光滑的加速度和速度变化
-   */
-  private validatePhysicalConstraints(): boolean {
-    if (this.opticalFlowHistory.length < 3) {
-      return true // 数据不足，不检查
-    }
-
-    // 检查光流的加速度变化（应该平滑）
-    const flowAccelerations: number[] = []
-    for (let i = 2; i < this.opticalFlowHistory.length; i++) {
-      const prev = this.opticalFlowHistory[i - 2]
-      const curr = this.opticalFlowHistory[i - 1]
-      const next = this.opticalFlowHistory[i]
-      
-      // 计算加速度（二阶差分）
-      const accel = Math.abs((next - curr) - (curr - prev))
-      flowAccelerations.push(accel)
-    }
-
-    if (flowAccelerations.length === 0) return true
-
-    // 计算加速度的平均值和方差
-    const avgAccel = flowAccelerations.reduce((a, b) => a + b, 0) / flowAccelerations.length
-    const accelVariance = this.calculateVariance(flowAccelerations)
-
-    // 照片微动的特征：加速度变化很大（突跳）
-    // 真实运动的加速度变化应该相对稳定
-    const accelRatio = accelVariance / (avgAccel + 0.01)
-
-    // 阈值：如果加速度变化过大，说明可能是微动（突跳运动）
-    // 合理的值约为 0.5-2.0，超过 3.0 表示不自然
-    const maxAccelRatio = this.config.strictPhotoDetection ? 2.0 : 3.0
-    
-    return accelRatio < maxAccelRatio
   }
 
   /**
