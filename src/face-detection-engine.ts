@@ -1353,10 +1353,21 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 计算面部质量，不达标则跳过当前帧
-      const qualityResult = calcImageQuality(this.cv, grayFrame, faceBox, grayFrame.cols, grayFrame.rows, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
+      const qualityResult = calcImageQuality(this.cv, grayFrame, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
-        this.emitDebug('detection', 'Image quality does not meet requirements', { result: qualityResult, minImageQuality: this.options.collect_min_image_quality }, 'info')
+        this.emitDebug('detection', 'Image quality does not meet requirements', { 
+          result: qualityResult, 
+          faceBox: faceBox,
+          frameWidth: grayFrame.cols,
+          frameHeight: grayFrame.rows,
+          featuresUsed: this.options.collect_image_quality_features,
+          minImageQuality: this.options.collect_min_image_quality,
+          grayFrameSize: grayFrame?.cols && grayFrame?.rows ? `${grayFrame.cols}x${grayFrame.rows}` : 'unknown',
+          grayFrameType: grayFrame?.type?.() || 'unknown',
+          grayFrameChannels: grayFrame?.channels?.() || 'unknown',
+          grayFrameEmpty: !!grayFrame.empty?.()
+        }, 'info')
         return
       }
 

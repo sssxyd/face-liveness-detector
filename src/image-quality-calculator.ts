@@ -109,79 +109,16 @@ export interface ImageQualityResult {
 export function calcImageQuality(
   cv: any,
   grayFrame: any,
-  faceBox: Box,
-  imageWidth: number,
-  imageHeight: number,
   config: ImageQualityFeatures,
   threshold: number
 ): ImageQualityResult {
   const metrics: Record<string, QualityMetricResult> = {}
   const completenessReasons: string[] = []
   const blurReasons: string[] = []
-
-  // ===== 前置步骤：提取人脸ROI区域，避免重复ROI操作 =====
-  let faceBoundROI: any = null
-  const roiParams = validateAndCalculateROI(faceBox[0], faceBox[1], faceBox[2], faceBox[3], grayFrame)
   
-  if (!roiParams.valid) {
-    // 人脸区域无效，返回失败结果
-    return {
-      passed: false,
-      score: 0,
-      completenessReasons: ['人脸区域无效或超出图像边界'],
-      blurReasons: [],
-      metrics: {
-        completeness: {
-          name: '人脸完整度',
-          value: 0,
-          threshold: 0.8,
-          passed: false,
-          description: '人脸区域无效或超出图像边界'
-        },
-        laplacianVariance: {
-          name: '拉普拉斯方差',
-          value: 0,
-          threshold: config.min_laplacian_variance,
-          passed: false,
-          description: '人脸区域无效，无法进行清晰度检测'
-        },
-        gradientSharpness: {
-          name: '梯度清晰度',
-          value: 0,
-          threshold: config.min_gradient_sharpness,
-          passed: false,
-          description: '人脸区域无效，无法进行清晰度检测'
-        },
-        overallQuality: {
-          name: '综合图像质量',
-          value: 0,
-          threshold: threshold,
-          passed: false,
-          description: '人脸区域无效，无法进行质量检测'
-        }
-      }
-    }
-  }
-
   try {
-    faceBoundROI = grayFrame.roi(new cv.Rect(roiParams.x, roiParams.y, roiParams.width, roiParams.height))
-
-    // ===== 第一部分：完整度检测 =====
-    const completenessResult = checkFaceCompletenessInternal(
-      cv,
-      faceBoundROI,
-      faceBox,
-      roiParams.width,
-      roiParams.height,
-      config
-    )
-    metrics.completeness = completenessResult as any
-    if (!completenessResult.passed) {
-      completenessReasons.push(completenessResult.description)
-    }
-
     // ===== 第二部分：清晰度检测 =====
-    const blurResult = checkImageSharpness(cv, faceBoundROI, config)
+    const blurResult = checkImageSharpness(cv, grayFrame, config)
     metrics.laplacianVariance = blurResult.laplacianVariance
     metrics.gradientSharpness = blurResult.gradientSharpness
     if (!blurResult.laplacianVariance.passed) {
@@ -191,31 +128,18 @@ export function calcImageQuality(
       blurReasons.push(blurResult.gradientSharpness.description)
     }
 
-    // ===== 第三部分：综合评分 =====
-    // 加权：完整度 + 清晰度（使用可配置权重）
-    const completenessScore = Math.min(1, completenessResult.value)
-    const sharpnessScore = blurResult.overallScore
-    const overallScore = 
-      completenessScore * QUALITY_WEIGHTS.completeness + 
-      sharpnessScore * QUALITY_WEIGHTS.sharpness
-
     const overallMetric: QualityMetricResult = {
       name: '综合图像质量',
-      value: overallScore,
+      value: blurResult.overallScore,
       threshold: threshold,
-      passed: overallScore >= threshold,
-      description: `综合质量评分 ${(overallScore * 100).toFixed(1)}% (完整度: ${(completenessScore * 100).toFixed(0)}% | 清晰度: ${(sharpnessScore * 100).toFixed(0)}%)`
+      passed: blurResult.overallScore >= threshold,
+      description: `综合质量评分 ${(blurResult.overallScore * 100).toFixed(1)}%  | 清晰度: ${(blurResult.overallScore * 100).toFixed(0)}%)`
     }
     metrics.overallQuality = overallMetric
 
-    const passed = overallScore >= threshold
+    const passed = blurResult.overallScore >= threshold
 
     const suggestions: string[] = []
-    if (!completenessResult.passed) {
-      if (completenessResult.value < 0.5) {
-        suggestions.push('请调整摄像头角度或位置，确保整个人脸都在画面内')
-      }
-    }
     if (!blurResult.laplacianVariance.passed) {
       suggestions.push('图像边缘不清晰，请确保光线充足且摄像头对焦清楚')
     }
@@ -225,7 +149,7 @@ export function calcImageQuality(
 
     return {
       passed,
-      score: overallScore,
+      score: overallMetric.value,
       completenessReasons,
       blurReasons,
       metrics: metrics as any,
@@ -269,97 +193,7 @@ export function calcImageQuality(
         }
       }
     }
-  } finally {
-    if (faceBoundROI && faceBoundROI !== grayFrame) {
-      try {
-        faceBoundROI.delete()
-      } catch (e) {
-        // 忽略删除错误
-      }
-    }
   }
-}
-
-// ==================== 完整度检测 ====================
-
-/**
- * 完整度检测 - 内部函数
- * 
- * 注意：grayFrame 已经是ROI后的人脸区域，直接使用即可
- */
-function checkFaceCompletenessInternal(
-  cv: any,
-  grayFrame: any,
-  faceBox: Box,
-  faceBoxWidth: number,
-  faceBoxHeight: number,
-  config: ImageQualityFeatures
-): QualityMetricResult {
-  // 第一层：Human.js 边界检测 (80%)
-  // 注意：这里使用的是ROI后的坐标，需要相对位置计算
-  let humanScore = calculateHumanCompleteness(faceBox, faceBoxWidth, faceBoxHeight, config.require_full_face_in_bounds)
-
-  // 第二、三层：OpenCV 增强检测
-  let opencvContourScore = 1.0
-  let opencvSharpnessScore = 1.0
-
-  try {
-    opencvContourScore = detectFaceCompletenessOpenCVContour(cv, grayFrame)
-    opencvSharpnessScore = detectFaceCompletenessOpenCVSharpness(cv, grayFrame)
-  } catch (error) {
-    console.warn('[ImageQuality] OpenCV enhancement failed:', error)
-  }
-
-  // 组合评分：减少对 OpenCV 辅助检测的依赖
-  // Human.js 作为主要判据（权重提升到 80%），OpenCV 作为辅助增强（20%）
-  const completenessScore =
-    humanScore * QUALITY_WEIGHTS.human_detection +
-    Math.max(opencvContourScore, opencvSharpnessScore) * QUALITY_WEIGHTS.opencv_enhancement
-
-  return {
-    name: '人脸完整度',
-    value: completenessScore,
-    threshold: config.require_full_face_in_bounds ? 1.0 : 0.8,
-    passed: completenessScore >= (config.require_full_face_in_bounds ? 1.0 : 0.8),
-    description: `人脸完整度 ${(completenessScore * 100).toFixed(1)}% (Human: ${(humanScore * 100).toFixed(0)}% | Contour: ${(opencvContourScore * 100).toFixed(0)}% | Sharpness: ${(opencvSharpnessScore * 100).toFixed(0)}%)`
-  }
-}
-
-/**
- * Human.js 边界检测
- */
-function calculateHumanCompleteness(
-  faceBox: Box,
-  imageWidth: number,
-  imageHeight: number,
-  requireFullFaceInBounds: boolean
-): number {
-  if (!faceBox || faceBox.length < 4) {
-    return 0
-  }
-
-  const [x, y, width, height] = faceBox
-
-  // 计算人脸框在图片内的比例
-  const overlapX = Math.min(Math.max(x + width, 0), imageWidth) - Math.max(x, 0)
-  const overlapY = Math.min(Math.max(y + height, 0), imageHeight) - Math.max(y, 0)
-  const faceArea = width * height
-  const overlapArea = Math.max(0, overlapX) * Math.max(0, overlapY)
-  let completenessScore = faceArea > 0 ? overlapArea / faceArea : 0
-
-  if (requireFullFaceInBounds) {
-    const isFullyInBounds = x >= 0 && y >= 0 && x + width <= imageWidth && y + height <= imageHeight
-    if (!isFullyInBounds) {
-      // 改进：不是直接返回 0，而是按超出程度扣分
-      // 90% 以上在边界内可以接受
-      const minCompleteness = 0.9
-      if (completenessScore < minCompleteness) {
-        completenessScore = completenessScore * 0.5 // 超出较多时严重扣分
-      }
-    }
-  }
-
-  return completenessScore
 }
 
 /**
@@ -453,13 +287,6 @@ function checkImageSharpness(
   gradientSharpness: QualityMetricResult
   overallScore: number
 } {
-  // 📊 输入诊断信息
-  console.log('[ImageQuality] checkImageSharpness input:', {
-    matImageValid: !!grayFrame && !grayFrame.empty?.(),
-    matImageSize: grayFrame?.cols && grayFrame?.rows ? `${grayFrame.cols}x${grayFrame.rows}` : 'unknown',
-    matImageChannels: grayFrame?.channels?.() || 'unknown',
-    matImageType: grayFrame?.type?.() || 'unknown'
-  })
 
   try {
     // 方法 1：拉普拉斯方差
@@ -508,88 +335,38 @@ function checkImageSharpness(
  */
 function calculateLaplacianVariance(
   cv: any,
-  roi: any,
+  grayFrame: any,
   minThreshold: number
 ): QualityMetricResult {
+  let laplacian, mean, stddev
   try {
-    if (!cv) {
-      return {
-        name: '拉普拉斯方差',
-        value: 1,
-        threshold: minThreshold,
-        passed: true,
-        description: 'OpenCV 不可用'
-      }
-    }
+    laplacian = new cv.Mat()
+    cv.Laplacian(grayFrame, laplacian, cv.CV_64F)
 
-    // 调试信息：检查 ROI 有效性
-    const roiIsEmpty = roi.empty ? roi.empty() : (roi.empty?.() ?? true)
-    if (!roi || roiIsEmpty) {
-      console.warn('[ImageQuality] ROI is empty or invalid for Laplacian calculation', {
-        roiNull: !roi,
-        roiEmpty: roiIsEmpty,
-        roiSize: roi?.cols && roi?.rows ? `${roi.cols}x${roi.rows}` : 'unknown'
-      })
-      return {
-        name: '拉普拉斯方差',
-        value: 0,
-        threshold: minThreshold,
-        passed: false,
-        description: 'ROI 无效'
-      }
-    }
+    mean = new cv.Mat()
+    stddev = new cv.Mat()
+    cv.meanStdDev(laplacian, mean, stddev)
 
-    let gray = roi
-    const needsConversion = roi.channels && roi.channels() !== 1
-    if (needsConversion) {
-      gray = new cv.Mat()
-      cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY)
-    }
+    const variance = stddev.doubleAt(0, 0) ** 2
 
-    try {
-      const laplacian = new cv.Mat()
-      cv.Laplacian(gray, laplacian, cv.CV_64F)
+    laplacian.delete()
+    laplacian = null
+    mean.delete()
+    mean = null
+    stddev.delete()
+    stddev = null
 
-      const mean = new cv.Mat()
-      const stddev = new cv.Mat()
-      cv.meanStdDev(laplacian, mean, stddev)
+    const passed = variance >= minThreshold
 
-      const variance = stddev.doubleAt(0, 0) ** 2
-
-      // 调试信息
-      if (variance === 0) {
-        console.warn('[ImageQuality] Laplacian variance is 0', {
-          roiSize: roi.size ? `${roi.cols}x${roi.rows}` : 'unknown',
-          roiChannels: roi.channels ? roi.channels() : 'unknown',
-          laplacianEmpty: laplacian.empty?.(),
-          stddevValue: stddev.doubleAt(0, 0)
-        })
-      }
-
-      laplacian.delete()
-      mean.delete()
-      stddev.delete()
-
-      const passed = variance >= minThreshold
-
-      return {
-        name: '拉普拉斯方差',
-        value: variance,
-        threshold: minThreshold,
-        passed,
-        description: `拉普拉斯方差 ${variance.toFixed(1)} ${passed ? '✓' : '✗ 需 ≥' + minThreshold}`
-      }
-    } finally {
-      if (gray !== roi && needsConversion) {
-        gray.delete()
-      }
-    }
+    return {
+      name: '拉普拉斯方差',
+      value: variance,
+      threshold: minThreshold,
+      passed,
+      description: `拉普拉斯方差 ${variance.toFixed(1)} ${passed ? '✓' : '✗ 需 ≥' + minThreshold}`
+    }    
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
-    console.error('[ImageQuality] Laplacian calculation error:', errorMsg, {
-      roiValid: roi && !roi.empty?.(),
-      roiSize: roi?.cols && roi?.rows ? `${roi.cols}x${roi.rows}` : 'unknown'
-    })
     return {
       name: '拉普拉斯方差',
       value: 0,
@@ -597,6 +374,10 @@ function calculateLaplacianVariance(
       passed: false,
       description: `计算失败: ${errorMsg}`
     }
+  } finally {
+    if (laplacian) laplacian.delete()
+    if (mean) mean.delete()
+    if (stddev) stddev.delete()
   }
 }
 
@@ -605,44 +386,10 @@ function calculateLaplacianVariance(
  */
 function calculateGradientSharpness(
   cv: any,
-  roi: any,
+  grayFrame: any,
   minThreshold: number
 ): QualityMetricResult {
   try {
-    if (!cv) {
-      return {
-        name: '梯度清晰度',
-        value: 1,
-        threshold: minThreshold,
-        passed: true,
-        description: 'OpenCV 不可用'
-      }
-    }
-
-    // 调试信息：检查 ROI 有效性
-    const roiIsEmpty = roi.empty ? roi.empty() : (roi.empty?.() ?? true)
-    if (!roi || roiIsEmpty) {
-      console.warn('[ImageQuality] ROI is empty or invalid for Sobel calculation', {
-        roiNull: !roi,
-        roiEmpty: roiIsEmpty,
-        roiSize: roi?.cols && roi?.rows ? `${roi.cols}x${roi.rows}` : 'unknown'
-      })
-      return {
-        name: '梯度清晰度',
-        value: 0,
-        threshold: minThreshold,
-        passed: false,
-        description: 'ROI 无效'
-      }
-    }
-
-    let gray = roi
-    const needsConversion = roi.channels && roi.channels() !== 1
-    if (needsConversion) {
-      gray = new cv.Mat()
-      cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY)
-    }
-
     let gradX: any = null
     let gradY: any = null
     let gradMagnitude: any = null
@@ -651,8 +398,8 @@ function calculateGradientSharpness(
       gradX = new cv.Mat()
       gradY = new cv.Mat()
 
-      cv.Sobel(gray, gradX, cv[OPENCV_PARAMS.sobel_type], 1, 0, OPENCV_PARAMS.sobel_kernel_size)
-      cv.Sobel(gray, gradY, cv[OPENCV_PARAMS.sobel_type], 0, 1, OPENCV_PARAMS.sobel_kernel_size)
+      cv.Sobel(grayFrame, gradX, cv[OPENCV_PARAMS.sobel_type], 1, 0, OPENCV_PARAMS.sobel_kernel_size)
+      cv.Sobel(grayFrame, gradY, cv[OPENCV_PARAMS.sobel_type], 0, 1, OPENCV_PARAMS.sobel_kernel_size)
 
       gradMagnitude = new cv.Mat()
       cv.magnitude(gradX, gradY, gradMagnitude)
@@ -661,17 +408,6 @@ function calculateGradientSharpness(
       const gradientEnergy = mean[0]
 
       const sharpnessScore = Math.min(1, gradientEnergy / OPENCV_PARAMS.gradient_energy_scale)
-
-      // 调试信息
-      if (sharpnessScore === 0) {
-        console.warn('[ImageQuality] Gradient sharpness is 0', {
-          roiSize: roi.size ? `${roi.cols}x${roi.rows}` : 'unknown',
-          gradientEnergy: gradientEnergy,
-          gradMagnitudeEmpty: gradMagnitude.empty?.(),
-          meanValue: mean
-        })
-      }
-
       const passed = sharpnessScore >= minThreshold
 
       return {
@@ -685,16 +421,9 @@ function calculateGradientSharpness(
       if (gradX) gradX.delete()
       if (gradY) gradY.delete()
       if (gradMagnitude) gradMagnitude.delete()
-      if (gray !== roi && needsConversion) {
-        gray.delete()
-      }
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
-    console.error('[ImageQuality] Gradient calculation error:', errorMsg, {
-      roiValid: roi && !roi.empty?.(),
-      roiSize: roi?.cols && roi?.rows ? `${roi.cols}x${roi.rows}` : 'unknown'
-    })
     return {
       name: '梯度清晰度',
       value: 0,
