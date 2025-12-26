@@ -638,6 +638,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.transitionEngineState(EngineState.READY, 'stopDetection()')
     }
 
+    this.cancelPendingDetection()
+
     const finishData: DetectorFinishEventData = {
       success: success,
       silentPassedCount: this.detectionState.collectCount,
@@ -648,8 +650,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       bestFaceImage: this.detectionState.bestFaceImage
     }
     this.emit('detector-finish' as any, finishData)
-
-    this.cancelPendingDetection()
 
     this.fullResetDetectionState()
 
@@ -988,6 +988,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.cleanupFrames(bgrFrame, grayFrame)
       // 清除检测帧活跃标志
       this.isDetectingFrameActive = false
+
+      // 调度下一帧的检测
+      if (this.engineState === EngineState.DETECTING) {
+        this.animationFrameId = requestAnimationFrame(() => {
+          this.detect()
+        })
+      }
     }
   }
 
