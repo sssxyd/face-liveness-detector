@@ -11,12 +11,12 @@ import { ImageQualityFeatures } from './types'
  * 质量检测的权重配置
  * 仅用于清晰度评估，权重之和应为 1.0
  * 
- * 注意：拉普拉斯方差是清晰度检测中最可靠的指标，作为主要评分方式
- * Sobel梯度作为辅助参考（权重较低）
+ * 注意：采用"两个指标都必须通过"的AND逻辑
+ * 因此权重应该平衡，体现两个指标的相对重要性而非绝对压制
  */
 const QUALITY_WEIGHTS = {
-  laplacian: 0.85,        // 拉普拉斯方差权重（主要指标，最可靠）
-  gradient: 0.15          // Sobel梯度权重（辅助参考）
+  laplacian: 0.6,         // 拉普拉斯方差权重（主要指标，最稳定）
+  gradient: 0.4           // Sobel梯度权重（辅助指标）
 } as const
 
 /**
@@ -28,8 +28,10 @@ const OPENCV_PARAMS = {
   sobel_kernel_size: 3,
   sobel_type: 'CV_64F',
   laplacian_type: 'CV_64F',
-  gradient_energy_scale: 50,         // 降低：更容易获得较高的梯度评分
-  laplacian_variance_scale: 150,
+  gradient_energy_scale: 50,
+  // 拉普拉斯方差归一化尺度：实际数据范围约45-70，设为70使中等清晰度(50)得分约0.71
+  // 这样与权重0.85匹配，避免分数过低
+  laplacian_variance_scale: 70,
   edge_ratio_reference: 0.3,
   edge_ratio_low: 0.05,
   edge_ratio_high: 0.7
@@ -189,8 +191,10 @@ export function calcImageQuality(
  * 检测图像清晰度（内部函数）
  * 
  * 使用混合算法：
- * 1. 拉普拉斯方差 (Laplacian Variance) - 60%
- * 2. Sobel 梯度清晰度 - 40%
+ * 1. 拉普拉斯方差 (Laplacian Variance) - 主要指标（必须通过）
+ * 2. Sobel 梯度清晰度 - 辅助指标（必须通过）
+ * 
+ * 判定逻辑：两个指标都通过才认为图像清晰，确保图像质量严格达标
  * 
  * @param cv - OpenCV.js 对象
  * @param grayFrame - 灰度图像 Mat 对象
@@ -214,12 +218,20 @@ function checkImageSharpness(
     // 方法 2：梯度清晰度
     const gradientResult = calculateGradientSharpness(cv, grayFrame, config.min_gradient_sharpness)
 
-    // 综合评分
-    const laplacianScore = Math.min(1, laplacianResult.value / OPENCV_PARAMS.laplacian_variance_scale)
-    const gradientScore = gradientResult.value
-    const overallScore = 
-      QUALITY_WEIGHTS.laplacian * laplacianScore + 
-      QUALITY_WEIGHTS.gradient * gradientScore
+    // 综合评分逻辑：两个指标都通过才认为图像清晰
+    // 这确保了被接受的图像质量严格达标，避免某个指标不足被另一个掩盖
+    let overallScore = 0
+    if (laplacianResult.passed && gradientResult.passed) {
+      // 两个指标都通过：综合评分为高分（取两个分数的加权平均作为参考）
+      const laplacianScore = Math.min(1, laplacianResult.value / OPENCV_PARAMS.laplacian_variance_scale)
+      const gradientScore = gradientResult.value
+      overallScore = QUALITY_WEIGHTS.laplacian * laplacianScore + QUALITY_WEIGHTS.gradient * gradientScore
+    } else {
+      // 任意指标不通过：综合评分为低分，但保留原始指标分数供参考
+      const laplacianScore = Math.min(1, laplacianResult.value / OPENCV_PARAMS.laplacian_variance_scale)
+      const gradientScore = gradientResult.value
+      overallScore = (QUALITY_WEIGHTS.laplacian * laplacianScore + QUALITY_WEIGHTS.gradient * gradientScore) * 0.5
+    }
 
     return {
       laplacianVariance: laplacianResult,
