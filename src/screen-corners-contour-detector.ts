@@ -125,25 +125,6 @@ export class ScreenCornersContourDetector {
   }
 
   /**
-   * Canny 边缘检测
-   */
-  private detectEdges(grayFrame: any): any {
-    const edges = new this.cv.Mat()
-    const blurred = new this.cv.Mat()
-    this.cv.GaussianBlur(grayFrame, blurred, new this.cv.Size(5, 5), 1.0)
-    this.cv.Canny(blurred, edges, this.config.edgeThreshold1, this.config.edgeThreshold2)
-    blurred.delete()
-    return edges
-  }
-
-  /**
-   * 计算非零像素数量
-   */
-  private countNonZeroPixels(mat: any): number {
-    return this.cv.countNonZero(mat)
-  }
-
-  /**
    * 轮廓检测 - 检测屏幕矩形边界
    */
   private detectContours(grayFrame: any): {
@@ -152,14 +133,13 @@ export class ScreenCornersContourDetector {
   } {
     const edges = new this.cv.Mat()
     const contours = new this.cv.MatVector()
-    const hierarchy = new this.cv.Mat()
 
     try {
       // 边缘检测
       this.cv.Canny(grayFrame, edges, this.config.edgeThreshold1, this.config.edgeThreshold2)
 
       // 检测轮廓
-      this.cv.findContours(edges, contours, hierarchy, this.cv.RETR_TREE, this.cv.CHAIN_APPROX_SIMPLE)
+      this.cv.findContours(edges, contours, new this.cv.Mat(), this.cv.RETR_TREE, this.cv.CHAIN_APPROX_SIMPLE)
 
       let screenLikeContours = 0
       let totalScreenBoundaryArea = 0
@@ -203,7 +183,6 @@ export class ScreenCornersContourDetector {
     } finally {
       edges.delete()
       contours.delete()
-      hierarchy.delete()
     }
   }
 
