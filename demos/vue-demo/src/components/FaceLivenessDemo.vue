@@ -397,6 +397,11 @@ function handleDetectionError(error: DetectorErrorEventData) {
 }
 
 function handleDebugLog(debug: DetectorDebugEventData) {
+  // 只在检测进行中或初始化时记录日志
+  if (!isDetecting.value && engine?.listenerCount?.('detector-debug') === 1) {
+    return
+  }
+  
   const timestamp = new Date().toLocaleTimeString()
   debugLogs.value.push({
     timestamp,
@@ -447,6 +452,9 @@ function stopDetection() {
     currentAction.value = null
     statusMessage.value = 'Detection stopped'
     borderColor.value = 'idle'
+    
+    // 关闭调试面板以避免竞态条件
+    showDebugPanel.value = false
   }
 }
 

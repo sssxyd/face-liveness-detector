@@ -641,7 +641,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @param success - Whether to display the best collected image
    */
   stopDetection(success: boolean): void {
-    this.emitDebug('detection', 'stopDetection called', { success })
+    this.emitDebug('detection', 'Detection stopped completely (START)', { success })
     
     // Step 1: Stop the animation frame immediately
     this.cancelPendingDetection()
@@ -722,7 +722,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // Step 8: Full cleanup of detection state
     this.fullResetDetectionState()
 
-    this.emitDebug('detection', 'Detection stopped completely', { success })
+    this.emitDebug('detection', 'Detection stopped completely (FINISH)', { success })
   }
 
   /**
