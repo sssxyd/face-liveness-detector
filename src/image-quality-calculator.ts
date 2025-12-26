@@ -1,15 +1,8 @@
 /**
- * 人脸图像质量检测模块 (统一版)
+ * 图像质量检测模块
  * 
- * 综合检测人脸图像的：
- * 1. 完整度检测 - 人脸是否完整在框内
- * 2. 模糊度检测 - 图像是否清晰
- * 3. 轮廓清晰度 - 轮廓的连通性和完整度
- * 
- * 使用混合检测策略，结合 Human.js 和 OpenCV.js 优势
  */
 
-import { Box } from '@vladmandic/human'
 import { ImageQualityFeatures } from './types'
 
 // ==================== 常量配置 ====================
@@ -17,10 +10,13 @@ import { ImageQualityFeatures } from './types'
 /**
  * 质量检测的权重配置
  * 仅用于清晰度评估，权重之和应为 1.0
+ * 
+ * 注意：拉普拉斯方差是清晰度检测中最可靠的指标，作为主要评分方式
+ * Sobel梯度作为辅助参考（权重较低）
  */
 const QUALITY_WEIGHTS = {
-  laplacian: 0.6,         // 拉普拉斯方差权重（边缘清晰度）
-  gradient: 0.4           // Sobel梯度权重（纹理梯度）
+  laplacian: 0.85,        // 拉普拉斯方差权重（主要指标，最可靠）
+  gradient: 0.15          // Sobel梯度权重（辅助参考）
 } as const
 
 /**
@@ -32,7 +28,7 @@ const OPENCV_PARAMS = {
   sobel_kernel_size: 3,
   sobel_type: 'CV_64F',
   laplacian_type: 'CV_64F',
-  gradient_energy_scale: 100,
+  gradient_energy_scale: 50,         // 降低：更容易获得较高的梯度评分
   laplacian_variance_scale: 150,
   edge_ratio_reference: 0.3,
   edge_ratio_low: 0.05,
@@ -301,6 +297,7 @@ function calculateLaplacianVariance(
 
 /**
  * 计算 Sobel 梯度清晰度
+ * 使用梯度幅度的标准差而非平均值，更能反映图像的纹理丰富度和清晰度
  */
 function calculateGradientSharpness(
   cv: any,
@@ -310,6 +307,8 @@ function calculateGradientSharpness(
   let gradX: any = null
   let gradY: any = null
   let gradMagnitude: any = null
+  let mean: any = null
+  let stddev: any = null
 
   try {
     gradX = new cv.Mat()
@@ -321,10 +320,14 @@ function calculateGradientSharpness(
     gradMagnitude = new cv.Mat()
     cv.magnitude(gradX, gradY, gradMagnitude)
 
-    const mean = cv.mean(gradMagnitude)
-    const gradientEnergy = mean[0]
-
-    const sharpnessScore = Math.min(1, gradientEnergy / OPENCV_PARAMS.gradient_energy_scale)
+    // 使用梯度的标准差作为清晰度指标（比平均值更能反映纹理复杂度）
+    mean = new cv.Mat()
+    stddev = new cv.Mat()
+    cv.meanStdDev(gradMagnitude, mean, stddev)
+    
+    // 标准差越大，梯度变化越剧烈，图像纹理越丰富，通常越清晰
+    const gradientVariance = stddev.doubleAt(0, 0)
+    const sharpnessScore = Math.min(1, gradientVariance / 50) // 标准差的归一化尺度
     const passed = sharpnessScore >= minThreshold
 
     return {
@@ -347,6 +350,8 @@ function calculateGradientSharpness(
     if (gradX) gradX.delete()
     if (gradY) gradY.delete()
     if (gradMagnitude) gradMagnitude.delete()
+    if (mean) mean.delete()
+    if (stddev) stddev.delete()
   }
 }
 
