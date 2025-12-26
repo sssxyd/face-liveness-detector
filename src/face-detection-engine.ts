@@ -646,9 +646,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // Step 1: Stop the animation frame immediately
     this.cancelPendingDetection()
     
-    // Step 2: Transition state
-    if (this.engineState === EngineState.DETECTING) {
-      this.transitionEngineState(EngineState.READY, 'stopDetection()')
+    // Step 2: Transition state - force transition to prevent detect() finally from rescheduling
+    // Use direct assignment instead of transitionEngineState to bypass validation
+    // This ensures no animationFrame gets scheduled after cancellation
+    const prevState = this.engineState
+    if (prevState === EngineState.DETECTING) {
+      this.engineState = EngineState.READY
+      this.emitDebug('state-management', 'State transitioned (forced stop)', {
+        from: prevState,
+        to: EngineState.READY,
+        context: 'stopDetection()'
+      }, 'info')
     }
 
     // Step 3: Prepare finish data (before clearing images)
@@ -996,7 +1004,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // 清除检测帧活跃标志
       this.isDetectingFrameActive = false
 
-      // 调度下一帧的检测
+      // 调度下一帧的检测（仅当引擎仍在检测状态时）
       if (this.engineState === EngineState.DETECTING) {
         this.animationFrameId = requestAnimationFrame(() => {
           this.detect()
