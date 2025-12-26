@@ -266,15 +266,25 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private fullResetDetectionState(): void {
     this.emitDebug('detection', 'Full reset: Resetting all detection resources')
-    this.detectionState.reset()
+    
+    // Reset detection state (includes clearing large image buffers)
+    try {
+      this.detectionState.reset()
+    } catch (error) {
+      this.emitDebug('detection', 'Error resetting detection state', { error: (error as Error).message }, 'warn')
+    }
     
     // Reset frame counters
     this.frameIndex = 0
     this.lastDetectionFrameIndex = 0
     this.lastScreenFeatureDetectionFrameIndex = 0
     
-    // Mat objects are created per-frame, no pool cleanup needed
-    this.clearFrameCanvas()
+    // Clear frame canvas (releases memory)
+    try {
+      this.clearFrameCanvas()
+    } catch (error) {
+      this.emitDebug('detection', 'Error clearing frame canvas', { error: (error as Error).message }, 'warn')
+    }
     
     // Ensure detection frame flag is cleared
     this.isDetectingFrameActive = false
@@ -467,7 +477,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     this.videoElement = videoElement
-    this.fullResetDetectionState()
+    // Reset frame counters and detection state, but keep engine initialized
+    // (fullResetDetectionState will be called in stopDetection on error)
+    this.partialResetDetectionState()
 
     try {
       this.emitDebug('video-setup', 'Requesting camera access...')
@@ -625,16 +637,22 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Stop face detection
+   * Performs comprehensive cleanup to prevent memory leaks and UI freezing
    * @param success - Whether to display the best collected image
    */
   stopDetection(success: boolean): void {
-    // Only transition if we're actually detecting
+    this.emitDebug('detection', 'stopDetection called', { success })
+    
+    // Step 1: Stop the animation frame immediately
+    this.cancelPendingDetection()
+    
+    // Step 2: Transition state
     if (this.engineState === EngineState.DETECTING) {
       this.transitionEngineState(EngineState.READY, 'stopDetection()')
     }
 
-    this.cancelPendingDetection()
-
+    // Step 3: Prepare finish data (before clearing images)
+    // Create a finishData object for emission (with image data)
     const finishData: DetectorFinishEventData = {
       success: success,
       silentPassedCount: this.detectionState.collectCount,
@@ -644,20 +662,59 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       bestFrameImage: this.detectionState.bestFrameImage,
       bestFaceImage: this.detectionState.bestFaceImage
     }
-    this.emit('detector-finish' as any, finishData)
 
-    this.fullResetDetectionState()
+    // Step 4: Emit finish event (emit immediately, before any cleanup)
+    try {
+      this.emit('detector-finish' as any, finishData)
+    } catch (error) {
+      this.emitDebug('detection', 'Error emitting detector-finish event', { error: (error as Error).message }, 'error')
+    }
+    
+    // Clear image references from the original finishData object immediately after emit
+    // to prevent external listeners from accessing stale data if they store the reference
+    finishData.bestFrameImage = undefined as any
+    finishData.bestFaceImage = undefined as any
 
+    // Step 5: Stop video playback
+    if (this.videoElement) {
+      try {
+        this.videoElement.pause()
+      } catch (error) {
+        this.emitDebug('detection', 'Error pausing video', { error: (error as Error).message }, 'warn')
+      }
+    }
+
+    // Step 6: Stop and release media stream tracks
     if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop())
+      try {
+        this.stream.getTracks().forEach(track => {
+          try {
+            track.stop()
+          } catch (trackError) {
+            this.emitDebug('detection', 'Error stopping media track', { error: (trackError as Error).message }, 'warn')
+          }
+        })
+      } catch (streamError) {
+        this.emitDebug('detection', 'Error processing media stream', { error: (streamError as Error).message }, 'warn')
+      }
       this.stream = null
     }
 
+    // Step 7: Disconnect video element from stream
     if (this.videoElement) {
-      this.videoElement.srcObject = null
+      try {
+        this.videoElement.srcObject = null
+        // Clear any inline styles that might be causing rendering issues
+        this.videoElement.style.display = 'none'
+      } catch (error) {
+        this.emitDebug('detection', 'Error clearing video element', { error: (error as Error).message }, 'warn')
+      }
     }
 
-    this.emitDebug('detection', 'Detection stopped', { success })
+    // Step 8: Full cleanup of detection state
+    this.fullResetDetectionState()
+
+    this.emitDebug('detection', 'Detection stopped completely', { success })
   }
 
   /**
@@ -866,6 +923,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     this.emitDebug('detection', '进入检测帧循环', {
       frameIndex: this.frameIndex,
+      frameInterval: this.getDetectionFrameInterval(),
       period: this.detectionState.period,
       engineState: this.engineState,
       videoReadyState: this.videoElement.readyState
@@ -877,13 +935,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // 确定是否需要捕获帧
       if (!this.shouldCaptureFrame()) {
-        this.emitDebug('detection', '不需要捕获本帧', {
-          frameIndex: this.frameIndex,
-          shouldPerformMainDetection: this.shouldPerformMainDetection(),
-          shouldPerformScreenCornersDetection: this.shouldPerformScreenCornersDetection(),
-          shouldPerformScreenFeatureDetection: this.shouldPerformScreenFeatureDetection(),
-          period: this.detectionState.period
-        }, 'info')
+        // this.emitDebug('detection', '不需要捕获本帧', {
+        //   frameIndex: this.frameIndex,
+        //   shouldPerformMainDetection: this.shouldPerformMainDetection(),
+        //   shouldPerformScreenCornersDetection: this.shouldPerformScreenCornersDetection(),
+        //   shouldPerformScreenFeatureDetection: this.shouldPerformScreenFeatureDetection(),
+        //   period: this.detectionState.period
+        // }, 'info')
         return
       }
       
@@ -1681,13 +1739,23 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   private clearFrameCanvas(): void {
-    if(this.frameCanvasElement == null) return
-    this.frameCanvasElement.width = 0
-    this.frameCanvasElement.height = 0
-    this.frameCanvasElement = null
-    if (this.frameCanvasContext != null){
-      this.frameCanvasContext.clearRect(0, 0, 0, 0)
+    if (this.frameCanvasContext) {
+      try {
+        this.frameCanvasContext.clearRect(0, 0, this.frameCanvasElement?.width ?? 0, this.frameCanvasElement?.height ?? 0)
+      } catch (error) {
+        this.emitDebug('detection', 'Error clearing canvas context', { error: (error as Error).message }, 'warn')
+      }
       this.frameCanvasContext = null
+    }
+
+    if (this.frameCanvasElement) {
+      try {
+        this.frameCanvasElement.width = 0
+        this.frameCanvasElement.height = 0
+      } catch (error) {
+        this.emitDebug('detection', 'Error resizing canvas', { error: (error as Error).message }, 'warn')
+      }
+      this.frameCanvasElement = null
     }
   }
 }
