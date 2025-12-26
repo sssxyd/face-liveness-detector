@@ -452,9 +452,6 @@ function stopDetection() {
     currentAction.value = null
     statusMessage.value = 'Detection stopped'
     borderColor.value = 'idle'
-    
-    // 关闭调试面板以避免竞态条件
-    showDebugPanel.value = false
   }
 }
 

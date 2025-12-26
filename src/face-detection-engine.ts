@@ -641,7 +641,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @param success - Whether to display the best collected image
    */
   stopDetection(success: boolean): void {
-    this.emitDebug('detection', 'Detection stopped completely (START)', { success })
+    this.emitDebug('detection', 'stopDetection called', { 
+      success, 
+      engineState: this.engineState,
+      isDetectingFrameActive: this.isDetectingFrameActive,
+      hasPendingFrame: this.animationFrameId !== null
+    }, 'info')
     
     // Step 1: Stop the animation frame immediately
     this.cancelPendingDetection()
@@ -686,7 +691,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // Step 5: Stop video playback
     if (this.videoElement) {
       try {
-        this.videoElement.pause()
+        // 检查是否已经暂停，避免重复操作
+        if (!this.videoElement.paused) {
+          this.videoElement.pause()
+        }
       } catch (error) {
         this.emitDebug('detection', 'Error pausing video', { error: (error as Error).message }, 'warn')
       }
@@ -697,9 +705,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       try {
         this.stream.getTracks().forEach(track => {
           try {
-            track.stop()
+            // 可在stop()前检查轨道状态
+            if (track.readyState === 'live') {
+              track.stop()
+            }
           } catch (trackError) {
-            this.emitDebug('detection', 'Error stopping media track', { error: (trackError as Error).message }, 'warn')
+            this.emitDebug('detection', 'Error stopping media track', { 
+              error: (trackError as Error).message,
+              trackKind: track.kind 
+            }, 'warn')
           }
         })
       } catch (streamError) {
@@ -712,8 +726,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (this.videoElement) {
       try {
         this.videoElement.srcObject = null
-        // Clear any inline styles that might be causing rendering issues
-        this.videoElement.style.display = 'none'
       } catch (error) {
         this.emitDebug('detection', 'Error clearing video element', { error: (error as Error).message }, 'warn')
       }
@@ -779,22 +791,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Get the frame interval for main face detection based on videoFPS and detect_frame_delay
+   * Uses Math.ceil to ensure actual interval >= configured delay
    * @returns Number of frames between detections
    */
   private getDetectionFrameInterval(): number {
-    // detect_frame_delay (ms) / frame duration (ms) = frame interval
-    return Math.max(1, Math.round(this.options.detect_frame_delay * this.videoFPS / 1000))
-  }
-
-  /**
-   * Get the frame interval for screen detection
-   * Screen detection runs at 0.5x the main detection interval to interleave frames
-   * @returns Number of frames between screen detections
-   */
-  private getScreenDetectionFrameInterval(): number {
-    const mainInterval = this.getDetectionFrameInterval()
-    // Run screen detection roughly every half interval to distribute load
-    return Math.max(1, Math.floor(mainInterval * 0.5))
+    // Ceil ensures actual delay never goes below configured detect_frame_delay
+    return Math.max(1, Math.ceil(this.options.detect_frame_delay * this.videoFPS / 1000))
   }
 
   /**
@@ -999,8 +1001,15 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         cause: errorInfo.cause
       }, 'error')
     } finally {
-      // 清理非池化的Mat对象
-      this.cleanupFrames(bgrFrame, grayFrame)
+      // 清理非池化的Mat对象（必须执行，即使发生错误也要释放内存）
+      try {
+        this.cleanupFrames(bgrFrame, grayFrame)
+      } catch (cleanupError) {
+        this.emitDebug('detection', 'Error in finally cleanup', {
+          error: (cleanupError as Error).message
+        }, 'error')
+      }
+      
       // 清除检测帧活跃标志
       this.isDetectingFrameActive = false
 
