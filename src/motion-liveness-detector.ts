@@ -1005,7 +1005,7 @@ export class MotionLivenessDetector {
       0,
       0,
       'none',
-      false,
+      true,
       {
         frameCount: this.frameBuffer.length,
         avgKeypointDistance: 0,

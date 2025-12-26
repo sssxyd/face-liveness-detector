@@ -1300,28 +1300,28 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // 运动检测
       const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, face, faceBox)
-      if(!motionResult.isLively) {
-        this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
-          motionScore: motionResult.motionScore,
-          keypointVariance: motionResult.keypointVariance,
-          opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
-          eyeMotionScore: motionResult.eyeMotionScore,
-          mouthMotionScore: motionResult.mouthMotionScore,
-          motionType: motionResult.motionType,
-          details: motionResult.details
-        }, 'warn')
-        this.emitDetectorInfo({
-          code: DetectionCode.FACE_NOT_LIVE,
-          message: motionResult.getMessage(this.detectionState.motionDetector.getOptions().minMotionThreshold, this.detectionState.motionDetector.getOptions().minKeypointVariance),
-          motionScore: motionResult.motionScore,
-          keypointVariance: motionResult.keypointVariance,
-          motionType: motionResult.motionType
-        })
-        this.partialResetDetectionState()
-        return        
-      }
-      // 只有ready状态的检测器的success结果才可信
+      // 只有ready状态的检测器的结果才可信
       if(this.detectionState.motionDetector.isReady()){
+        if(!motionResult.isLively) {
+          this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
+            motionScore: motionResult.motionScore,
+            keypointVariance: motionResult.keypointVariance,
+            opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
+            eyeMotionScore: motionResult.eyeMotionScore,
+            mouthMotionScore: motionResult.mouthMotionScore,
+            motionType: motionResult.motionType,
+            details: motionResult.details
+          }, 'warn')
+          this.emitDetectorInfo({
+            code: DetectionCode.FACE_NOT_LIVE,
+            message: motionResult.getMessage(this.detectionState.motionDetector.getOptions().minMotionThreshold, this.detectionState.motionDetector.getOptions().minKeypointVariance),
+            motionScore: motionResult.motionScore,
+            keypointVariance: motionResult.keypointVariance,
+            motionType: motionResult.motionType
+          })
+          this.partialResetDetectionState()
+          return        
+        }
         this.detectionState.liveness = true
       }
 
