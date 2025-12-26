@@ -16,15 +16,11 @@ import { ImageQualityFeatures } from './types'
 
 /**
  * 质量检测的权重配置
- * 可根据需要调整以改变各维度的重要性
+ * 仅用于清晰度评估，权重之和应为 1.0
  */
 const QUALITY_WEIGHTS = {
-  completeness: 0.4,      // 人脸完整度权重
-  sharpness: 0.6,         // 清晰度权重
-  human_detection: 0.8,   // Human.js检测权重
-  opencv_enhancement: 0.2, // OpenCV增强权重
-  laplacian: 0.6,         // 拉普拉斯方差权重
-  gradient: 0.4           // 梯度清晰度权重
+  laplacian: 0.6,         // 拉普拉斯方差权重（边缘清晰度）
+  gradient: 0.4           // Sobel梯度权重（纹理梯度）
 } as const
 
 /**
@@ -81,29 +77,23 @@ export interface ImageQualityResult {
 // ==================== 主入口函数 ====================
 
 /**
- * 计算图像质量（完整度 + 清晰度）
+ * 计算图像清晰度评分
  * 
- * 综合检测：
- * - 人脸完整度（Human.js边界 + OpenCV轮廓）
- * - 图像清晰度（拉普拉斯方差 + Sobel梯度）
+ * 综合检测图像的清晰度，使用两个指标：
+ * - 拉普拉斯方差 (60%)：检测边缘清晰程度
+ * - Sobel 梯度清晰度 (40%)：检测纹理梯度强度
  * 
  * @param cv - OpenCV.js 对象，用于执行图像处理操作
- * @param matImage - OpenCV Mat 对象，包含灰度图像数据
- * @param faceBox - 人脸边界框 [x, y, width, height]
- * @param imageWidth - 图片宽度（像素），用于边界检查和完整度计算
- * @param imageHeight - 图片高度（像素），用于边界检查和完整度计算
+ * @param grayFrame - OpenCV Mat 对象，包含灰度图像数据（已ROI裁剪）
  * @param config - 检测配置对象，包含：
- *   - require_full_face_in_bounds: 是否要求人脸完全在边界内
- *   - use_opencv_enhancement: 是否使用 OpenCV 增强检测
- *   - min_laplacian_variance: 拉普拉斯方差最小阈值
- *   - min_gradient_sharpness: 梯度清晰度最小阈值
+ *   - min_laplacian_variance: 拉普拉斯方差最小阈值（默认 40）
+ *   - min_gradient_sharpness: 梯度清晰度最小阈值（默认 0.15）
  * @param threshold - 综合质量评分阈值 (0-1)，大于等于此值判定为通过
  * @returns 综合质量检测结果，包含：
  *   - passed: 是否通过质量检测
  *   - score: 综合质量评分 (0-1)
- *   - completenessReasons: 完整度不通过原因列表
+ *   - metrics: 各维度详细指标（拉普拉斯方差、梯度清晰度、综合质量）
  *   - blurReasons: 清晰度不通过原因列表
- *   - metrics: 各维度详细指标（完整度、拉普拉斯方差、梯度清晰度、综合质量）
  *   - suggestions: 改进建议列表
  */
 export function calcImageQuality(
@@ -117,7 +107,6 @@ export function calcImageQuality(
   const blurReasons: string[] = []
   
   try {
-    // ===== 第二部分：清晰度检测 =====
     const blurResult = checkImageSharpness(cv, grayFrame, config)
     metrics.laplacianVariance = blurResult.laplacianVariance
     metrics.gradientSharpness = blurResult.gradientSharpness
@@ -196,76 +185,7 @@ export function calcImageQuality(
   }
 }
 
-/**
- * OpenCV 轮廓检测
- * 
- * 注意：grayFrame 已经是ROI后的人脸区域，直接处理
- */
-function detectFaceCompletenessOpenCVContour(
-  cv: any,
-  grayFrame: any
-): number {
-  let edges: any = null
-  try {
-    edges = new cv.Mat()
-    cv.Canny(grayFrame, edges, OPENCV_PARAMS.canny_threshold_low, OPENCV_PARAMS.canny_threshold_high)
 
-    const nonZeroCount = cv.countNonZero(edges)
-    const totalPixels = grayFrame.rows * grayFrame.cols
-
-    const edgeRatio = nonZeroCount / totalPixels
-    let completenessScore = calculateEdgeQualityScore(edgeRatio)
-
-    return completenessScore
-  } catch (error) {
-    console.warn('[ImageQuality] OpenCV contour detection failed:', error)
-    return 1.0
-  } finally {
-    if (edges) edges.delete()
-  }
-}
-
-/**
- * OpenCV 边界清晰度检测
- * 
- * 注意：grayFrame 已经是ROI后的人脸区域，直接处理
- */
-function detectFaceCompletenessOpenCVSharpness(
-  cv: any,
-  grayFrame: any
-): number {
-  if (!grayFrame || grayFrame.empty?.()) {
-    return 0
-  }
-
-  let sobelX: any = null
-  let sobelY: any = null
-  let gradient: any = null
-
-  try {
-    sobelX = new cv.Mat()
-    sobelY = new cv.Mat()
-    cv.Sobel(grayFrame, sobelX, cv.CV_32F, 1, 0, 3)
-    cv.Sobel(grayFrame, sobelY, cv.CV_32F, 0, 1, 3)
-
-    gradient = new cv.Mat()
-    cv.magnitude(sobelX, sobelY, gradient)
-
-    const mean = cv.mean(gradient)
-    const meanValue = mean[0]
-
-    const sharpnessScore = Math.min(1, meanValue / 100)
-
-    return sharpnessScore
-  } catch (error) {
-    console.warn('[ImageQuality] OpenCV sharpness detection failed:', error)
-    return 1.0
-  } finally {
-    if (sobelX) sobelX.delete()
-    if (sobelY) sobelY.delete()
-    if (gradient) gradient.delete()
-  }
-}
 
 // ==================== 清晰度检测 ====================
 
@@ -276,7 +196,10 @@ function detectFaceCompletenessOpenCVSharpness(
  * 1. 拉普拉斯方差 (Laplacian Variance) - 60%
  * 2. Sobel 梯度清晰度 - 40%
  * 
- * 注意：grayFrame 已经是ROI后的人脸区域，直接使用
+ * @param cv - OpenCV.js 对象
+ * @param grayFrame - 灰度图像 Mat 对象
+ * @param config - 清晰度检测配置
+ * @returns 各指标结果及综合评分
  */
 function checkImageSharpness(
   cv: any,
@@ -338,7 +261,10 @@ function calculateLaplacianVariance(
   grayFrame: any,
   minThreshold: number
 ): QualityMetricResult {
-  let laplacian, mean, stddev
+  let laplacian: any = null
+  let mean: any = null
+  let stddev: any = null
+
   try {
     laplacian = new cv.Mat()
     cv.Laplacian(grayFrame, laplacian, cv.CV_64F)
@@ -348,14 +274,6 @@ function calculateLaplacianVariance(
     cv.meanStdDev(laplacian, mean, stddev)
 
     const variance = stddev.doubleAt(0, 0) ** 2
-
-    laplacian.delete()
-    laplacian = null
-    mean.delete()
-    mean = null
-    stddev.delete()
-    stddev = null
-
     const passed = variance >= minThreshold
 
     return {
@@ -389,38 +307,32 @@ function calculateGradientSharpness(
   grayFrame: any,
   minThreshold: number
 ): QualityMetricResult {
+  let gradX: any = null
+  let gradY: any = null
+  let gradMagnitude: any = null
+
   try {
-    let gradX: any = null
-    let gradY: any = null
-    let gradMagnitude: any = null
+    gradX = new cv.Mat()
+    gradY = new cv.Mat()
 
-    try {
-      gradX = new cv.Mat()
-      gradY = new cv.Mat()
+    cv.Sobel(grayFrame, gradX, cv[OPENCV_PARAMS.sobel_type], 1, 0, OPENCV_PARAMS.sobel_kernel_size)
+    cv.Sobel(grayFrame, gradY, cv[OPENCV_PARAMS.sobel_type], 0, 1, OPENCV_PARAMS.sobel_kernel_size)
 
-      cv.Sobel(grayFrame, gradX, cv[OPENCV_PARAMS.sobel_type], 1, 0, OPENCV_PARAMS.sobel_kernel_size)
-      cv.Sobel(grayFrame, gradY, cv[OPENCV_PARAMS.sobel_type], 0, 1, OPENCV_PARAMS.sobel_kernel_size)
+    gradMagnitude = new cv.Mat()
+    cv.magnitude(gradX, gradY, gradMagnitude)
 
-      gradMagnitude = new cv.Mat()
-      cv.magnitude(gradX, gradY, gradMagnitude)
+    const mean = cv.mean(gradMagnitude)
+    const gradientEnergy = mean[0]
 
-      const mean = cv.mean(gradMagnitude)
-      const gradientEnergy = mean[0]
+    const sharpnessScore = Math.min(1, gradientEnergy / OPENCV_PARAMS.gradient_energy_scale)
+    const passed = sharpnessScore >= minThreshold
 
-      const sharpnessScore = Math.min(1, gradientEnergy / OPENCV_PARAMS.gradient_energy_scale)
-      const passed = sharpnessScore >= minThreshold
-
-      return {
-        name: '梯度清晰度',
-        value: sharpnessScore,
-        threshold: minThreshold,
-        passed,
-        description: `梯度清晰度 ${(sharpnessScore * 100).toFixed(1)}% ${passed ? '✓' : '✗ 需 ≥' + (minThreshold * 100).toFixed(0) + '%'}`
-      }
-    } finally {
-      if (gradX) gradX.delete()
-      if (gradY) gradY.delete()
-      if (gradMagnitude) gradMagnitude.delete()
+    return {
+      name: '梯度清晰度',
+      value: sharpnessScore,
+      threshold: minThreshold,
+      passed,
+      description: `梯度清晰度 ${(sharpnessScore * 100).toFixed(1)}% ${passed ? '✓' : '✗ 需 ≥' + (minThreshold * 100).toFixed(0) + '%'}`
     }
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error)
@@ -431,10 +343,12 @@ function calculateGradientSharpness(
       passed: false,
       description: `计算失败: ${errorMsg}`
     }
+  } finally {
+    if (gradX) gradX.delete()
+    if (gradY) gradY.delete()
+    if (gradMagnitude) gradMagnitude.delete()
   }
 }
-
-// ==================== 辅助函数 ====================
 
 /**
  * 验证并计算有效的ROI区域
@@ -468,28 +382,5 @@ function validateAndCalculateROI(
     y: y_int,
     width: w_int,
     height: h_int
-  }
-}
-
-/**
- * 计算边缘质量评分
- * 
- * 根据边缘像素占比计算质量分数，避免过多或过少的边缘
- * 
- * @param edgeRatio - 边缘像素比例 (0-1)
- * @returns 质量评分 (0-1)
- */
-function calculateEdgeQualityScore(edgeRatio: number): number {
-  const { edge_ratio_reference, edge_ratio_low, edge_ratio_high } = OPENCV_PARAMS
-
-  if (edgeRatio < edge_ratio_low) {
-    // 边缘过少：质量差
-    return 0
-  } else if (edgeRatio > edge_ratio_high) {
-    // 边缘过多：可能有噪声，质量下降
-    return Math.max(0.3, 1 - (edgeRatio - 0.3) / 2)
-  } else {
-    // 正常范围：线性评分
-    return Math.min(1, edgeRatio / edge_ratio_reference)
   }
 }

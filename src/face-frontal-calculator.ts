@@ -36,7 +36,7 @@ export interface AngleAnalysisResult {
  * @param {any} cv - OpenCV 实例（用于轮廓对称性检测）
  * @param {FaceResult} face - 人脸检测结果（包含 rotation 和 annotations 信息）
  * @param {Array<GestureResult>} gestures - 检测到的手势/表情数组（可选）
- * @param {any} matImage - OpenCV Mat 对象（图像数据，用于轮廓检测）
+ * @param {any} grayFrame - OpenCV Mat 对象（图像数据，用于轮廓检测）
  * @param {FaceFrontalFeatures} config - 正对度配置参数（包含角度阈值）
  * @returns {number} 正对度评分 (0-1)，1 表示完全正对
  * 
@@ -46,13 +46,13 @@ export interface AngleAnalysisResult {
  * if (score > 0.9) {
  *   console.log('人脸足够正对')
  * }
- * mat.delete()
+ * grayFrame.delete()
  */
 export function calcFaceFrontal(
   cv: any,
   face: FaceResult,
   gestures: Array<GestureResult>,
-  matImage: any,
+  grayFrame: any,
   config: FaceFrontalFeatures,
 ): number {
   try {
@@ -61,7 +61,7 @@ export function calcFaceFrontal(
     const featureSymmetry = featureResult.score
 
     // 层 2：轮廓对称性检测 (35%)
-    const contourResult = detectContourSymmetry(cv, face, matImage)
+    const contourResult = detectContourSymmetry(cv, face, grayFrame)
     const contourSymmetry = contourResult.score
 
     // 层 3：角度融合分析 (25%)
@@ -494,7 +494,7 @@ function calculateMouthSymmetry(landmarks: any): number {
 function detectContourSymmetry(
   cv: any,
   face: FaceResult,
-  matImage: any
+  grayFrame: any
 ): { score: number; contour: any } {
   try {
     if (!face.box) {
@@ -504,14 +504,14 @@ function detectContourSymmetry(
     const [x, y, w, h] = face.box
     const x_int = Math.max(0, Math.floor(x))
     const y_int = Math.max(0, Math.floor(y))
-    const w_int = Math.min(w, matImage.cols - x_int)
-    const h_int = Math.min(h, matImage.rows - y_int)
+    const w_int = Math.min(w, grayFrame.cols - x_int)
+    const h_int = Math.min(h, grayFrame.rows - y_int)
 
     if (w_int <= 0 || h_int <= 0) {
       return { score: 1.0, contour: undefined }
     }
 
-    const gray = matImage.roi(new cv.Rect(x_int, y_int, w_int, h_int))
+    const gray = grayFrame.roi(new cv.Rect(x_int, y_int, w_int, h_int))
 
     try {
       // Sobel 边缘检测

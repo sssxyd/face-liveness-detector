@@ -73,9 +73,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private lastDetectionFrameIndex: number = 0
   private lastScreenFeatureDetectionFrameIndex: number = 0
 
-  // Mat object pool for performance optimization
-  private matPool: { bgr: any; gray: any } | null = null
-  private shouldPreallocateMats: boolean = true
+  // Frame Mat objects created per-frame, cleaned up immediately after use
 
   private detectionState: DetectionState
 
@@ -275,9 +273,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     this.lastDetectionFrameIndex = 0
     this.lastScreenFeatureDetectionFrameIndex = 0
     
-    // Clean up Mat pool and canvas
-    this.cleanupMatPool()
-    this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+    // Mat objects are created per-frame, no pool cleanup needed
     this.clearFrameCanvas()
     
     // Ensure detection frame flag is cleared
@@ -607,8 +603,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.detect()
       })  
       
-      // Preallocate Mat objects for performance
-      this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+      // Mat objects will be created per-frame on demand
       
       this.emitDebug('video-setup', 'Detection started')
     } catch (error) {
@@ -827,52 +822,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * 预分配Mat对象以提高性能
-   * 避免每帧都创建新的Mat对象，而是复用同一对象
-   */
-  private preallocateMats(width: number, height: number): void {
-    if (!this.cv || !this.shouldPreallocateMats || width <= 0 || height <= 0) return
-    
-    try {
-      if (!this.matPool) {        
-        // 预分配BGR和Gray Mat对象
-        this.matPool = {
-          bgr: new this.cv.Mat(height, width, this.cv.CV_8UC3),
-          gray: new this.cv.Mat(height, width, this.cv.CV_8U)
-        }
-        
-        this.emitDebug('performance', 'Mat object pool preallocated', {
-          width,
-          height,
-          format: 'BGR and Grayscale'
-        })
-      }
-    } catch (error) {
-      this.emitDebug('performance', 'Failed to preallocate Mats', {
-        error: (error as Error).message
-      }, 'warn')
-      this.shouldPreallocateMats = false
-    }
-  }
-
-  /**
-   * 清理Mat对象池
-   */
-  private cleanupMatPool(): void {
-    if (this.matPool) {
-      try {
-        if (this.matPool.bgr) this.matPool.bgr.delete()
-        if (this.matPool.gray) this.matPool.gray.delete()
-      } catch (error) {
-        this.emitDebug('performance', 'Error cleaning up Mat pool', {
-          error: (error as Error).message
-        }, 'warn')
-      }
-      this.matPool = null
-    }
-  }
-
-  /**
    * Main detection loop
    * Called every frame via requestAnimationFrame
    * Orchestrates the detection pipeline with clear separation of concerns
@@ -1013,17 +962,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @returns {Object | null} Object with bgrFrame and grayFrame, or null if failed
    */
   private captureAndPrepareFrames(): { bgrFrame: any; grayFrame: any } | null {
-    // 采集当前帧，转为BGR mat
     const frameCapturStartTime = performance.now()
 
-    // 采集当前帧，转为gray mat
+    // Draw video frame to canvas
     const frameCanvas = this.drawVideoToCanvas()
     if (!frameCanvas) {
       this.emitDebug('detection', 'Failed to draw video frame to canvas', {}, 'warn')
       return null
     }
-    // 当前帧图片 - 使用预分配的Mat对象，避免频繁new
-    const bgrFrame = this.matPool?.bgr || drawCanvasToMat(this.cv, frameCanvas, false)
+    
+    // Convert canvas to BGR Mat (creates new Mat each time)
+    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
     if (!bgrFrame) {
       this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
       return null
@@ -1031,15 +980,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     const bgrFrameTime = performance.now() - frameCapturStartTime
     
-    // 当前帧灰度图片 - 使用优化的转换方法
+    // Convert BGR to grayscale (creates new Mat each time)
     const grayConversionStartTime = performance.now()
-    let grayFrame: any
-    if (this.matPool?.gray) {
-      // 优化方案：使用预分配的灰度Mat，复用内存
-      this.cv.cvtColor(bgrFrame, this.matPool.gray, this.cv.COLOR_BGR2GRAY)
-      grayFrame = this.matPool.gray
-    } else {
-      // 降级方案：创建临时灰度Mat
+    let grayFrame: any = new this.cv.Mat()
+    try {
+      this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
+    } catch (cvtError) {
+      this.emitDebug('detection', 'cvtColor failed, attempting with new Mat', { error: (cvtError as Error).message }, 'warn')
+      grayFrame.delete()
       grayFrame = new this.cv.Mat()
       this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
     }
@@ -1047,18 +995,18 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     if (!grayFrame) {
       this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
+      bgrFrame.delete()
       return null
     }
-    
-    // 记录帧采集性能信息
+
+    // Log performance metrics if slow
     const totalFrameProcessingTime = bgrFrameTime + grayConversionTime
     if (totalFrameProcessingTime > 50) {
       this.emitDebug('performance', 'Frame capture slow', {
         bgrFrameCapture: bgrFrameTime.toFixed(2) + 'ms',
         grayConversion: grayConversionTime.toFixed(2) + 'ms',
         total: totalFrameProcessingTime.toFixed(2) + 'ms',
-        videoResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`,
-        matPoolUsed: !!this.matPool?.gray
+        videoResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`
       }, 'warn')
     }
 
@@ -1158,10 +1106,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    */
   private cleanupFrames(bgrFrame: any, grayFrame: any): void {
     try {
-      if (bgrFrame && bgrFrame !== this.matPool?.bgr) {
+      if (bgrFrame) {
         bgrFrame.delete()
       }
-      if (grayFrame && grayFrame !== this.matPool?.gray) {
+      if (grayFrame) {
         grayFrame.delete()
       }
     } catch (cleanupError) {
@@ -1352,7 +1300,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }
       }
 
-      // 计算面部质量，不达标则跳过当前帧
       const qualityResult = calcImageQuality(this.cv, grayFrame, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
@@ -1660,34 +1607,60 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Draw video frame to canvas (internal use, not converted to Base64)
+   * Handles potential runtime resolution changes from camera stream
    * @returns {HTMLCanvasElement | null} Canvas after drawing, returns null if failed
    */
   private drawVideoToCanvas(): HTMLCanvasElement | null {
     try {
       if (!this.videoElement) return null
       
-      if(this.actualVideoWidth <= 0 || this.actualVideoHeight <= 0) {
-        this.actualVideoWidth = this.videoElement.videoWidth
-        this.actualVideoHeight = this.videoElement.videoHeight
-        this.cleanupMatPool()
-        this.preallocateMats(this.actualVideoWidth, this.actualVideoHeight)
+      // Check actual video resolution every frame (accounts for runtime changes)
+      const currentVideoWidth = this.videoElement.videoWidth
+      const currentVideoHeight = this.videoElement.videoHeight
+      
+      // Update cached resolution if initial or changed
+      if(this.actualVideoWidth <= 0 || this.actualVideoHeight <= 0 || 
+         this.actualVideoWidth !== currentVideoWidth || 
+         this.actualVideoHeight !== currentVideoHeight) {
+        
+        const resolutionChanged = this.actualVideoWidth > 0 && 
+                                  (this.actualVideoWidth !== currentVideoWidth || 
+                                   this.actualVideoHeight !== currentVideoHeight)
+        
+        if (resolutionChanged) {
+          this.emitDebug('capture', 'Video resolution changed at runtime', {
+            oldResolution: `${this.actualVideoWidth}x${this.actualVideoHeight}`,
+            newResolution: `${currentVideoWidth}x${currentVideoHeight}`
+          }, 'warn')
+        }
+        
+        this.actualVideoWidth = currentVideoWidth
+        this.actualVideoHeight = currentVideoHeight
+        this.clearFrameCanvas()
       }
 
-      // If cached canvas size does not match, recreate it
-      if (!this.frameCanvasElement || this.frameCanvasElement.width !== this.actualVideoWidth || this.frameCanvasElement.height !== this.actualVideoHeight) {
+      // If cached canvas size does not match actual resolution, recreate it
+      if (!this.frameCanvasElement || 
+          this.frameCanvasElement.width !== this.actualVideoWidth || 
+          this.frameCanvasElement.height !== this.actualVideoHeight) {
+        
         this.clearFrameCanvas()
         this.frameCanvasElement = document.createElement('canvas')
         this.frameCanvasElement.width = this.actualVideoWidth
         this.frameCanvasElement.height = this.actualVideoHeight
         this.frameCanvasContext = this.frameCanvasElement.getContext('2d')
-        this.emitDebug('capture', 'Canvas created/resized', { width: this.actualVideoWidth, height: this.actualVideoHeight })
+        this.emitDebug('capture', 'Canvas created/resized', { 
+          width: this.actualVideoWidth, 
+          height: this.actualVideoHeight,
+          timestamp: Date.now()
+        })
       }
       
       if (!this.frameCanvasContext) return null
       
       // Before attempting to draw, verify video drawability
       if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
-        this.emitDebug('capture', 'draw video image failed', { 
+        this.emitDebug('capture', 'Video not ready for frame capture', { 
           readyState: this.videoElement.readyState, 
           HAVE_CURRENT_DATA: HTMLMediaElement.HAVE_CURRENT_DATA 
         }, 'warn')
@@ -1695,7 +1668,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       
       this.frameCanvasContext.drawImage(this.videoElement, 0, 0, this.actualVideoWidth, this.actualVideoHeight)
-      this.emitDebug('capture', 'Frame drawn to canvas as ' + this.actualVideoHeight + 'x' + this.actualVideoWidth)
+      this.emitDebug('capture', 'Frame drawn to canvas', { 
+        width: this.actualVideoWidth, 
+        height: this.actualVideoHeight 
+      }, 'info')
       
       return this.frameCanvasElement
     } catch (e) {
