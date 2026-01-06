@@ -4,15 +4,26 @@
  * @param {any} cv OpenCV实例
  * @param {HTMLCanvasElement} canvas canvas元素
  * @param {boolean} gray 是否转换为灰度图像
+ * @param {any} dstMat 可选的目标Mat对象，如果提供则复用该对象，否则创建新对象
  * @returns {any | null} - 转换后的Mat对象，如果转换失败则返回null
  */
-export function drawCanvasToMat(cv: any, canvas: HTMLCanvasElement, gray: boolean): any | null {
+export function drawCanvasToMat(cv: any, canvas: HTMLCanvasElement, gray: boolean, dstMat?: any): any | null {
     try {
         if(!cv || !canvas){
             return null
         }
-        // Convert canvas directly to cv.Mat
-        const mat = cv.imread(canvas)
+        
+        // If destination Mat is provided, reuse it; otherwise create new one
+        let mat: any
+        if (dstMat) {
+            // Read canvas data into existing Mat
+            cv.imread(canvas, dstMat)
+            mat = dstMat
+        } else {
+            // Create new Mat
+            mat = cv.imread(canvas)
+        }
+        
         if (!mat || mat.empty()) {
             return null
         }

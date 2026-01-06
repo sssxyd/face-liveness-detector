@@ -69,6 +69,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private actualVideoWidth: number = 0
   private actualVideoHeight: number = 0
 
+  // Pre-allocated Mat objects for frame capture (reused to avoid frequent allocation)
+  private preallocatedBgrFrame: any = null
+  private preallocatedGrayFrame: any = null
+
   // 竞态条件控制：防止detect()并发执行
   private isDetectingFrameActive: boolean = false
 
@@ -289,6 +293,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     } catch (error) {
       this.emitDebug('detection', 'Error clearing frame canvas', { error: (error as Error).message }, 'warn')
     }
+    
+    // Clear preallocated Mat objects
+    this.clearPreallocatedMats()
     
     // Ensure detection frame flag is cleared
     this.isDetectingFrameActive = false
@@ -1035,8 +1042,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return null
     }
     
-    // Convert canvas to BGR Mat (creates new Mat each time)
-    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false)
+    // Ensure preallocated Mat objects exist (created once, reused)
+    if (!this.preallocatedBgrFrame || !this.preallocatedGrayFrame) {
+      this.ensurePreallocatedMats()
+      if (!this.preallocatedBgrFrame || !this.preallocatedGrayFrame) {
+        this.emitDebug('detection', 'Failed to create preallocated Mat objects', {}, 'error')
+        return null
+      }
+    }
+    
+    // Convert canvas to BGR Mat (reuse preallocated Mat)
+    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false, this.preallocatedBgrFrame)
     if (!bgrFrame) {
       this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
       return null
@@ -1044,24 +1060,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     const bgrFrameTime = performance.now() - frameCapturStartTime
     
-    // Convert BGR to grayscale (creates new Mat each time)
+    // Convert BGR to grayscale (reuse preallocated Mat)
     const grayConversionStartTime = performance.now()
-    let grayFrame: any = new this.cv.Mat()
     try {
-      this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
+      this.cv.cvtColor(bgrFrame, this.preallocatedGrayFrame, this.cv.COLOR_BGR2GRAY)
     } catch (cvtError) {
-      this.emitDebug('detection', 'cvtColor failed, attempting with new Mat', { error: (cvtError as Error).message }, 'warn')
-      grayFrame.delete()
-      grayFrame = new this.cv.Mat()
-      this.cv.cvtColor(bgrFrame, grayFrame, this.cv.COLOR_BGR2GRAY)
+      this.emitDebug('detection', 'cvtColor failed', { error: (cvtError as Error).message }, 'warn')
+      return null
     }
     const grayConversionTime = performance.now() - grayConversionStartTime
     
-    if (!grayFrame) {
-      this.emitDebug('detection', 'Failed to convert frame Mat to grayscale', {}, 'warn')
-      bgrFrame.delete()
-      return null
-    }
+    const grayFrame = this.preallocatedGrayFrame
 
     // Log performance metrics if slow
     const totalFrameProcessingTime = bgrFrameTime + grayConversionTime
@@ -1167,20 +1176,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Clean up frame Mat objects
+   * Note: Since we're now using preallocated Mats, this method does nothing
+   * The preallocated Mats are only deleted in clearPreallocatedMats()
    */
   private cleanupFrames(bgrFrame: any, grayFrame: any): void {
-    try {
-      if (bgrFrame) {
-        bgrFrame.delete()
-      }
-      if (grayFrame) {
-        grayFrame.delete()
-      }
-    } catch (cleanupError) {
-      this.emitDebug('detection', 'Error during Mat cleanup', {
-        error: (cleanupError as Error).message
-      }, 'warn')
-    }
+    // No-op: preallocated Mats are reused and cleaned up separately
   }
 
   private getPerformActionCount(): number{
@@ -1717,6 +1717,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           this.frameCanvasElement.height !== this.actualVideoHeight) {
         
         this.clearFrameCanvas()
+        // Clear preallocated Mats since resolution changed
+        this.clearPreallocatedMats()
+        
         this.frameCanvasElement = document.createElement('canvas')
         this.frameCanvasElement.width = this.actualVideoWidth
         this.frameCanvasElement.height = this.actualVideoHeight
@@ -1767,6 +1770,81 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.emitDebug('detection', 'Error resizing canvas', { error: (error as Error).message }, 'warn')
       }
       this.frameCanvasElement = null
+    }
+  }
+
+  /**
+   * Ensure preallocated Mat objects exist with correct dimensions
+   * Creates new Mats if they don't exist or dimensions changed
+   */
+  private ensurePreallocatedMats(): void {
+    if (!this.cv || this.actualVideoWidth <= 0 || this.actualVideoHeight <= 0) {
+      return
+    }
+
+    try {
+      // Create BGR Mat if not exists
+      if (!this.preallocatedBgrFrame) {
+        this.preallocatedBgrFrame = new this.cv.Mat(
+          this.actualVideoHeight,
+          this.actualVideoWidth,
+          this.cv.CV_8UC4 // RGBA format from canvas
+        )
+        this.emitDebug('capture', 'Created preallocated BGR Mat', {
+          width: this.actualVideoWidth,
+          height: this.actualVideoHeight
+        })
+      }
+
+      // Create grayscale Mat if not exists
+      if (!this.preallocatedGrayFrame) {
+        this.preallocatedGrayFrame = new this.cv.Mat(
+          this.actualVideoHeight,
+          this.actualVideoWidth,
+          this.cv.CV_8UC1 // Grayscale single channel
+        )
+        this.emitDebug('capture', 'Created preallocated Gray Mat', {
+          width: this.actualVideoWidth,
+          height: this.actualVideoHeight
+        })
+      }
+    } catch (error) {
+      this.emitDebug('capture', 'Failed to create preallocated Mats', {
+        error: (error as Error).message
+      }, 'error')
+      this.clearPreallocatedMats()
+    }
+  }
+
+  /**
+   * Clear preallocated Mat objects
+   * Called when resolution changes or detection stops
+   */
+  private clearPreallocatedMats(): void {
+    try {
+      if (this.preallocatedBgrFrame) {
+        this.preallocatedBgrFrame.delete()
+        this.preallocatedBgrFrame = null
+        this.emitDebug('capture', 'Cleared preallocated BGR Mat')
+      }
+    } catch (error) {
+      this.emitDebug('capture', 'Error clearing preallocated BGR Mat', {
+        error: (error as Error).message
+      }, 'warn')
+      this.preallocatedBgrFrame = null
+    }
+
+    try {
+      if (this.preallocatedGrayFrame) {
+        this.preallocatedGrayFrame.delete()
+        this.preallocatedGrayFrame = null
+        this.emitDebug('capture', 'Cleared preallocated Gray Mat')
+      }
+    } catch (error) {
+      this.emitDebug('capture', 'Error clearing preallocated Gray Mat', {
+        error: (error as Error).message
+      }, 'warn')
+      this.preallocatedGrayFrame = null
     }
   }
 }

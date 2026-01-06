@@ -385,6 +385,7 @@ function handleDetectionFinish(data: DetectorFinishEventData) {
   if (data.success) {
     statusMessage.value = 'Detection completed successfully!'
     borderColor.value = 'success'
+    detectionResult.value.bestFaceImage = data.bestFaceImage || null
   } else {
     statusMessage.value = 'Detection failed'
     borderColor.value = 'failed'
