@@ -40,6 +40,12 @@ export interface FaceDetectionEngineOptions {
   tensorflow_backend?: 'auto' | 'webgl' | 'wasm'
   /** 调试模式 */
   debug_mode?: boolean
+  /** 调试日志最低级别（默认 'info'） */
+  debug_log_level?: 'info' | 'warn' | 'error'
+  /** 调试日志阶段过滤（默认全部）- 可选择特定阶段 */
+  debug_log_stages?: string[]
+  /** 调试日志节流间隔（毫秒，默认 0 表示不节流） */
+  debug_log_throttle?: number
 
   /** 视频流建议分辨率宽度（默认 1920） */
   detect_video_ideal_width?: number

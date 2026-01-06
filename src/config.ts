@@ -14,6 +14,9 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   tensorflow_wasm_path: undefined,
   tensorflow_backend: 'auto',
   debug_mode: false,
+  debug_log_level: 'info',
+  debug_log_stages: undefined, // undefined 表示所有阶段
+  debug_log_throttle: 100, // 默认 100ms 节流，防止过于频繁
 
   // Detection Settings
   detect_video_ideal_width: 1280,

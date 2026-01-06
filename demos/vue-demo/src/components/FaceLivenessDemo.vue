@@ -279,6 +279,7 @@ const maxDebugLogs = 100
 // 计算配置
 const options = computed<FaceDetectionEngineOptions>(() => ({
   debug_mode: true,
+  debug_log_level: 'warn',
   human_model_path: humanModelPath.value,
   tensorflow_wasm_path: tensorflowWasmPath.value,
   detect_video_ideal_width: 1920,

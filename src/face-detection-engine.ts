@@ -54,6 +54,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   private videoFPS: number = 30
 
+  // Debug log throttling
+  private lastDebugLogTime: Map<string, number> = new Map()
+  private debugLogLevelPriority: Record<string, number> = { info: 0, warn: 1, error: 2 }
+
   // 视频及保存当前帧图片的Canvas元素
   private videoElement: HTMLVideoElement | null = null
   private stream: MediaStream | null = null  
@@ -945,13 +949,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     try {
       // 确定是否需要捕获帧
       if (!this.shouldCaptureFrame()) {
-        // this.emitDebug('detection', '不需要捕获本帧', {
-        //   frameIndex: this.frameIndex,
-        //   shouldPerformMainDetection: this.shouldPerformMainDetection(),
-        //   shouldPerformScreenCornersDetection: this.shouldPerformScreenCornersDetection(),
-        //   shouldPerformScreenFeatureDetection: this.shouldPerformScreenFeatureDetection(),
-        //   period: this.detectionState.period
-        // }, 'info')
         return
       }
       
@@ -963,24 +960,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }, 'warn')
         return
       }
-      this.emitDebug('detection', '帧采集成功，准备进行检测', {
-        frameIndex: this.frameIndex,
-        hasBgrFrame: !!frameData.bgrFrame,
-        hasGrayFrame: !!frameData.grayFrame
-      }, 'info')
+      // 帧采集成功日志已移除，减少高频输出
       bgrFrame = frameData.bgrFrame
       grayFrame = frameData.grayFrame
 
       // 添加到屏幕检测器缓冲
       if (this.detectionState.period !== DetectionPeriod.DETECT) {
         this.detectionState.screenDetector?.addVideoFrame(grayFrame, bgrFrame)
-        this.emitDebug('detection', '已添加帧数据到屏幕检测器缓冲', {
-          frameIndex: this.frameIndex
-        }, 'info')
+        // 帧添加日志已移除，减少高频输出
       }
 
       // 执行屏幕检测（边角 + 多帧特征）
-      this.emitDebug('detection', '开始执行屏幕检测', { frameIndex: this.frameIndex }, 'info')
       if (this.performScreenDetection(grayFrame)) {
         this.emitDebug('detection', '屏幕检测：检测到屏幕，返回', {
           frameIndex: this.frameIndex
@@ -989,9 +979,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 执行主人脸检测
-      this.emitDebug('detection', '开始执行人脸检测', { frameIndex: this.frameIndex }, 'info')
       await this.performFaceDetection(grayFrame, bgrFrame)
-      this.emitDebug('detection', '人脸检测完成', { frameIndex: this.frameIndex }, 'info')
+      // 人脸检测完成日志已移除，减少高频输出
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
       this.emitDebug('detection', 'Unexpected error in detection loop', {
@@ -1247,18 +1236,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         screenConfidence: screenResult.confidenceScore,
         riskLevel: screenResult.riskLevel,
         processingTimeMs: screenResult.processingTimeMs,
-        executedMethods: screenResult.executedMethods.map((m: any) => ({
+        executedMethodsCount: screenResult.executedMethods?.length || 0,
+        executedMethodsSummary: screenResult.executedMethods?.map((m: any) => ({
           method: m.method,
           isScreenCapture: m.isScreenCapture,
-          confidence: m.confidence,
-          details: m.details
+          confidence: m.confidence
+          // details 字段已移除，避免输出超大数据
         })),
-        stageDetails: screenResult.debug?.stages.map((s: any) => ({
-          method: s.method,
-          completed: s.completed,
-          timeMs: s.timeMs,
-          result: s.result
-        })),
+        stageCount: screenResult.debug?.stages?.length || 0,
         finalDecision: screenResult.debug?.finalDecision
       }, 'warn')
       this.emitDetectorInfo({
@@ -1273,19 +1258,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         screenConfidence: screenResult.confidenceScore,
         riskLevel: screenResult.riskLevel,
         processingTimeMs: screenResult.processingTimeMs,
-        executedMethods: screenResult.executedMethods.map((m: any) => ({
-          method: m.method,
-          isScreenCapture: m.isScreenCapture,
-          confidence: m.confidence,
-          details: m.details
-        })),
-        stageDetails: screenResult.debug?.stages.map((s: any) => ({
-          method: s.method,
-          completed: s.completed,
-          timeMs: s.timeMs,
-          result: s.result
-        })),
-        finalDecision: screenResult.debug?.finalDecision
+        executedMethodsCount: screenResult.executedMethods?.length || 0,
+        methodsSummary: screenResult.executedMethods?.map((m: any) => `${m.method}:${m.confidence?.toFixed(2)}`).join(', ') || 'none',
+        stageCount: screenResult.debug?.stages?.length || 0
+        // 移除了 executedMethods 和 stageDetails 的完整数据，避免超大输出
       }, 'info')
     }
     
@@ -1379,17 +1355,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
         this.emitDebug('detection', 'Image quality does not meet requirements', { 
-          result: qualityResult, 
-          faceBox: faceBox,
-          frameWidth: grayFrame.cols,
-          frameHeight: grayFrame.rows,
-          featuresUsed: this.options.collect_image_quality_features,
-          minImageQuality: this.options.collect_min_image_quality,
-          grayFrameSize: grayFrame?.cols && grayFrame?.rows ? `${grayFrame.cols}x${grayFrame.rows}` : 'unknown',
-          grayFrameType: grayFrame?.type?.() || 'unknown',
-          grayFrameChannels: grayFrame?.channels?.() || 'unknown',
-          grayFrameEmpty: !!grayFrame.empty?.()
-        }, 'info')
+          score: qualityResult.score,
+          passed: qualityResult.passed,
+          minRequired: this.options.collect_min_image_quality,
+          frameSize: grayFrame?.cols && grayFrame?.rows ? `${grayFrame.cols}x${grayFrame.rows}` : 'unknown'
+          // 移除了冗余的帧信息和 qualityResult 完整对象，避免大数据输出
+        }, 'warn')
         return
       }
 
@@ -1670,6 +1641,32 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   ): void {
     if(this.options.debug_mode !== true) return
 
+    // 日志级别过滤
+    const configuredLevel = this.options.debug_log_level || 'info'
+    if (this.debugLogLevelPriority[level] < this.debugLogLevelPriority[configuredLevel]) {
+      return
+    }
+
+    // 阶段过滤
+    if (this.options.debug_log_stages && this.options.debug_log_stages.length > 0) {
+      if (!this.options.debug_log_stages.includes(stage)) {
+        return
+      }
+    }
+
+    // 节流机制（仅对 info 级别日志）
+    if (level === 'info' && this.options.debug_log_throttle && this.options.debug_log_throttle > 0) {
+      const throttleKey = `${stage}:${message}`
+      const now = Date.now()
+      const lastTime = this.lastDebugLogTime.get(throttleKey) || 0
+      
+      if (now - lastTime < this.options.debug_log_throttle) {
+        return // 在节流时间内，跳过
+      }
+      
+      this.lastDebugLogTime.set(throttleKey, now)
+    }
+
     const debugData: DetectorDebugEventData = {
       level,
       stage,
@@ -1743,10 +1740,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       
       this.frameCanvasContext.drawImage(this.videoElement, 0, 0, this.actualVideoWidth, this.actualVideoHeight)
-      this.emitDebug('capture', 'Frame drawn to canvas', { 
-        width: this.actualVideoWidth, 
-        height: this.actualVideoHeight 
-      }, 'info')
+      // 帧绘制成功日志已移除，减少高频输出
       
       return this.frameCanvasElement
     } catch (e) {
