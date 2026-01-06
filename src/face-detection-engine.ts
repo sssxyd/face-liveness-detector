@@ -677,33 +677,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     // Step 3: Prepare finish data (before clearing images)
-    // Validate collected images if success is true
-    let finalSuccess = success
-    if (success) {
-      const hasFrameImage = !!this.detectionState.bestFrameImage
-      const hasFaceImage = !!this.detectionState.bestFaceImage
-      
-      if (!hasFrameImage || !hasFaceImage) {
-        finalSuccess = false
-        this.emitDebug('detection', 'Detection marked as success but images are missing', {
-          hasFrameImage,
-          hasFaceImage,
-          collectCount: this.detectionState.collectCount,
-          bestQualityScore: this.detectionState.bestQualityScore,
-          period: this.detectionState.period
-        }, 'warn')
-        
-        // Emit error event for missing images
-        this.emit('detector-error' as any, {
-          code: ErrorCode.INTERNAL_ERROR,
-          message: `Detection completed but images are missing: frameImage=${hasFrameImage}, faceImage=${hasFaceImage}`
-        })
-      }
-    }
-    
-    // Create a finishData object for emission (with image data)
     const finishData: DetectorFinishEventData = {
-      success: finalSuccess,
+      success: success,
       silentPassedCount: this.detectionState.collectCount,
       actionPassedCount: this.detectionState.completedActions.size,
       totalTime: performance.now() - this.detectionState.startTime,
@@ -718,11 +693,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     } catch (error) {
       this.emitDebug('detection', 'Error emitting detector-finish event', { error: (error as Error).message }, 'error')
     }
-    
-    // Clear image references from the original finishData object immediately after emit
-    // to prevent external listeners from accessing stale data if they store the reference
-    finishData.bestFrameImage = undefined as any
-    finishData.bestFaceImage = undefined as any
 
     // Step 5: Stop video playback
     if (this.videoElement) {
@@ -1279,22 +1249,20 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return true
     }
     if(screenResult) {
-      this.emitDebug('screen-detection', 'Screen capture not detected', {
-        screenConfidence: screenResult.confidenceScore,
-        riskLevel: screenResult.riskLevel,
-        processingTimeMs: screenResult.processingTimeMs,
-        executedMethodsCount: screenResult.executedMethods?.length || 0,
-        methodsSummary: screenResult.executedMethods?.map((m: any) => `${m.method}:${m.confidence?.toFixed(2)}`).join(', ') || 'none',
-        stageCount: screenResult.debug?.stages?.length || 0
-        // 移除了 executedMethods 和 stageDetails 的完整数据，避免超大输出
-      }, 'info')
-    }
-    
-    // 只有ready状态的检测器的success结果才可信
-    if (this.detectionState.screenDetector?.isReady()) {
-      this.detectionState.realness = !screenResult?.isScreenCapture
-    }
-
+      // 只有ready状态的检测器的success结果才可信
+      if (this.detectionState.screenDetector?.isReady() && !screenResult.isScreenCapture) {
+        this.detectionState.realness = true
+        this.emitDebug('screen-detection', 'Screen capture not detected', {
+          screenConfidence: screenResult.confidenceScore,
+          riskLevel: screenResult.riskLevel,
+          processingTimeMs: screenResult.processingTimeMs,
+          executedMethodsCount: screenResult.executedMethods?.length || 0,
+          methodsSummary: screenResult.executedMethods?.map((m: any) => `${m.method}:${m.confidence?.toFixed(2)}`).join(', ') || 'none',
+          stageCount: screenResult.debug?.stages?.length || 0
+          // 移除了 executedMethods 和 stageDetails 的完整数据，避免超大输出
+        }, 'warn')        
+      }
+    }  
     return false
   }
 
@@ -1346,6 +1314,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           this.partialResetDetectionState()
           return        
         }
+        this.emitDebug('motion-detection', 'Motion liveness check passed', {
+          motionScore: motionResult.motionScore,
+          keypointVariance: motionResult.keypointVariance,
+          opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
+          eyeMotionScore: motionResult.eyeMotionScore,
+          mouthMotionScore: motionResult.mouthMotionScore,
+          motionType: motionResult.motionType
+        }, 'warn')
         this.detectionState.liveness = true
       }
 

@@ -12,7 +12,7 @@
     </div>
 
     <!-- Configuration Panel -->
-    <div class="config-panel">
+    <div class="config-panel" v-if="!isDetecting || detectionResult == null">
       <h3>Detection Configuration</h3>
       <div class="config-item">
         <label>Action Detection Count (0-3):</label>
