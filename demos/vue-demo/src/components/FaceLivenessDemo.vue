@@ -161,6 +161,10 @@
           <span class="value">{{ (detectionResult.bestQualityScore * 100).toFixed(1) }}%</span>
         </div>
         <div class="result-item">
+          <span class="label">Best Frame Prefix:</span>
+          <span class="value">{{ detectionResult.bestFrameImage?.slice(0, 10) }}</span>
+        </div>        
+        <div class="result-item">
           <span class="label">Total Time:</span>
           <span class="value">{{ (detectionResult.totalTime / 1000).toFixed(2) }}s</span>
         </div>
