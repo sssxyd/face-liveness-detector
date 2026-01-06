@@ -677,9 +677,33 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     // Step 3: Prepare finish data (before clearing images)
+    // Validate collected images if success is true
+    let finalSuccess = success
+    if (success) {
+      const hasFrameImage = !!this.detectionState.bestFrameImage
+      const hasFaceImage = !!this.detectionState.bestFaceImage
+      
+      if (!hasFrameImage || !hasFaceImage) {
+        finalSuccess = false
+        this.emitDebug('detection', 'Detection marked as success but images are missing', {
+          hasFrameImage,
+          hasFaceImage,
+          collectCount: this.detectionState.collectCount,
+          bestQualityScore: this.detectionState.bestQualityScore,
+          period: this.detectionState.period
+        }, 'warn')
+        
+        // Emit error event for missing images
+        this.emit('detector-error' as any, {
+          code: ErrorCode.INTERNAL_ERROR,
+          message: `Detection completed but images are missing: frameImage=${hasFrameImage}, faceImage=${hasFaceImage}`
+        })
+      }
+    }
+    
     // Create a finishData object for emission (with image data)
     const finishData: DetectorFinishEventData = {
-      success: success,
+      success: finalSuccess,
       silentPassedCount: this.detectionState.collectCount,
       actionPassedCount: this.detectionState.completedActions.size,
       totalTime: performance.now() - this.detectionState.startTime,
@@ -1490,22 +1514,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   private collectHighQualityImage(bgrFrame: any, frameQuality: number, faceBox: Box): void{
-    // 检查期间周期不变（防止竞态条件）
-    const currentPeriod = this.detectionState.period
-    if (currentPeriod !== DetectionPeriod.COLLECT){
-      return
-    }
+
     if (frameQuality <= this.detectionState.bestQualityScore){
       // Current frame quality is not better than saved best frame, skip without saving
       this.detectionState.collectCount++
       return
     }
     try {
-      // 再次检查周期确保一致性
-      if (this.detectionState.period !== currentPeriod) {
-        return
-      }
-      
       const frameImageData = matToBase64Jpeg(this.cv, bgrFrame)
       if (!frameImageData) {
         this.emitDebug('detection', 'Failed to capture current frame image', { frameQuality, bestQualityScore: this.detectionState.bestQualityScore }, 'warn')
@@ -1519,13 +1534,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return
       }
       
-      // 最后检查周期，确保收集的图像与当前周期匹配
-      if (this.detectionState.period === currentPeriod) {
-        this.detectionState.collectCount++
-        this.detectionState.bestQualityScore = frameQuality
-        this.detectionState.bestFrameImage = frameImageData
-        this.detectionState.bestFaceImage = faceImageData
-      }
+      this.detectionState.collectCount++
+      this.detectionState.bestQualityScore = frameQuality
+      this.detectionState.bestFrameImage = frameImageData
+      this.detectionState.bestFaceImage = faceImageData
+      this.emitDebug('detection', 'Collected high-quality image frame', {
+        collectCount: this.detectionState.collectCount,
+        bestQualityScore: this.detectionState.bestQualityScore,
+        bestFrameImageSize: frameImageData.length,
+        bestFaceImageSize: faceImageData.length
+      }, 'warn')
     } catch (error) {
       this.emitDebug('detection', 'Error during image collection', { error: (error as Error).message }, 'error')
     }
