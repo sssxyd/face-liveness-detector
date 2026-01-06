@@ -3,34 +3,28 @@
  * 将绘制图片的canvas转换为mat
  * @param {any} cv OpenCV实例
  * @param {HTMLCanvasElement} canvas canvas元素
- * @param {boolean} gray 是否转换为灰度图像
- * @param {any} dstMat 可选的目标Mat对象，如果提供则复用该对象，否则创建新对象
- * @returns {any | null} - 转换后的Mat对象，如果转换失败则返回null
+ * @param {any} dstMat 目标Mat对象，将canvas数据写入此Mat
+ * @returns {any | null} - 返回传入的Mat对象，如果转换失败则返回null
  */
-export function drawCanvasToMat(cv: any, canvas: HTMLCanvasElement, gray: boolean, dstMat?: any): any | null {
+export function drawCanvasToMat(cv: any, canvas: HTMLCanvasElement, dstMat: any): any | null {
     try {
-        if(!cv || !canvas){
+        if(!cv || !canvas || !dstMat){
             return null
         }
         
-        // If destination Mat is provided, reuse it; otherwise create new one
-        let mat: any
-        if (dstMat) {
-            // Read canvas data into existing Mat
-            cv.imread(canvas, dstMat)
-            mat = dstMat
-        } else {
-            // Create new Mat
-            mat = cv.imread(canvas)
-        }
-        
-        if (!mat || mat.empty()) {
+        // Get canvas context
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
             return null
         }
-        if(gray){
-            cv.cvtColor(mat, mat, cv.COLOR_BGR2GRAY)
-        }
-        return mat
+        
+        // Get ImageData from canvas
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+        
+        // Copy ImageData to destination Mat (RGBA format)
+        dstMat.data.set(imageData.data)
+        
+        return dstMat
     } catch (e) {
         return null
     }

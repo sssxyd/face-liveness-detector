@@ -70,6 +70,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private actualVideoHeight: number = 0
 
   // Pre-allocated Mat objects for frame capture (reused to avoid frequent allocation)
+  // Using getImageData() approach allows both BGR and Gray Mat to be preallocated
   private preallocatedBgrFrame: any = null
   private preallocatedGrayFrame: any = null
 
@@ -1051,10 +1052,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
     }
     
-    // Convert canvas to BGR Mat (reuse preallocated Mat)
-    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, false, this.preallocatedBgrFrame)
+    // Copy canvas ImageData to preallocated BGR Mat using helper function
+    const bgrFrame = drawCanvasToMat(this.cv, frameCanvas, this.preallocatedBgrFrame)
     if (!bgrFrame) {
-      this.emitDebug('detection', 'Failed to convert canvas to OpenCV Mat', {}, 'warn')
+      this.emitDebug('detection', 'Failed to copy canvas data to BGR Mat', {}, 'warn')
       return null
     }
 
@@ -1063,7 +1064,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // Convert BGR to grayscale (reuse preallocated Mat)
     const grayConversionStartTime = performance.now()
     try {
-      this.cv.cvtColor(bgrFrame, this.preallocatedGrayFrame, this.cv.COLOR_BGR2GRAY)
+      this.cv.cvtColor(bgrFrame, this.preallocatedGrayFrame, this.cv.COLOR_RGBA2GRAY)
     } catch (cvtError) {
       this.emitDebug('detection', 'cvtColor failed', { error: (cvtError as Error).message }, 'warn')
       return null
@@ -1176,11 +1177,11 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Clean up frame Mat objects
-   * Note: Since we're now using preallocated Mats, this method does nothing
-   * The preallocated Mats are only deleted in clearPreallocatedMats()
+   * Note: Both BGR and Gray Mats are preallocated and reused
+   * They are only deleted in clearPreallocatedMats()
    */
   private cleanupFrames(bgrFrame: any, grayFrame: any): void {
-    // No-op: preallocated Mats are reused and cleaned up separately
+    // No-op: both Mats are preallocated and cleaned up separately
   }
 
   private getPerformActionCount(): number{
@@ -1775,7 +1776,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   /**
    * Ensure preallocated Mat objects exist with correct dimensions
-   * Creates new Mats if they don't exist or dimensions changed
+   * Creates both BGR and Gray Mat for reuse
    */
   private ensurePreallocatedMats(): void {
     if (!this.cv || this.actualVideoWidth <= 0 || this.actualVideoHeight <= 0) {
@@ -1783,7 +1784,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     try {
-      // Create BGR Mat if not exists
+      // Create BGR Mat if not exists (RGBA format from canvas ImageData)
       if (!this.preallocatedBgrFrame) {
         this.preallocatedBgrFrame = new this.cv.Mat(
           this.actualVideoHeight,
