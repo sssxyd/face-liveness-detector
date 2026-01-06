@@ -1,6 +1,6 @@
 <div align="center">
 
-> **Languages / 语言:** [English](#) · [中文](./README.md)
+> **Languages:** [English](#) · [中文](./README.md)
 
 # Face Liveness Detection Engine
 
@@ -22,26 +22,26 @@
 
 <table>
   <tr>
-    <td>💯 <strong>Pure Frontend</strong><br/>Zero backend dependency, all processing runs locally in the browser</td>
-    <td>🔬 <strong>Hybrid AI Solution</strong><br/>Deep fusion of TensorFlow + OpenCV</td>
+    <td>💯 <strong>Pure Frontend</strong><br/>Zero backend dependencies, all processing runs locally in browser</td>
+    <td>🔬 <strong>Hybrid AI Solution</strong><br/>Deep integration of TensorFlow + OpenCV</td>
   </tr>
   <tr>
-    <td>🧠 <strong>Dual Liveness Verification</strong><br/>Silent detection + action recognition (blink, mouth open, nod)</td>
-    <td>⚡ <strong>Event-Driven Architecture</strong><br/>100% TypeScript, seamless integration with any framework</td>
+    <td>🧠 <strong>Dual Liveness Verification</strong><br/>Silent detection + Action recognition (blink, mouth open, nod)</td>
+    <td>⚡ <strong>Event-Driven Architecture</strong><br/>100% TypeScript, seamlessly integrates with any framework</td>
   </tr>
   <tr>
-    <td>🎯 <strong>Multi-Dimensional Analysis</strong><br/>Quality, face frontalness, motion score, screen detection</td>
-    <td>🛡️ <strong>Multi-Dimensional Anti-Spoofing</strong><br/>Photo, screen video, moire pattern, RGB emission detection</td>
+    <td>🎯 <strong>Multi-Dimensional Analysis</strong><br/>Quality, frontality, motion score, screen detection</td>
+    <td>🛡️ <strong>Multi-Layer Anti-Spoofing</strong><br/>Photo motion detection, screen temporal analysis, contour boundary detection</td>
   </tr>
 </table>
 
 ---
 
-## 🚀 Online Demo
+## 🚀 Live Demo
 
 <div align="center">
 
-**[👉 Live Demo](https://face.lowtechsoft.com/) | Scan QR code for quick testing**
+**[👉 Try Live Demo](https://face.lowtechsoft.com/) | Scan with phone for quick test**
 
 [![Face Liveness Detection Demo QR Code](https://raw.githubusercontent.com/sssxyd/face-liveness-detector/main/demos/vue-demo/vue-demo.png)](https://face.lowtechsoft.com/)
 
@@ -51,11 +51,12 @@
 
 ## 🧬 Core Algorithm Design
 
-| Detection Module | Technology | Documentation |
+| Detection Module | Technical Solution | Documentation |
 |---------|--------|--------|
-| **Face Recognition** | Human.js BlazeFace + FaceMesh | 468 facial feature points + expression recognition |
-| **Motion Detection** | Multi-dimensional motion analysis | [Motion Detection Algorithm](./docs/MOTION_DETECTION_ALGORITHM.md) - optical flow, keypoint variance, facial region changes |
-| **Screen Detection** | Three-dimensional feature fusion | [Screen Capture Detection](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) - moire patterns, RGB emission, color features |
+| **Face Recognition** | Human.js BlazeFace + FaceMesh | 468 facial landmarks + expression recognition |
+| **Motion Liveness Detection** | 6-Indicator Voting System | [Motion Detection Algorithm](./docs/MOTION_DETECTION_ALGORITHM.md) - Optical flow, keypoint variance, eye/mouth movement, facial area changes |
+| **Screen Capture Detection** | 4-Dimensional Temporal Analysis | [Screen Capture Detection Algorithm](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) - Screen flicker, response time, DLP color wheel, optical distortion |
+| **Screen Contour Detection** | Canny Edge + Contour Analysis | [Screen Contour Detection Algorithm](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md) - Single-frame rectangular boundary detection |
 
 ---
 
@@ -81,21 +82,21 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 </details>
 
 > 📝 **Why three packages?**
-> `@vladmandic/human` and `@techstark/opencv-js` are peer dependencies that must be installed separately to avoid bundling large libraries and reduce the final bundle size.
+> `@vladmandic/human` and `@techstark/opencv-js` are peer dependencies that need to be installed separately to avoid bundling large libraries, reducing final bundle size.
 
 ---
 
 ## ⚠️ Required Configuration Steps
 
-### 1️⃣ Fix OpenCV.js ESM Compatibility Issue
+### 1️⃣ Fix OpenCV.js ESM Compatibility
 
-`@techstark/opencv-js` contains an incompatible UMD format that **must be patched**.
+`@techstark/opencv-js` contains incompatible UMD format, **patch script must be applied**.
 
-**Reference:**
-- Issue: [TechStark/opencv-js#44](https://github.com/TechStark/opencv-js/issues/44)
+**References:**
+- Issue details: [TechStark/opencv-js#44](https://github.com/TechStark/opencv-js/issues/44)
 - Patch script: [patch-opencv.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/patch-opencv.js)
 
-**Setup Method (Recommended):** Add to `package.json` as `postinstall` hook
+**Setup (Recommended):** Add to `package.json` postinstall hook
 
 ```json
 {
@@ -107,13 +108,13 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 ### 2️⃣ Download Human.js Model Files
 
-`@vladmandic/human` requires model files and TensorFlow WASM backend, **otherwise it will not load**.
+`@vladmandic/human` requires model files and TensorFlow WASM backend, **otherwise it won't load**.
 
 **Download Scripts:**
 - Model copy: [copy-models.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/copy-models.js)
 - WASM download: [download-wasm.js](https://github.com/sssxyd/face-liveness-detector/tree/main/demos/vue-demo/scripts/download-wasm.js)
 
-**Setup Method (Recommended):** Configure as `postinstall` hook
+**Setup (Recommended):** Configure as postinstall hook
 
 ```json
 {
@@ -139,30 +140,28 @@ const engine = new FaceDetectionEngine({
   tensorflow_wasm_path: '/wasm',
   tensorflow_backend: 'auto',
   
-  // Detection settings (recommend ≥720p, otherwise screen detection accuracy decreases)
-  detect_video_ideal_width: 1920,
-  detect_video_ideal_height: 1080,
+  // Detection settings (≥720p recommended, otherwise screen detection accuracy drops)
+  detect_video_ideal_width: 1280,
+  detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 100,
+  detect_frame_delay: 120,
 
   // Collection quality requirements
-  collect_min_collect_count: 3,        // Minimum 3 face images collected
-  collect_min_face_ratio: 0.5,         // Face occupies 50%+
-  collect_max_face_ratio: 0.9,         // Face occupies <90%
-  collect_min_face_frontal: 0.9,       // Face frontalness 90%
+  collect_min_collect_count: 3,        // Collect at least 3 faces
+  collect_min_face_ratio: 0.5,         // Face ratio 50%+
+  collect_max_face_ratio: 0.9,         // Face ratio below 90%
+  collect_min_face_frontal: 0.9,       // Face frontality 90%
   collect_min_image_quality: 0.5,      // Image quality 50%+
 
   // Liveness detection settings
-  action_liveness_action_count: 1,     // Requires 1 action
+  action_liveness_action_count: 1,     // Require 1 action
   action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 60000,
 
-  // Anti-spoofing settings
-  motion_liveness_min_motion_score: 0.15,
+  // Anti-spoofing settings (motion and screen detection use built-in optimized algorithms, usually no adjustment needed)
   motion_liveness_strict_photo_detection: false,
-  screen_capture_confidence_threshold: 0.7,
 })
 
 // Listen to core events
@@ -176,7 +175,7 @@ engine.on('detector-loaded', (data) => {
 })
 
 engine.on('detector-info', (data) => {
-  // Real-time per-frame data
+  // Real-time data per frame
   console.log({
     status: data.code,
     quality: (data.imageQuality * 100).toFixed(1) + '%',
@@ -192,13 +191,13 @@ engine.on('detector-action', (data) => {
 })
 
 engine.on('detector-finish', (data) => {
-  // Detection complete
+  // Detection completed
   if (data.success) {
     console.log('✅ Liveness verification passed!', {
-      silentPassed: data.silentPassedCount,
-      actionsCompleted: data.actionPassedCount,
-      bestQuality: (data.bestQualityScore * 100).toFixed(1) + '%',
-      totalTime: (data.totalTime / 1000).toFixed(2) + 's'
+      'Silent passed': data.silentPassedCount,
+      'Actions completed': data.actionPassedCount,
+      'Best quality': (data.bestQualityScore * 100).toFixed(1) + '%',
+      'Total time': (data.totalTime / 1000).toFixed(2) + 's'
     })
   } else {
     console.log('❌ Liveness verification failed')
@@ -219,10 +218,10 @@ async function startLivenessDetection() {
     const videoEl = document.getElementById('video') as HTMLVideoElement
     await engine.startDetection(videoEl)
     
-    // Detection runs automatically until complete or manually stopped
+    // Detection runs automatically to completion or manual stop
     // engine.stopDetection(true)  // Stop and show best image
   } catch (error) {
-    console.error('Detection startup failed:', error)
+    console.error('Detection start failed:', error)
   }
 }
 
@@ -242,16 +241,24 @@ startLivenessDetection()
 | `tensorflow_wasm_path` | `string` | TensorFlow WASM files directory | `undefined` |
 | `tensorflow_backend` | `'auto' \| 'webgl' \| 'wasm'` | TensorFlow backend engine | `'auto'` |
 
+### Debug Mode Configuration
+
+| Option | Type | Description | Default |
+|-----|------|------|--------|
+| `debug_mode` | `boolean` | Enable debug mode | `false` |
+| `debug_log_level` | `'info' \| 'warn' \| 'error'` | Debug log minimum level | `'info'` |
+| `debug_log_stages` | `string[]` | Debug log stage filter (undefined=all) | `undefined` |
+| `debug_log_throttle` | `number` | Debug log throttle interval (ms) | `100` |
+
 ### Video Detection Settings
 
 | Option | Type | Description | Default |
 |-----|------|------|--------|
-| `detect_video_ideal_width` | `number` | Video width (pixels) | `1920` |
-| `detect_video_ideal_height` | `number` | Video height (pixels) | `1080` |
-| `detect_video_mirror` | `boolean` | Horizontal flip video | `true` |
+| `detect_video_ideal_width` | `number` | Video width (pixels) | `1280` |
+| `detect_video_ideal_height` | `number` | Video height (pixels) | `720` |
+| `detect_video_mirror` | `boolean` | Horizontally flip video | `true` |
 | `detect_video_load_timeout` | `number` | Load timeout (ms) | `5000` |
-| `detect_frame_delay` | `number` | Frame delay (ms) | `100` |
-| `detect_error_retry_delay` | `number` | Error retry delay (ms) | `200` |
+| `detect_frame_delay` | `number` | Delay between frames (ms) | `120` |
 
 ### Face Collection Quality Requirements
 
@@ -260,10 +267,10 @@ startLivenessDetection()
 | `collect_min_collect_count` | `number` | Minimum collection count | `3` |
 | `collect_min_face_ratio` | `number` | Minimum face ratio (0-1) | `0.5` |
 | `collect_max_face_ratio` | `number` | Maximum face ratio (0-1) | `0.9` |
-| `collect_min_face_frontal` | `number` | Minimum frontalness (0-1) | `0.9` |
+| `collect_min_face_frontal` | `number` | Minimum frontality (0-1) | `0.9` |
 | `collect_min_image_quality` | `number` | Minimum image quality (0-1) | `0.5` |
 
-### Face Frontalness Parameters
+### Face Frontality Parameters
 
 | Option | Type | Description | Default |
 |-----|------|------|--------|
@@ -275,7 +282,7 @@ startLivenessDetection()
 
 | Option | Type | Description | Default |
 |-----|------|------|--------|
-| `require_full_face_in_bounds` | `boolean` | Face fully in bounds | `false` |
+| `require_full_face_in_bounds` | `boolean` | Face fully within bounds | `false` |
 | `min_laplacian_variance` | `number` | Minimum blur detection value | `40` |
 | `min_gradient_sharpness` | `number` | Minimum sharpness | `0.15` |
 | `min_blur_score` | `number` | Minimum blur score | `0.6` |
@@ -285,7 +292,7 @@ startLivenessDetection()
 | Option | Type | Description | Default |
 |-----|------|------|--------|
 | `action_liveness_action_list` | `LivenessAction[]` | Action list | `[BLINK, MOUTH_OPEN, NOD]` |
-| `action_liveness_action_count` | `number` | Actions to complete | `1` |
+| `action_liveness_action_count` | `number` | Number of actions to complete | `1` |
 | `action_liveness_action_randomize` | `boolean` | Randomize action order | `true` |
 | `action_liveness_verify_timeout` | `number` | Timeout (ms) | `60000` |
 | `action_liveness_min_mouth_open_percent` | `number` | Minimum mouth open ratio (0-1) | `0.2` |
@@ -294,44 +301,11 @@ startLivenessDetection()
 
 | Option | Type | Description | Default |
 |-----|------|------|--------|
-| `motion_liveness_min_motion_score` | `number` | Minimum motion score (0-1) | `0.15` |
-| `motion_liveness_min_keypoint_variance` | `number` | Minimum keypoint variance (0-1) | `0.02` |
-| `motion_liveness_frame_buffer_size` | `number` | Frame buffer size | `5` |
-| `motion_liveness_eye_aspect_ratio_threshold` | `number` | Blink detection threshold | `0.15` |
-| `motion_liveness_motion_consistency_threshold` | `number` | Consistency threshold (0-1) | `0.3` |
-| `motion_liveness_min_optical_flow_threshold` | `number` | Minimum optical flow magnitude (0-1) | `0.02` |
 | `motion_liveness_strict_photo_detection` | `boolean` | Strict photo detection mode | `false` |
 
-### Screen Capture Detection
+> **Note**: Motion liveness detection uses built-in 6-indicator voting algorithm. Other parameters are internally optimized and require no manual configuration. See [Motion Detection Algorithm Documentation](./docs/MOTION_DETECTION_ALGORITHM.md).
 
-| Option | Type | Description | Default |
-|-----|------|------|--------|
-| `screen_capture_confidence_threshold` | `number` | Confidence threshold (0-1) | `0.7` |
-| `screen_capture_detection_strategy` | `string` | Detection strategy | `'adaptive'` |
-| `screen_moire_pattern_threshold` | `number` | Moire pattern threshold (0-1) | `0.65` |
-| `screen_moire_pattern_enable_dct` | `boolean` | Enable DCT analysis | `true` |
-| `screen_moire_pattern_enable_edge_detection` | `boolean` | Enable edge detection | `true` |
-
-### Screen Color Features
-
-| Option | Type | Description | Default |
-|-----|------|------|--------|
-| `screen_color_saturation_threshold` | `number` | Saturation threshold (%) | `40` |
-| `screen_color_rgb_correlation_threshold` | `number` | RGB correlation threshold (0-1) | `0.75` |
-| `screen_color_pixel_entropy_threshold` | `number` | Entropy threshold (0-8) | `6.5` |
-| `screen_color_gradient_smoothness_threshold` | `number` | Smoothness threshold (0-1) | `0.7` |
-| `screen_color_confidence_threshold` | `number` | Confidence threshold (0-1) | `0.65` |
-
-### Screen RGB Emission Detection
-
-| Option | Type | Description | Default |
-|-----|------|------|--------|
-| `screen_rgb_low_freq_start_percent` | `number` | Low frequency start (0-1) | `0.15` |
-| `screen_rgb_low_freq_end_percent` | `number` | Low frequency end (0-1) | `0.35` |
-| `screen_rgb_energy_score_weight` | `number` | Energy weight | `0.40` |
-| `screen_rgb_asymmetry_score_weight` | `number` | Asymmetry weight | `0.40` |
-| `screen_rgb_difference_factor_weight` | `number` | Difference weight | `0.20` |
-| `screen_rgb_confidence_threshold` | `number` | Confidence threshold (0-1) | `0.65` |
+> **Note**: Screen capture detection uses built-in 4-dimensional cascade algorithm (screen flicker, response time, DLP color wheel, optical distortion) and screen contour detection. All parameters are internally optimized and require no manual configuration. See [Screen Capture Detection Algorithm Documentation](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) and [Screen Contour Detection Algorithm Documentation](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md).
 
 ---
 
@@ -340,14 +314,14 @@ startLivenessDetection()
 ### Core Methods
 
 #### `initialize(): Promise<void>`
-Load and initialize the detection library. **Must be called before using other functions.**
+Load and initialize detection libraries. **Must be called before using other features.**
 
 ```typescript
 await engine.initialize()
 ```
 
 #### `startDetection(videoElement): Promise<void>`
-Start face detection on a video element.
+Start face detection on video element.
 
 ```typescript
 const videoEl = document.getElementById('video') as HTMLVideoElement
@@ -355,7 +329,7 @@ await engine.startDetection(videoEl)
 ```
 
 #### `stopDetection(success?: boolean): void`
-Stop the detection process.
+Stop detection process.
 
 ```typescript
 engine.stopDetection(true)  // true: show best detection image
@@ -389,18 +363,18 @@ const state = engine.getEngineState()
 
 ## 📡 Event System
 
-The engine uses **TypeScript event emitter pattern** with full type safety.
+The engine uses **TypeScript event emitter pattern**, all events are type-safe.
 
 ### Event List
 
 <table>
 <tr>
 <td><strong>detector-loaded</strong></td>
-<td>Engine initialization complete</td>
+<td>Engine initialization completed</td>
 </tr>
 <tr>
 <td><strong>detector-info</strong></td>
-<td>Real-time per-frame detection data</td>
+<td>Real-time detection data per frame</td>
 </tr>
 <tr>
 <td><strong>detector-action</strong></td>
@@ -408,15 +382,15 @@ The engine uses **TypeScript event emitter pattern** with full type safety.
 </tr>
 <tr>
 <td><strong>detector-finish</strong></td>
-<td>Detection complete (success/failure)</td>
+<td>Detection completed (success/failure)</td>
 </tr>
 <tr>
 <td><strong>detector-error</strong></td>
-<td>Error occurred</td>
+<td>Triggered when error occurs</td>
 </tr>
 <tr>
 <td><strong>detector-debug</strong></td>
-<td>Debug information (development)</td>
+<td>Debug information (for development)</td>
 </tr>
 </table>
 
@@ -429,7 +403,7 @@ The engine uses **TypeScript event emitter pattern** with full type safety.
 ```typescript
 interface DetectorLoadedEventData {
   success: boolean        // Whether initialization succeeded
-  error?: string          // Error message (if failed)
+  error?: string          // Error message (on failure)
   opencv_version?: string // OpenCV.js version
   human_version?: string  // Human.js version
 }
@@ -451,7 +425,7 @@ engine.on('detector-loaded', (data) => {
 
 ### 📊 detector-info
 
-**Returns real-time detection data per frame (high-frequency event)**
+**Returns real-time detection data per frame (high frequency event)**
 
 ```typescript
 interface DetectorInfoEventData {
@@ -460,7 +434,7 @@ interface DetectorInfoEventData {
   message: string         // Status message
   faceCount: number       // Number of faces detected
   faceRatio: number       // Face ratio (0-1)
-  faceFrontal: number     // Face frontalness (0-1)
+  faceFrontal: number     // Face frontality (0-1)
   imageQuality: number    // Image quality score (0-1)
   motionScore: number     // Motion score (0-1)
   keypointVariance: number // Keypoint variance (0-1)
@@ -472,7 +446,7 @@ interface DetectorInfoEventData {
 **Detection Status Codes:**
 ```typescript
 enum DetectionCode {
-  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // No face detected in video
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // No face detected
   MULTIPLE_FACE = 'MULTIPLE_FACE',           // Multiple faces detected
   FACE_TOO_SMALL = 'FACE_TOO_SMALL',         // Face too small
   FACE_TOO_LARGE = 'FACE_TOO_LARGE',         // Face too large
@@ -488,12 +462,12 @@ enum DetectionCode {
 ```typescript
 engine.on('detector-info', (data) => {
   console.log({
-    status: data.code,
-    silentPassed: data.passed ? '✅' : '❌',
-    quality: `${(data.imageQuality * 100).toFixed(1)}%`,
-    frontal: `${(data.faceFrontal * 100).toFixed(1)}%`,
-    motion: `${(data.motionScore * 100).toFixed(1)}%`,
-    screen: `${(data.screenConfidence * 100).toFixed(1)}%`
+    'Detection status': data.code,
+    'Silent passed': data.passed ? '✅' : '❌',
+    'Image quality': `${(data.imageQuality * 100).toFixed(1)}%`,
+    'Face frontality': `${(data.faceFrontal * 100).toFixed(1)}%`,
+    'Motion score': `${(data.motionScore * 100).toFixed(1)}%`,
+    'Screen capture': `${(data.screenConfidence * 100).toFixed(1)}%`
   })
 })
 ```
@@ -528,7 +502,7 @@ enum LivenessActionStatus {
 engine.on('detector-action', (data) => {
   const actionLabels = {
     'blink': 'Blink',
-    'mouth_open': 'Open mouth',
+    'mouth_open': 'Open Mouth',
     'nod': 'Nod'
   }
   
@@ -553,14 +527,14 @@ engine.on('detector-action', (data) => {
 
 ### ✅ detector-finish
 
-**Detection process complete (success or failure)**
+**Detection process completed (success or failure)**
 
 ```typescript
 interface DetectorFinishEventData {
   success: boolean         // Whether verification passed
-  silentPassedCount: number    // Silent detection passes
-  actionPassedCount: number    // Actions completed
-  totalTime: number        // Total elapsed time (ms)
+  silentPassedCount: number    // Silent detection pass count
+  actionPassedCount: number    // Actions completed count
+  totalTime: number        // Total time elapsed (milliseconds)
   bestQualityScore: number // Best image quality (0-1)
   bestFrameImage: string | null  // Base64 frame image
   bestFaceImage: string | null   // Base64 face image
@@ -572,10 +546,10 @@ interface DetectorFinishEventData {
 engine.on('detector-finish', (data) => {
   if (data.success) {
     console.log('🎉 Liveness verification successful!', {
-      silentPassed: `${data.silentPassedCount} times`,
-      actionsCompleted: `${data.actionPassedCount} times`,
-      bestQuality: `${(data.bestQualityScore * 100).toFixed(1)}%`,
-      totalTime: `${(data.totalTime / 1000).toFixed(2)}s`
+      'Silent passed': `${data.silentPassedCount} times`,
+      'Actions completed': `${data.actionPassedCount} times`,
+      'Best quality': `${(data.bestQualityScore * 100).toFixed(1)}%`,
+      'Total time': `${(data.totalTime / 1000).toFixed(2)}s`
     })
     
     // Upload result to server
@@ -673,24 +647,24 @@ enum LivenessAction {
 ### LivenessActionStatus
 ```typescript
 enum LivenessActionStatus {
-  STARTED = 'started',      // Prompt started
-  COMPLETED = 'completed',  // Successfully recognized
-  TIMEOUT = 'timeout'       // Recognition timeout
+  STARTED = 'started',      // Action prompt started
+  COMPLETED = 'completed',  // Action successfully recognized
+  TIMEOUT = 'timeout'       // Action recognition timeout
 }
 ```
 
 ### DetectionCode
 ```typescript
 enum DetectionCode {
-  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // No face in video
-  MULTIPLE_FACE = 'MULTIPLE_FACE',           // Multiple faces
-  FACE_TOO_SMALL = 'FACE_TOO_SMALL',         // Face below minimum size
-  FACE_TOO_LARGE = 'FACE_TOO_LARGE',         // Face above maximum size
-  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',     // Face angle not frontal
-  FACE_NOT_REAL = 'FACE_NOT_REAL',           // Suspected spoofing
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // No face detected in video
+  MULTIPLE_FACE = 'MULTIPLE_FACE',           // Multiple faces detected
+  FACE_TOO_SMALL = 'FACE_TOO_SMALL',         // Face size below minimum threshold
+  FACE_TOO_LARGE = 'FACE_TOO_LARGE',         // Face size above maximum threshold
+  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',     // Face angle not frontal enough
+  FACE_NOT_REAL = 'FACE_NOT_REAL',           // Suspected spoofing detected
   FACE_NOT_LIVE = 'FACE_NOT_LIVE',           // Liveness score below threshold
-  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',     // Image quality below threshold
-  FACE_CHECK_PASS = 'FACE_CHECK_PASS'        // All checks passed ✅
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',     // Image quality below minimum
+  FACE_CHECK_PASS = 'FACE_CHECK_PASS'        // All detection checks passed ✅
 }
 ```
 
@@ -699,7 +673,7 @@ enum DetectionCode {
 enum ErrorCode {
   DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',  // Engine not initialized
   CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',          // Camera permission denied
-  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED', // Failed to get video stream
+  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED', // Failed to acquire video stream
   SUSPECTED_FRAUDS_DETECTED = 'SUSPECTED_FRAUDS_DETECTED'  // Spoofing/fraud detected
 }
 ```
@@ -717,7 +691,7 @@ For comprehensive examples and advanced usage patterns, refer to the official de
 - ✅ Complete Vue 3 + TypeScript integration
 - ✅ Real-time detection result visualization
 - ✅ Dynamic configuration panel
-- ✅ Complete event handling examples
+- ✅ Complete handling of all engine events
 - ✅ Real-time debug panel
 - ✅ Responsive mobile + desktop UI
 - ✅ Error handling and user feedback
@@ -731,17 +705,17 @@ npm install
 npm run dev
 ```
 
-Then open the local URL shown in your browser.
+Then open the displayed local URL in your browser.
 
 ---
 
-## 📥 Deploying Model Files Locally
+## 📥 Local Deployment of Model Files
 
-### Why Deploy Locally?
+### Why Local Deployment?
 
-- 🚀 **Improve Performance** - Avoid CDN latency
-- 🔒 **Privacy Protection** - Complete offline operation
-- 🌐 **Network Independence** - No external dependencies
+- 🚀 **Improved Performance** - Avoid CDN delays
+- 🔒 **Privacy Protection** - Fully offline operation
+- 🌐 **Network Independence** - No external connection dependencies
 
 ### Available Scripts
 
@@ -756,8 +730,8 @@ node copy-models.js
 **Features:**
 - Copy models from `node_modules/@vladmandic/human/models`
 - Save to `public/models/` directory
-- Include `.json` and `.bin` model files
-- Automatically display file sizes and progress
+- Includes `.json` and `.bin` model files
+- Automatically shows file sizes and progress
 
 #### 2️⃣ Download TensorFlow WASM Files
 
@@ -768,12 +742,12 @@ node download-wasm.js
 **Features:**
 - Automatically download TensorFlow.js WASM backend
 - Save to `public/wasm/` directory
-- Download 4 essential files:
+- Download 4 key files:
   - `tf-backend-wasm.min.js`
   - `tfjs-backend-wasm.wasm`
   - `tfjs-backend-wasm-simd.wasm`
   - `tfjs-backend-wasm-threaded-simd.wasm`
-- **Intelligent multi-CDN sources** with automatic fallback:
+- **Smart Multi-CDN Sources** with automatic fallback:
   1. unpkg.com (recommended)
   2. cdn.jsdelivr.net
   3. esm.sh
@@ -789,7 +763,7 @@ const engine = new FaceDetectionEngine({
   human_model_path: '/models',
   tensorflow_wasm_path: '/wasm',
   
-  // Other configuration...
+  // Other configurations...
 })
 ```
 
@@ -810,16 +784,16 @@ Configure `postinstall` hook in `package.json` for automatic download:
 ## 🌐 Browser Compatibility
 
 | Browser | Version | Support | Notes |
-|--------|---------|---------|-------|
-| Chrome | 60+ | ✅ | Full support |
-| Firefox | 55+ | ✅ | Full support |
-| Safari | 11+ | ✅ | Full support |
-| Edge | 79+ | ✅ | Full support |
+|--------|------|------|------|
+| Chrome | 60+ | ✅ | Fully supported |
+| Firefox | 55+ | ✅ | Fully supported |
+| Safari | 11+ | ✅ | Fully supported |
+| Edge | 79+ | ✅ | Fully supported |
 
 **System Requirements:**
 
-- 📱 Modern browser supporting **WebRTC**
-- 🔒 **HTTPS environment** (localhost available for development)
+- 📱 Modern browsers with **WebRTC** support
+- 🔒 **HTTPS environment** (localhost allowed for development)
 - ⚙️ **WebGL** or **WASM** backend support
 - 📹 **User authorization** - Camera permission required
 

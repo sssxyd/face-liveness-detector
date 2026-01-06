@@ -31,7 +31,7 @@
   </tr>
   <tr>
     <td>🎯 <strong>全维度分析</strong><br/>质量、正对度、运动分数、屏幕检测</td>
-    <td>🛡️ <strong>多维反欺骗</strong><br/>照片、屏幕视频、莫尔纹、RGB发光检测</td>
+    <td>🛡️ <strong>多维反欺骗</strong><br/>照片运动检测、屏幕时序分析、轮廓边界检测</td>
   </tr>
 </table>
 
@@ -54,8 +54,9 @@
 | 检测模块 | 技术方案 | 说明文档 |
 |---------|--------|--------|
 | **人脸识别** | Human.js BlazeFace + FaceMesh | 468个面部特征点 + 表情识别 |
-| **动作检测** | 多维度运动分析 | [运动检测算法](./docs/MOTION_DETECTION_ALGORITHM.md) - 光流、关键点方差、面部区域变化 |
-| **屏幕检测** | 三维特征融合 | [屏幕捕捉检测](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) - 莫尔纹、RGB发光、色彩特征 |
+| **运动活体检测** | 6指标投票系统 | [运动检测算法](./docs/MOTION_DETECTION_ALGORITHM.md) - 光流、关键点方差、眼嘴运动、面部区域变化 |
+| **屏幕采集检测** | 4维度时序分析 | [屏幕采集检测算法](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) - 屏幕闪烁、响应时间、DLP色轮、光学畸变 |
+| **屏幕轮廓检测** | Canny边缘+轮廓分析 | [屏幕轮廓检测算法](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md) - 单帧矩形边界检测 |
 
 ---
 
@@ -140,11 +141,11 @@ const engine = new FaceDetectionEngine({
   tensorflow_backend: 'auto',
   
   // 检测设置（建议 ≥720p，否则屏幕检测准确率下降）
-  detect_video_ideal_width: 1920,
-  detect_video_ideal_height: 1080,
+  detect_video_ideal_width: 1280,
+  detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 100,
+  detect_frame_delay: 120,
 
   // 采集质量要求
   collect_min_collect_count: 3,        // 最少采集 3 张人脸
@@ -159,10 +160,8 @@ const engine = new FaceDetectionEngine({
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 60000,
 
-  // 防欺骗设置
-  motion_liveness_min_motion_score: 0.15,
+  // 防欺骗设置（运动和屏幕检测使用内置优化算法，通常无需调整）
   motion_liveness_strict_photo_detection: false,
-  screen_capture_confidence_threshold: 0.7,
 })
 
 // 监听核心事件
@@ -242,16 +241,24 @@ startLivenessDetection()
 | `tensorflow_wasm_path` | `string` | TensorFlow WASM 文件目录 | `undefined` |
 | `tensorflow_backend` | `'auto' \| 'webgl' \| 'wasm'` | TensorFlow 后端引擎 | `'auto'` |
 
+### 调试模式配置
+
+| 选项 | 类型 | 说明 | 默认值 |
+|-----|------|------|--------|
+| `debug_mode` | `boolean` | 启用调试模式 | `false` |
+| `debug_log_level` | `'info' \| 'warn' \| 'error'` | 调试日志最低级别 | `'info'` |
+| `debug_log_stages` | `string[]` | 调试日志阶段过滤（undefined=全部） | `undefined` |
+| `debug_log_throttle` | `number` | 调试日志节流间隔（ms） | `100` |
+
 ### 视频检测设置
 
 | 选项 | 类型 | 说明 | 默认值 |
 |-----|------|------|--------|
-| `detect_video_ideal_width` | `number` | 视频宽度（像素） | `1920` |
-| `detect_video_ideal_height` | `number` | 视频高度（像素） | `1080` |
+| `detect_video_ideal_width` | `number` | 视频宽度（像素） | `1280` |
+| `detect_video_ideal_height` | `number` | 视频高度（像素） | `720` |
 | `detect_video_mirror` | `boolean` | 水平翻转视频 | `true` |
 | `detect_video_load_timeout` | `number` | 加载超时（ms） | `5000` |
-| `detect_frame_delay` | `number` | 帧间延迟（ms） | `100` |
-| `detect_error_retry_delay` | `number` | 错误重试延迟（ms） | `200` |
+| `detect_frame_delay` | `number` | 帧间延迟（ms） | `120` |
 
 ### 人脸采集质量要求
 
@@ -290,48 +297,15 @@ startLivenessDetection()
 | `action_liveness_verify_timeout` | `number` | 超时时间（ms） | `60000` |
 | `action_liveness_min_mouth_open_percent` | `number` | 最小张嘴比例 (0-1) | `0.2` |
 
-### 动作活体检测（防照片攻击）
+### 运动活体检测（防照片攻击）
 
 | 选项 | 类型 | 说明 | 默认值 |
 |-----|------|------|--------|
-| `motion_liveness_min_motion_score` | `number` | 最小运动分数 (0-1) | `0.15` |
-| `motion_liveness_min_keypoint_variance` | `number` | 最小关键点方差 (0-1) | `0.02` |
-| `motion_liveness_frame_buffer_size` | `number` | 帧缓冲区大小 | `5` |
-| `motion_liveness_eye_aspect_ratio_threshold` | `number` | 眨眼阈值 | `0.15` |
-| `motion_liveness_motion_consistency_threshold` | `number` | 一致性阈值 (0-1) | `0.3` |
-| `motion_liveness_min_optical_flow_threshold` | `number` | 最小光流幅度 (0-1) | `0.02` |
 | `motion_liveness_strict_photo_detection` | `boolean` | 严格照片检测模式 | `false` |
 
-### 屏幕采集检测
+> **注意**：运动活体检测使用内置的6指标投票算法，其他参数已内置优化，无需手动配置。详见[运动检测算法文档](./docs/MOTION_DETECTION_ALGORITHM.md)。
 
-| 选项 | 类型 | 说明 | 默认值 |
-|-----|------|------|--------|
-| `screen_capture_confidence_threshold` | `number` | 置信度阈值 (0-1) | `0.7` |
-| `screen_capture_detection_strategy` | `string` | 检测策略 | `'adaptive'` |
-| `screen_moire_pattern_threshold` | `number` | 莫尔纹阈值 (0-1) | `0.65` |
-| `screen_moire_pattern_enable_dct` | `boolean` | 启用 DCT 分析 | `true` |
-| `screen_moire_pattern_enable_edge_detection` | `boolean` | 启用边缘检测 | `true` |
-
-### 屏幕色彩特征
-
-| 选项 | 类型 | 说明 | 默认值 |
-|-----|------|------|--------|
-| `screen_color_saturation_threshold` | `number` | 饱和度阈值 (%) | `40` |
-| `screen_color_rgb_correlation_threshold` | `number` | RGB相关性阈值 (0-1) | `0.75` |
-| `screen_color_pixel_entropy_threshold` | `number` | 熵值阈值 (0-8) | `6.5` |
-| `screen_color_gradient_smoothness_threshold` | `number` | 平滑性阈值 (0-1) | `0.7` |
-| `screen_color_confidence_threshold` | `number` | 置信度阈值 (0-1) | `0.65` |
-
-### 屏幕 RGB 发光检测
-
-| 选项 | 类型 | 说明 | 默认值 |
-|-----|------|------|--------|
-| `screen_rgb_low_freq_start_percent` | `number` | 低频段开始 (0-1) | `0.15` |
-| `screen_rgb_low_freq_end_percent` | `number` | 低频段结束 (0-1) | `0.35` |
-| `screen_rgb_energy_score_weight` | `number` | 能量权重 | `0.40` |
-| `screen_rgb_asymmetry_score_weight` | `number` | 不同步权重 | `0.40` |
-| `screen_rgb_difference_factor_weight` | `number` | 差异权重 | `0.20` |
-| `screen_rgb_confidence_threshold` | `number` | 置信度阈值 (0-1) | `0.65` |
+> **注意**：屏幕采集检测使用内置的4维度级联算法（屏幕闪烁、响应时间、DLP色轮、光学畸变）和屏幕轮廓检测，所有参数已内置优化，无需手动配置。详见[屏幕采集检测算法文档](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md)和[屏幕轮廓检测算法文档](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md)。
 
 ---
 
