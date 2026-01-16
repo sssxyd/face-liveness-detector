@@ -25,7 +25,6 @@ import type { Box } from '@vladmandic/human'
 export class MotionDetectionResult {
   // 是否为活体
   isLively: boolean
-
   details: {
     frameCount: number
     // 正向检测（生物特征）
@@ -46,12 +45,15 @@ export class MotionDetectionResult {
     depthVariation?: number           // Z坐标深度变异
     crossFramePattern?: number        // 跨帧深度模式
   }
+  debug: {}
 
   constructor(
     isLively: boolean,
-    details: any
+    details: any,
+    debug: any = {}
   ) {
     this.isLively = isLively
+    this.debug = debug
     this.details = details
   }
 
@@ -177,19 +179,19 @@ export class MotionLivenessDetector {
         if (this.normalizedLandmarksHistory.length > this.config.frameBufferSize) {
           this.normalizedLandmarksHistory.shift()
         }
+      } else {
+        return this.createEmptyResult({
+          reason: '缺少面部关键点，无法进行活体检测',
+          landmarks: currentKeypoints.landmarks
+        })
       }
 
       // 数据不足时，继续收集
       if (!this.isReady()) {
-        return new MotionDetectionResult(
-          true,
-          {
-            frameCount: Math.max(
-              this.eyeAspectRatioHistory.length,
-              this.mouthAspectRatioHistory.length
-            )
-          }
-        )
+        return this.createEmptyResult({
+          reason: '数据收集中，帧数不足',
+          collectedFrames: this.normalizedLandmarksHistory.length
+        })
       }
 
       // 【检测1】眼睛微妙波动 - 任何EAR变化都是活体
@@ -235,7 +237,10 @@ export class MotionLivenessDetector {
       )
     } catch (error) {
       console.warn('[MotionLivenessDetector]', error)
-      return this.createEmptyResult()
+      return this.createEmptyResult({
+        reason: '活体检测异常',
+        error: (error as Error).message
+      })
     }
   }
 
@@ -1766,7 +1771,7 @@ export class MotionLivenessDetector {
     return normalized
   }
 
-  private createEmptyResult(): MotionDetectionResult {
+  private createEmptyResult(debug: any = {}): MotionDetectionResult {
     return new MotionDetectionResult(true, {
       frameCount: 0,
       eyeAspectRatioStdDev: 0,
@@ -1777,7 +1782,7 @@ export class MotionLivenessDetector {
       hasEyeMovement: false,
       hasMouthMovement: false,
       hasMuscleMovement: false
-    })
+    }, debug)
   }
 
   getStatistics(): any {

@@ -983,7 +983,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         if(!motionResult.isLively) {
           this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
             details: motionResult.details,
-            message: motionResult.getMessage()
+            debug: motionResult.debug,
+            message: motionResult.getMessage(),
           }, 'warn')
           this.emitDetectorInfo({
             code: DetectionCode.FACE_NOT_LIVE,
@@ -993,10 +994,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           return        
         }
         this.emitDebug('motion-detection', 'Motion liveness check passed', {
-          details: motionResult.details
+          debug: motionResult.debug,
+          details: motionResult.details,
         }, 'warn')
         this.detectionState.liveness = true
-      } 
+      } else {
+        this.emitDebug('motion-detection', 'Motion liveness detector not ready yet', {
+          debug: motionResult.debug,
+          details: motionResult.details,
+        }, 'warn')
+      }
 
       // 计算面部大小比例，不达标则跳过当前帧
       const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
