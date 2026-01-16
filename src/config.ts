@@ -23,7 +23,6 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 120,
 
   // Collection Settings
   collect_min_collect_count: 3,
@@ -49,10 +48,6 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 60000,
   action_liveness_min_mouth_open_percent: 0.2,
-
-  // Motion Liveness Settings
-  motion_liveness_strict_photo_detection: false,
-
  
 }
 

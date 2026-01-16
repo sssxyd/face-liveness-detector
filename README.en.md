@@ -140,12 +140,11 @@ const engine = new FaceDetectionEngine({
   tensorflow_wasm_path: '/wasm',
   tensorflow_backend: 'auto',
   
-  // Detection settings (≥720p recommended, otherwise screen detection accuracy drops)
+  // Detection settings
   detect_video_ideal_width: 1280,
   detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 120,
 
   // Collection quality requirements
   collect_min_collect_count: 3,        // Collect at least 3 faces
@@ -159,9 +158,6 @@ const engine = new FaceDetectionEngine({
   action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 60000,
-
-  // Anti-spoofing settings (motion and screen detection use built-in optimized algorithms, usually no adjustment needed)
-  motion_liveness_strict_photo_detection: false,
 })
 
 // Listen to core events
@@ -258,7 +254,6 @@ startLivenessDetection()
 | `detect_video_ideal_height` | `number` | Video height (pixels) | `720` |
 | `detect_video_mirror` | `boolean` | Horizontally flip video | `true` |
 | `detect_video_load_timeout` | `number` | Load timeout (ms) | `5000` |
-| `detect_frame_delay` | `number` | Delay between frames (ms) | `120` |
 
 ### Face Collection Quality Requirements
 

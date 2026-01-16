@@ -286,8 +286,6 @@ const options = computed<FaceDetectionEngineOptions>(() => ({
   debug_log_level: 'warn',
   human_model_path: humanModelPath.value,
   tensorflow_wasm_path: tensorflowWasmPath.value,
-  detect_video_ideal_width: 1920,
-  detect_video_ideal_height: 1080,  
   collect_min_image_quality: minImageQuality.value,
   collect_min_face_frontal: 0.9,
   collect_min_collect_count: 3,

@@ -1,8 +1,5 @@
-import { DetectionPeriod, LivenessAction, LivenessActionStatus } from "./enums"
+import { DetectionPeriod, LivenessAction } from "./enums"
 import { MotionLivenessDetector } from "./motion-liveness-detector"
-import { ScreenCaptureDetector } from './screen-capture-detector'
-import { ScreenCornersContourDetector } from './screen-corners-contour-detector'
-import { ResolvedEngineOptions } from "./types"
 
 /**
  * Internal detection state interface
@@ -21,9 +18,6 @@ export class DetectionState {
     lastFrontalScore: number = 1
     motionDetector: MotionLivenessDetector | null = null
     liveness: boolean = false
-    realness: boolean = false
-    screenDetector: ScreenCaptureDetector | null = null
-    cornersContourDetector: ScreenCornersContourDetector | null = null
 
     constructor(options: Partial<DetectionState>) {
         Object.assign(this, options)
@@ -33,27 +27,12 @@ export class DetectionState {
         this.clearActionVerifyTimeout()
 
         const savedMotionDetector = this.motionDetector
-        const savedScreenDetector = this.screenDetector
-        const savedCornersContourDetector = this.cornersContourDetector
 
         savedMotionDetector?.reset()
 
         Object.assign(this, new DetectionState({}))
 
         this.motionDetector = savedMotionDetector
-        this.screenDetector = savedScreenDetector
-        this.cornersContourDetector = savedCornersContourDetector
-    }
-
-    updateVideoFPS(fps: number): void {
-        if(this.screenDetector === null){
-            this.screenDetector = new ScreenCaptureDetector(fps)
-            return
-        }
-        if(this.screenDetector.getFPS() !== fps){
-            this.screenDetector.reset()
-            this.screenDetector = new ScreenCaptureDetector(fps)
-        }
     }
 
     // 默认方法
@@ -64,7 +43,7 @@ export class DetectionState {
     // 是否准备好进行动作验证
     isReadyToVerify(minCollectCount: number): boolean {
         if (this.period === DetectionPeriod.COLLECT 
-            && this.liveness && this.realness
+            && this.liveness
             && this.collectCount >= minCollectCount)
             {
             return true
@@ -90,12 +69,6 @@ export class DetectionState {
         this.currentAction = null
     }
 
-    setCVInstance(cvInstance: any): void {
-        this.motionDetector?.setCVInstance(cvInstance)
-        this.screenDetector?.setCVInstance(cvInstance)
-        this.cornersContourDetector?.setCVInstance(cvInstance)
-    }
-
     /**
      * Clear action verify timeout
      */
@@ -109,10 +82,8 @@ export class DetectionState {
 
  // <-- Add this import at the top if ResolvedEngineOptions is defined in types.ts
 
-export function createDetectionState(fps: number, strictPhotoDetection: boolean): DetectionState {
+export function createDetectionState(): DetectionState {
     const detectionState = new DetectionState({})
-    detectionState.motionDetector = new MotionLivenessDetector(strictPhotoDetection)
-    detectionState.screenDetector = new ScreenCaptureDetector(fps)
-    detectionState.cornersContourDetector = new ScreenCornersContourDetector()
+    detectionState.motionDetector = new MotionLivenessDetector()
     return detectionState
 }

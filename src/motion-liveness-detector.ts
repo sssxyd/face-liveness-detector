@@ -1,1132 +1,1791 @@
 /**
- * 运动和活体检测 - 防止照片攻击
- * 检测微妙的面部运动和运动模式，以区分真实面孔和高质量照片
+ * 活体检测器 - 微妙运动检测版本 + 照片几何特征检测
+ * 
+ * 双重检测策略：
+ * 1. 正向检测：检测生物特征（微妙眨眼、细微张嘴、面部肌肉微动）
+ * 2. 逆向检测：检测照片几何特征（平面约束、透视变换规律、交叉比率）
+ * 
+ * ⚠️ 关键理解 ⚠️
+ * MediaPipe 返回的 Z 坐标（深度）是从2D图像【推断】出来的，不是真实的物理深度！
+ * - 对真实人脸：推断出正确的 3D 结构
+ * - 对照片人脸：也可能推断出"假"的 3D 结构（因为照片上的人脸看起来也像 3D 的）
+ * 
+ * 因此，检测策略优先级：
+ * 1. 【最可靠】2D 几何约束检测（单应性、交叉比率、透视变换规律）——物理定律，无法欺骗
+ * 2. 【次可靠】生物特征时序检测（眨眼时间、对称性）——行为模式
+ * 3. 【辅助参考】Z 坐标分析——可能被欺骗，仅作辅助
  */
 
 import type { FaceResult, GestureResult } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
 
 /**
- * 运动检测结果
+ * 活体检测结果
  */
 export class MotionDetectionResult {
-  // 总体运动评分 (0-1)
-  motionScore: number
-  // 人脸区域的光流幅度
-  opticalFlowMagnitude: number
-  // 关键点稳定性评分 (0 = 像照片一样稳定, 1 = 自然运动)
-  keypointVariance: number
-  // 眼睛区域运动强度
-  eyeMotionScore: number
-  // 嘴巴区域运动强度
-  mouthMotionScore: number
-  // 检测到的运动类型 ('none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression')
-  motionType: MotionType
-  // 基于运动的总体活体性判断
+  // 是否为活体
   isLively: boolean
-  // 详细调试信息
+
   details: {
     frameCount: number
-    avgKeypointDistance: number
-    maxKeypointDistance: number
-    faceAreaVariance: number
-    eyeAspectRatioVariance: number
-    mouthAspectRatioVariance: number
+    // 正向检测（生物特征）
+    eyeAspectRatioStdDev: number
+    mouthAspectRatioStdDev: number
+    eyeFluctuation: number           // 眼睛开度波动
+    mouthFluctuation: number          // 嘴巴开度波动
+    muscleVariation: number           // 肌肉变化幅度
+    hasEyeMovement: boolean           // 检测到眼睛微动
+    hasMouthMovement: boolean         // 检测到嘴巴微动
+    hasMuscleMovement: boolean        // 检测到肌肉微动
+    // 逆向检测（照片几何特征）
+    isPhoto?: boolean                 // 是否被检测为照片
+    photoConfidence?: number          // 照片检测置信度 (0-1)
+    homographyScore?: number          // 单应性约束得分
+    perspectiveScore?: number         // 透视变换模式得分
+    crossRatioScore?: number          // 交叉比率不变性得分
+    depthVariation?: number           // Z坐标深度变异
+    crossFramePattern?: number        // 跨帧深度模式
   }
 
   constructor(
-    motionScore: number,
-    opticalFlowMagnitude: number,
-    keypointVariance: number,
-    eyeMotionScore: number,
-    mouthMotionScore: number,
-    motionType: MotionType,
     isLively: boolean,
-    details: {
-      frameCount: number
-      avgKeypointDistance: number
-      maxKeypointDistance: number
-      faceAreaVariance: number
-      eyeAspectRatioVariance: number
-      mouthAspectRatioVariance: number
-    }
+    details: any
   ) {
-    this.motionScore = motionScore
-    this.opticalFlowMagnitude = opticalFlowMagnitude
-    this.keypointVariance = keypointVariance
-    this.eyeMotionScore = eyeMotionScore
-    this.mouthMotionScore = mouthMotionScore
-    this.motionType = motionType
     this.isLively = isLively
     this.details = details
   }
 
-  /**
-   * 获取活体检测结果信息
-   * 如果活跃，返回空字符串，否则返回非活体检测的原因
-   */
-  getMessage(minMotionScore: number, minKeypointVariance: number): string {
-    if (this.isLively) {
-      return ''
+  getMessage(): string {
+    if (this.details.frameCount < 5) {
+      return '数据不足，无法进行活体检测'
     }
-
-    const reasons: string[] = []
-
-    // 检查运动评分
-    if (this.motionScore < minMotionScore) {
-      reasons.push(`检测到的运动不足 (运动评分: ${(this.motionScore * 100).toFixed(1)}%)`)
+    
+    if (this.isLively) return ''
+    
+    // 正向检测信息
+    const eyePercent = (this.details.eyeFluctuation * 100).toFixed(0)
+    const mouthPercent = (this.details.mouthFluctuation * 100).toFixed(0)
+    const musclePercent = (this.details.muscleVariation * 100).toFixed(0)
+    const bioFeatures = `未检测到面部微动（眼睛: ${eyePercent}%, 嘴巴: ${mouthPercent}%, 肌肉: ${musclePercent}%）`
+    
+    // 逆向检测信息
+    if (this.details.isPhoto) {
+      const confidence = ((this.details.photoConfidence || 0) * 100).toFixed(0)
+      const reasons: string[] = []
+      
+      if ((this.details.homographyScore || 0) > 0.5) reasons.push('单应性约束')
+      if ((this.details.perspectiveScore || 0) > 0.5) reasons.push('透视规律')
+      if ((this.details.crossRatioScore || 0) > 0.5) reasons.push('交叉比率')
+      
+      const reasonStr = reasons.length > 0 ? `（${reasons.join('、')}）` : ''
+      return `检测到照片特征${reasonStr}，置信度${confidence}%`
     }
-
-    // 检查关键点方差
-    if (this.keypointVariance < minKeypointVariance) {
-      reasons.push(`关键点方差低 (${(this.keypointVariance * 100).toFixed(1)}%)，表示面孔静止或类似照片`)
-    }
-
-    // 检查运动类型
-    if (this.motionType === 'none') {
-      reasons.push('未检测到运动，面孔似乎是静止的或来自照片')
-    }
-
-    // 如果没有找到具体原因但仍然不活跃，提供通用信息
-    if (reasons.length === 0) {
-      reasons.push('Face does not meet liveness requirements')
-    }
-
-    return reasons.join('; ')
+    
+    return bioFeatures
   }
 }
 
-export type MotionType = 'none' | 'rotation' | 'translation' | 'breathing' | 'micro_expression'
-
-/**
- * 运动活体检测选项
- */
 export interface MotionLivenessDetectorOptions {
-  // 活体检测的最小运动评分阈值 (0-1)
-  minMotionThreshold?: number
-  // 最小关键点方差阈值 (0-1)
-  minKeypointVariance?: number
-  // 运动历史分析的帧缓冲区大小
-  frameBufferSize?: number
-  // 眨眼检测的眼睛宽高比阈值 (0-1)
-  eyeAspectRatioThreshold?: number
-  // 光流和关键点方差一致性阈值 (0-1) - 防止照片微动
-  motionConsistencyThreshold?: number
-  // 最小光流幅度阈值 - 照片几乎无光流 (0-1)
-  minOpticalFlowThreshold?: number
-  // 是否启用严格照片检测模式
-  strictPhotoDetection?: boolean
+  frameBufferSize?: number                    // 缓冲帧数
+  eyeMinFluctuation?: number                  // 眼睛最小波动（微妙变化阈值）
+  mouthMinFluctuation?: number                // 嘴巴最小波动
+  muscleMinVariation?: number                 // 肌肉最小变化
+  activityThreshold?: number                  // 判定为活体的活动度阈值
 }
 
-const DEFAULT_MOTION_LIVENESS_DETECTOR_OPTIONS: Required<MotionLivenessDetectorOptions> = {
-  minMotionThreshold: 0.15,
-  minKeypointVariance: 0.02,
-  frameBufferSize: 5,
-  eyeAspectRatioThreshold: 0.15,
-  motionConsistencyThreshold: 0.5,
-  minOpticalFlowThreshold: 0.08,
-  strictPhotoDetection: false
+const DEFAULT_OPTIONS: Required<MotionLivenessDetectorOptions> = {
+  frameBufferSize: 15,                        // 15帧 (0.5秒@30fps)
+  eyeMinFluctuation: 0.008,                   // 非常低的眨眼阈值（检测微妙变化）
+  mouthMinFluctuation: 0.005,                 // 非常低的张嘴阈值
+  muscleMinVariation: 0.002,                  // 非常低的肌肉变化阈值
+  activityThreshold: 0.2                      // 只需要有 20% 的活动迹象就判定为活体
 }
 
-/**
- * 内部面部关键点接口
- */
 interface FaceKeypoints {
-  // 来自面部网格的 468 个面部标志点
   landmarks?: any[][]
-  // 左眼关键点
   leftEye?: any[][]
-  // 右眼关键点
   rightEye?: any[][]
-  // 嘴巴关键点
   mouth?: any[][]
 }
 
 /**
- * 运动活体检测器
- * 使用光流、关键点跟踪和面部特征分析
+ * 活体检测器 - 超敏感微动作版本 + 照片几何特征检测
+ * 
+ * 双重策略：
+ * 1. 检测生物微动（正向）
+ * 2. 检测照片几何约束（逆向）- 更可靠
  */
 export class MotionLivenessDetector {
-  // 配置及默认值
   private config: Required<MotionLivenessDetectorOptions>
-
-  // 状态
-  private frameBuffer: Uint8Array[] = [] // 存储灰度帧数据
-  private frameWidth: number = 0
-  private frameHeight: number = 0
-  private keypointHistory: Array<FaceKeypoints> = []
-  private faceAreaHistory: number[] = []
   private eyeAspectRatioHistory: number[] = []
   private mouthAspectRatioHistory: number[] = []
-  private opticalFlowHistory: number[] = []
-  private pupilSizeHistory: number[] = []
+  private faceLandmarksHistory: any[][][] = []  // 原始坐标（用于Z坐标分析）
+  private normalizedLandmarksHistory: any[][][] = []  // 【关键】归一化坐标（用于几何约束检测）
+  
+  // 用于检测透视畸变攻击
+  private leftEyeEARHistory: number[] = []
+  private rightEyeEARHistory: number[] = []
+  private frameTimestamps: number[] = []
+  private rigidMotionHistory: number[] = []
+  
+  // 【新增】用于照片几何特征检测
+  private homographyErrors: number[] = []        // 单应性变换误差历史
+  private depthConsistencyScores: number[] = []  // 深度一致性得分历史
+  private planarityScores: number[] = []         // 平面性得分历史
 
-  // OpenCV 实例
-  private cv: any = null
-
-  constructor(strictPhotoDetection: boolean = false) {
-    this.config = {
-      ...DEFAULT_MOTION_LIVENESS_DETECTOR_OPTIONS,
-      strictPhotoDetection
-    }
+  constructor() {
+    this.config = { ...DEFAULT_OPTIONS }
   }
 
-  setCVInstance(cvInstance: any): void {
-    this.cv = cvInstance
-  }
-
-  getOptions():Required<MotionLivenessDetectorOptions> {
+  getOptions(): Required<MotionLivenessDetectorOptions> {
     return this.config
   }
 
   isReady(): boolean {
-    return this.frameBuffer.length >= this.config.frameBufferSize
+    return this.eyeAspectRatioHistory.length >= 5  // 只需要5帧就能检测
   }
 
-  /**
-   * 重置运动检测状态
-   */
   reset(): void {
-    this.frameBuffer = []
-    this.frameWidth = 0
-    this.frameHeight = 0
-    this.keypointHistory = []
-    this.faceAreaHistory = []
     this.eyeAspectRatioHistory = []
     this.mouthAspectRatioHistory = []
-    this.opticalFlowHistory = []
-    this.pupilSizeHistory = []
+    this.faceLandmarksHistory = []
+    this.normalizedLandmarksHistory = []  // 【关键】归一化坐标
+    this.leftEyeEARHistory = []
+    this.rightEyeEARHistory = []
+    this.frameTimestamps = []
+    this.rigidMotionHistory = []
+    this.homographyErrors = []
+    this.depthConsistencyScores = []
+    this.planarityScores = []
   }
 
-  /**
-   * 从当前帧和历史记录分析运动和活体性
-   */
-  analyzeMotion(
-    grayMat: any,
-    faceResult: FaceResult,
-    faceBox: Box
-  ): MotionDetectionResult {
+  analyzeMotion(faceResult: FaceResult, faceBox: Box): MotionDetectionResult {
     try {
-      // 将当前帧添加到缓冲区
-      this.addFrameToBuffer(grayMat)
-
-      // 从当前面孔提取关键点
       const currentKeypoints = this.extractKeypoints(faceResult)
-      this.keypointHistory.push(currentKeypoints)
-      if (this.keypointHistory.length > this.config.frameBufferSize) {
-        this.keypointHistory.shift()
-      }
 
-      // 计算人脸区域
-      const faceArea = faceBox[2] * faceBox[3]
-      this.faceAreaHistory.push(faceArea)
-      if (this.faceAreaHistory.length > this.config.frameBufferSize) {
-        this.faceAreaHistory.shift()
-      }
-
-      // 计算眼睛和嘴巴的宽高比
-      if (currentKeypoints.leftEye && currentKeypoints.rightEye) {
-        const leftEAR = this.calculateEyeAspectRatio(currentKeypoints.leftEye)
-        const rightEAR = this.calculateEyeAspectRatio(currentKeypoints.rightEye)
-        const avgEAR = (leftEAR + rightEAR) / 2
-        this.eyeAspectRatioHistory.push(avgEAR)
-        if (this.eyeAspectRatioHistory.length > this.config.frameBufferSize) {
-          this.eyeAspectRatioHistory.shift()
+      // 保存完整网格（原始坐标用于Z坐标分析）
+      if (currentKeypoints.landmarks) {
+        this.faceLandmarksHistory.push(currentKeypoints.landmarks)
+        if (this.faceLandmarksHistory.length > this.config.frameBufferSize) {
+          this.faceLandmarksHistory.shift()
+        }
+        
+        // 【关键】保存归一化坐标用于几何约束检测
+        // 归一化到人脸局部坐标系，消除人脸移动的影响
+        const normalizedLandmarks = this.normalizeLandmarks(currentKeypoints.landmarks, faceBox)
+        this.normalizedLandmarksHistory.push(normalizedLandmarks)
+        if (this.normalizedLandmarksHistory.length > this.config.frameBufferSize) {
+          this.normalizedLandmarksHistory.shift()
         }
       }
 
-      if (currentKeypoints.mouth) {
-        const MAR = this.calculateMouthAspectRatio(currentKeypoints.mouth)
-        this.mouthAspectRatioHistory.push(MAR)
-        if (this.mouthAspectRatioHistory.length > this.config.frameBufferSize) {
-          this.mouthAspectRatioHistory.shift()
-        }
+      // 数据不足时，继续收集
+      if (this.eyeAspectRatioHistory.length < 5) {
+        return new MotionDetectionResult(
+          true,
+          {
+            frameCount: Math.max(
+              this.eyeAspectRatioHistory.length,
+              this.mouthAspectRatioHistory.length
+            )
+          }
+        )
       }
 
-      // 需要至少 2 帧进行运动分析
-      if (this.frameBuffer.length < 2) {
-        return this.createEmptyResult()
-      }
+      // 【检测1】眼睛微妙波动 - 任何EAR变化都是活体
+      const eyeActivity = this.detectEyeFluctuation(currentKeypoints)
 
-      // 分析光流
-      const opticalFlowResult = this.analyzeOpticalFlow()
-      this.opticalFlowHistory.push(opticalFlowResult)
-      if (this.opticalFlowHistory.length > this.config.frameBufferSize) {
-        this.opticalFlowHistory.shift()
-      }
+      // 【检测2】嘴巴微妙波动 - 任何MAR变化都是活体
+      const mouthActivity = this.detectMouthFluctuation(currentKeypoints)
 
-      // 检测瞳孔反应（简单实现）
-      const pupilResponse = this.detectPupilResponse(currentKeypoints)
-      if (pupilResponse > 0) {
-        this.pupilSizeHistory.push(pupilResponse)
-        if (this.pupilSizeHistory.length > this.config.frameBufferSize) {
-          this.pupilSizeHistory.shift()
-        }
-      }
+      // 【检测3】面部肌肉微动 - 任何细微位置变化都是活体
+      const muscleActivity = this.detectMuscleMovement()
 
-      // 分析关键点稳定性
-      const keypointVariance = this.calculateKeypointVariance()
+      // 【新增检测4】照片几何特征检测（逆向检测）
+      const photoGeometryResult = this.detectPhotoGeometry()
 
-      // 分析眼睛和嘴巴运动
-      const eyeMotionScore = this.calculateEyeMotionScore()
-      const mouthMotionScore = this.calculateMouthMotionScore()
-      const faceAreaVariance = this.calculateFaceAreaVariance()
-
-      // 验证运动一致性（防止照片微动攻击）
-      const motionConsistency = this.validateMotionConsistency(opticalFlowResult, keypointVariance)
-
-      // 检测运动类型
-      const motionType = this.detectMotionType(opticalFlowResult, keypointVariance)
-
-      // 计算总体运动评分（调整权重以应对照片攻击）
-      const motionScore = this.calculateOverallMotionScore(
-        opticalFlowResult,
-        keypointVariance,
-        eyeMotionScore,
-        mouthMotionScore,
-        motionConsistency
-      )
-
-      // 计算人脸区域变化率（用于检测呼吸）
-      const faceAreaChangeRate = this.calculateFaceAreaChangeRate()
-
-      // 确定活体性（加入额外检查）
-      const isLively = this.determineLiveness(        
-        keypointVariance,
-        motionType,
-        opticalFlowResult,
-        eyeMotionScore,
-        mouthMotionScore,
-        faceAreaChangeRate
-      )
+      // 综合判定（结合正向和逆向检测）
+      const isLively = this.makeLivenessDecision(eyeActivity, mouthActivity, muscleActivity, photoGeometryResult)
 
       return new MotionDetectionResult(
-        motionScore,
-        opticalFlowResult,
-        keypointVariance,
-        eyeMotionScore,
-        mouthMotionScore,
-        motionType,
         isLively,
         {
-          frameCount: this.frameBuffer.length,
-          avgKeypointDistance: this.calculateAvgKeypointDistance(),
-          maxKeypointDistance: this.calculateMaxKeypointDistance(),
-          faceAreaVariance,
-          eyeAspectRatioVariance: this.calculateVariance(this.eyeAspectRatioHistory),
-          mouthAspectRatioVariance: this.calculateVariance(this.mouthAspectRatioHistory)
+          frameCount: Math.max(
+            this.eyeAspectRatioHistory.length,
+            this.mouthAspectRatioHistory.length
+          ),
+          // 正向检测结果（生物特征）
+          eyeAspectRatioStdDev: eyeActivity.stdDev,
+          mouthAspectRatioStdDev: mouthActivity.stdDev,
+          eyeFluctuation: eyeActivity.fluctuation,
+          mouthFluctuation: mouthActivity.fluctuation,
+          muscleVariation: muscleActivity.variation,
+          hasEyeMovement: eyeActivity.hasMovement,
+          hasMouthMovement: mouthActivity.hasMovement,
+          hasMuscleMovement: muscleActivity.hasMovement,
+          // 逆向检测结果（照片几何特征）
+          isPhoto: photoGeometryResult.isPhoto,
+          photoConfidence: photoGeometryResult.confidence,
+          homographyScore: photoGeometryResult.details?.homographyScore,
+          perspectiveScore: photoGeometryResult.details?.perspectiveScore,
+          crossRatioScore: photoGeometryResult.details?.crossRatioScore,
+          depthVariation: photoGeometryResult.details?.depthVariation,
+          crossFramePattern: photoGeometryResult.details?.crossFramePattern
         }
       )
     } catch (error) {
-      console.warn('[MotionLivenessDetector] Error analyzing motion:', error)
+      console.warn('[MotionLivenessDetector]', error)
       return this.createEmptyResult()
     }
   }
 
   /**
-   * 将帧添加到循环缓冲区
+   * 检测眼睛的微妙波动（任何变化）
+   * 防护：排除透视畸变、噪声，确保是真实的连续或周期性波动
    */
-  private addFrameToBuffer(grayMat: any): void {
-    try {
-      // 存储帧尺寸（首帧时）
-      if (this.frameWidth === 0) {
-        this.frameWidth = grayMat.cols
-        this.frameHeight = grayMat.rows
-      }
-
-      // 转换为 Uint8Array 并存储
-      const grayData = new Uint8Array(grayMat.data)
-      this.frameBuffer.push(grayData)
-
-      // 清理旧的数据
-      if (this.frameBuffer.length > this.config.frameBufferSize) {
-        this.frameBuffer.shift()
-      }
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Failed to add frame:', error)
-    }
-  }
-
-  /**
-   * 验证运动一致性 - 防止照片微动攻击
-   * 真实面部运动：光流和关键点方差应该都有意义（都不为零）
-   * 照片微动：通常表现为只有光流或只有噪声，或两者都非常低
-   * 
-   * 修复：允许不同类型运动的不同比例关系
-   * - 大幅度头部运动（旋转/平移）: 高keypoint variance, 中等optical flow
-   * - 微妙表情运动: 中等optical flow, 低keypoint variance
-   * - 照片微动: 两者都很低，或严重不匹配（一个近零一个不近零）
-   */
-  private validateMotionConsistency(opticalFlow: number, keypointVariance: number): number {
-    // 两个指标都非常低 = 照片或静止
-    if (opticalFlow < 0.01 && keypointVariance < 0.01) {
-      return 0
-    }
-
-    // 照片微动的典型特征：其中一个接近零，另一个不为零
-    // 但不是绝对拒绝，因为不同运动类型有不同的光流/关键点比例
-    const minValue = Math.min(opticalFlow, keypointVariance)
-    const maxValue = Math.max(opticalFlow, keypointVariance)
-    
-    // 如果两个都有意义的值（都 > 0.01），认为是真实运动
-    // 即使比例不完全匹配（真实运动类型不同会导致不同的比例）
-    if (minValue >= 0.01) {
-      // 两者都有意义，即使比例不完全匹配也是可以接受的
-      // 允许最大 5:1 的比例（头部大幅旋转可能导致这样的差异）
-      const ratio = minValue / maxValue
-      // 高宽容度：比例超过 0.2 就认为一致
-      // （之前的阈值 0.265 正好在这个范围内失败）
-      return Math.max(ratio, 0.5) // 如果两者都有意义，至少返回 0.5
-    }
-
-    // 其中一个接近零
-    // 这可能是照片微动，但也可能是特定运动（比如仅眼睛运动）
-    // 给予较低但非零的分数
-    return minValue / (maxValue + 0.001)
-  }
-
-  /**
-   * 检测瞳孔反应 - 活体的关键特征
-   * 照片的瞳孔无法反应光线变化
-   */
-  private detectPupilResponse(keypoints: FaceKeypoints): number {
+  private detectEyeFluctuation(keypoints: FaceKeypoints): any {
     if (!keypoints.leftEye || !keypoints.rightEye) {
-      return 0
+      return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
     }
 
-    try {
-      // 计算左眼瞳孔大小（使用眼睛关键点的范围）
-      const leftEyeSize = this.calculateEyeSize(keypoints.leftEye)
-      const rightEyeSize = this.calculateEyeSize(keypoints.rightEye)
-      const avgEyeSize = (leftEyeSize + rightEyeSize) / 2
-      
-      return avgEyeSize
-    } catch (error) {
-      return 0
+    // 计算眼睛宽高比
+    const leftEAR = this.calculateEyeAspectRatio(keypoints.leftEye)
+    const rightEAR = this.calculateEyeAspectRatio(keypoints.rightEye)
+    const avgEAR = (leftEAR + rightEAR) / 2
+
+    // 记录时间戳
+    this.frameTimestamps.push(Date.now())
+    if (this.frameTimestamps.length > this.config.frameBufferSize) {
+      this.frameTimestamps.shift()
     }
+
+    // 分别记录左右眼EAR（用于一致性检测）
+    this.leftEyeEARHistory.push(leftEAR)
+    this.rightEyeEARHistory.push(rightEAR)
+    if (this.leftEyeEARHistory.length > this.config.frameBufferSize) {
+      this.leftEyeEARHistory.shift()
+      this.rightEyeEARHistory.shift()
+    }
+
+    this.eyeAspectRatioHistory.push(avgEAR)
+    if (this.eyeAspectRatioHistory.length > this.config.frameBufferSize) {
+      this.eyeAspectRatioHistory.shift()
+    }
+
+    if (this.eyeAspectRatioHistory.length < 2) {
+      return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
+    }
+
+    // 计算EAR的标准差（波动幅度）
+    const stdDev = this.calculateStdDev(this.eyeAspectRatioHistory)
+    
+    // 计算EAR的最大最小差值（波动范围）
+    const maxEAR = Math.max(...this.eyeAspectRatioHistory)
+    const minEAR = Math.min(...this.eyeAspectRatioHistory)
+    const fluctuation = maxEAR - minEAR
+
+    // 【防护1】检测是否是透视畸变（往复波动）
+    const isOscillating = this.detectOscillation(this.eyeAspectRatioHistory)
+
+    // 【防护2】检测是否是连续变化（真实眨眼）还是噪声
+    const hasRealBlink = this.detectRealBlink(this.eyeAspectRatioHistory)
+
+    // 【防护3】检测最近帧的变化（实时动作）
+    const hasRecentMovement = this.detectRecentMovement(this.eyeAspectRatioHistory)
+
+    // 【新增防护4】检测左右眼一致性（真实眨眼双眼同步）
+    const eyeSymmetry = this.detectEyeSymmetry()
+
+    // 【新增防护5】检测眨眼时间模式（真实眨眼非常快，100-400ms）
+    const hasValidBlinkTiming = this.detectBlinkTiming()
+
+    // 【新增防护6】检测运动-形变相关性（透视畸变特征）
+    const motionDeformCorrelation = this.detectMotionDeformCorrelation()
+
+    // 【关键】组合多个防护条件
+    // 必须满足：有波动 + (往复或大幅波动) + (真实眨眼或最近有动作)
+    // 并且：左右眼对称 + 时间模式正确 + 非透视畸变
+    const basicMovement = 
+      (fluctuation > this.config.eyeMinFluctuation || stdDev > 0.005) && 
+      (isOscillating || fluctuation > 0.02) &&
+      (hasRealBlink || hasRecentMovement)
+
+    // 透视畸变攻击防护：如果运动和形变高度相关，很可能是照片偏转
+    const isPerspectiveAttack = motionDeformCorrelation > 0.7 && !hasValidBlinkTiming
+
+    // 最终判定：基础动作检测通过 + 不是透视攻击 + 左右眼对称
+    const hasMovement = basicMovement && !isPerspectiveAttack && eyeSymmetry > 0.5
+
+    // 评分：波动越大评分越高，但透视攻击会降分
+    const baseScore = hasMovement ? Math.min((fluctuation + stdDev) / 0.05, 1) : 0
+    const score = baseScore * (1 - motionDeformCorrelation * 0.5)
+
+    console.debug('[Eye]', {
+      EAR: avgEAR.toFixed(4),
+      fluctuation: fluctuation.toFixed(5),
+      stdDev: stdDev.toFixed(5),
+      oscillating: isOscillating,
+      realBlink: hasRealBlink,
+      recentMovement: hasRecentMovement,
+      eyeSymmetry: eyeSymmetry.toFixed(3),
+      blinkTiming: hasValidBlinkTiming,
+      motionDeformCorr: motionDeformCorrelation.toFixed(3),
+      isPerspectiveAttack,
+      score: score.toFixed(3)
+    })
+
+    return { score, stdDev, fluctuation, hasMovement, isPerspectiveAttack }
   }
 
   /**
-   * 计算眼睛大小（用于瞳孔反应检测）
+   * 检测嘴巴的微妙波动（任何变化）
+   * 防护：排除噪声，确保是真实的张嘴/闭嘴动作
    */
-  private calculateEyeSize(eyeKeypoints: any[][]): number {
-    if (!eyeKeypoints || eyeKeypoints.length < 4) {
-      return 0
+  private detectMouthFluctuation(keypoints: FaceKeypoints): any {
+    if (!keypoints.mouth) {
+      return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
     }
 
-    try {
-      // 计算眼睛边界框
-      let minX = Infinity, maxX = -Infinity
-      let minY = Infinity, maxY = -Infinity
+    // 计算嘴巴宽高比
+    const MAR = this.calculateMouthAspectRatio(keypoints.mouth)
 
-      for (const point of eyeKeypoints) {
-        if (point && point.length >= 2) {
-          minX = Math.min(minX, point[0])
-          maxX = Math.max(maxX, point[0])
-          minY = Math.min(minY, point[1])
-          maxY = Math.max(maxY, point[1])
+    this.mouthAspectRatioHistory.push(MAR)
+    if (this.mouthAspectRatioHistory.length > this.config.frameBufferSize) {
+      this.mouthAspectRatioHistory.shift()
+    }
+
+    if (this.mouthAspectRatioHistory.length < 2) {
+      return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
+    }
+
+    // 计算MAR的标准差
+    const stdDev = this.calculateStdDev(this.mouthAspectRatioHistory)
+    
+    // 计算波动范围
+    const maxMAR = Math.max(...this.mouthAspectRatioHistory)
+    const minMAR = Math.min(...this.mouthAspectRatioHistory)
+    const fluctuation = maxMAR - minMAR
+
+    // 【防护1】检测真实的张嘴/闭嘴周期
+    const hasRealMouthMovement = this.detectRealMouthMovement(this.mouthAspectRatioHistory)
+
+    // 【防护2】检测最近是否有嘴巴活动
+    const hasRecentMouthMovement = this.detectRecentMovement(this.mouthAspectRatioHistory)
+
+    // 【关键】需要真实的嘴巴动作或最近有活动
+    const hasMovement = 
+      (fluctuation > this.config.mouthMinFluctuation || stdDev > 0.003) &&
+      (hasRealMouthMovement || hasRecentMouthMovement)
+
+    // 评分
+    const score = hasMovement ? Math.min((fluctuation + stdDev) / 0.05, 1) : 0
+
+    console.debug('[Mouth]', {
+      MAR: MAR.toFixed(4),
+      fluctuation: fluctuation.toFixed(5),
+      stdDev: stdDev.toFixed(5),
+      realMovement: hasRealMouthMovement,
+      recentMovement: hasRecentMouthMovement,
+      score: score.toFixed(3)
+    })
+
+    return { score, stdDev, fluctuation, hasMovement }
+  }
+
+  /**
+   * 【关键】检测真实的嘴巴张嘴→闭嘴动作
+   * 
+   * 原理类似眨眼，需要检测下降和上升的连续段
+   */
+  private detectRealMouthMovement(values: number[]): boolean {
+    if (values.length < 3) {
+      return false
+    }
+
+    // 统计连续段
+    let descendingSegments = 0
+    let ascendingSegments = 0
+    let inDescending = false
+    let inAscending = false
+
+    for (let i = 1; i < values.length; i++) {
+      const change = values[i] - values[i - 1]
+      const threshold = 0.008
+
+      if (change < -threshold) {
+        if (!inDescending) {
+          descendingSegments++
+          inDescending = true
+          inAscending = false
+        }
+      } else if (change > threshold) {
+        if (!inAscending) {
+          ascendingSegments++
+          inAscending = true
+          inDescending = false
+        }
+      }
+    }
+
+    const hasCompletePattern = descendingSegments > 0 && ascendingSegments > 0
+
+    // 或检查最近5帧
+    if (values.length >= 5) {
+      const recent5 = values.slice(-5)
+      const recentRange = Math.max(...recent5) - Math.min(...recent5)
+      const hasRecentOpening = recentRange > 0.015
+      return hasCompletePattern || hasRecentOpening
+    }
+
+    return hasCompletePattern
+  }
+
+  /**
+   * 检测面部肌肉的微动（关键点位置微妙变化）
+   * 关键：允许刚性运动+生物特征（真人摇头），拒绝纯刚性运动（照片旋转）
+   * 
+   * 【重要修复】使用归一化坐标进行比较，消除人脸在画面中移动的影响
+   */
+  private detectMuscleMovement(): any {
+    // 【关键】使用归一化坐标历史，而非绝对坐标
+    if (this.normalizedLandmarksHistory.length < 2) {
+      return { score: 0, variation: 0, hasMovement: false }
+    }
+
+    // 【改进】检测刚性运动，但不直接拒绝
+    // 在综合判定中会结合其他生物特征来判断
+    const rigidityScore = this.detectRigidMotion()
+    
+    // 记录刚性运动历史（用于运动-形变相关性分析）
+    this.rigidMotionHistory.push(rigidityScore)
+    if (this.rigidMotionHistory.length > this.config.frameBufferSize) {
+      this.rigidMotionHistory.shift()
+    }
+
+    // 选择敏感的肌肉关键点
+    const musclePoints = [
+      61, 291,        // 嘴角
+      46, 53,         // 左眉
+      276, 283,       // 右眉
+      127, 356        // 脸颊
+    ]
+
+    const distances: number[] = []
+
+    // 【关键】使用归一化坐标计算位移
+    for (let i = 1; i < this.normalizedLandmarksHistory.length; i++) {
+      const prevFrame = this.normalizedLandmarksHistory[i - 1]
+      const currFrame = this.normalizedLandmarksHistory[i]
+
+      let totalDist = 0
+      let validPoints = 0
+
+      for (const ptIdx of musclePoints) {
+        const prev = prevFrame[ptIdx]
+        const curr = currFrame[ptIdx]
+        if (prev && curr && prev.length >= 2 && curr.length >= 2) {
+          // 归一化坐标的距离（相对于人脸尺寸的比例）
+          const dist = Math.sqrt((curr[0] - prev[0]) ** 2 + (curr[1] - prev[1]) ** 2)
+          totalDist += dist
+          validPoints++
         }
       }
 
-      if (minX === Infinity || minY === Infinity) return 0
+      if (validPoints > 0) {
+        distances.push(totalDist / validPoints)
+      }
+    }
 
-      const width = maxX - minX
-      const height = maxY - minY
-      return width * height // 面积
-    } catch (error) {
+    if (distances.length === 0) {
+      return { score: 0, variation: 0, hasMovement: false }
+    }
+
+    // 计算肌肉运动的变异性
+    const avgDist = distances.reduce((a, b) => a + b, 0) / distances.length
+    const variation = this.calculateStdDev(distances)
+
+    // 【关键】只要有任何细微变化就判定为活动
+    // 注意：阈值需要调整，因为归一化坐标的数值范围是 [0, 1]
+    const hasMovement = variation > 0.001 || avgDist > 0.005
+
+    // 评分
+    const score = Math.min((variation + avgDist) / 0.05, 1)
+
+    console.debug('[Muscle] avgDist:', avgDist.toFixed(4), 'variation:', variation.toFixed(5), 'rigidity:', rigidityScore.toFixed(3), 'score:', score.toFixed(3))
+
+    return { score: Math.max(score, 0), variation, hasMovement, rigidityScore }
+  }
+
+  /**
+   * 【防护机制】检测照片透视畸变（倾角拍摄）
+   * 
+   * 原理：
+   * - 照片是平面：所有关键点Z坐标（深度）应该相同且恒定
+   * - 当从倾角看平面照片时，虽然会产生2D投影变形，但深度仍然固定在一个平面
+   * - 真实活体：脸部有Z坐标深度，不同区域有深度差异（鼻子、下巴等突出）
+   * 
+   * 返回值：照片平面性得分（0-1，越接近1越可能是平面照片）
+   */
+  private detectPhotoPlanarity(): number {
+    if (this.faceLandmarksHistory.length < 3) {
       return 0
+    }
+
+    // 获取最近帧的关键点
+    const latestFrame = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 1]
+    
+    if (!latestFrame || latestFrame.length < 468) {
+      return 0
+    }
+
+    // 采样关键点的Z坐标（深度值）
+    // MediaPipe返回的Z坐标是相对值，表示距离摄像头的深度
+    const samplePoints = [
+      10,    // 额头上方
+      152,   // 下巴
+      33,    // 右眼外角
+      263,   // 左眼外角
+      61,    // 左嘴角
+      291,   // 右嘴角
+      1,     // 鼻尖
+      234,   // 右脸颊边缘
+      454    // 左脸颊边缘
+    ]
+
+    const zValues: number[] = []
+    for (const ptIdx of samplePoints) {
+      if (latestFrame[ptIdx] && latestFrame[ptIdx].length >= 3) {
+        zValues.push(latestFrame[ptIdx][2])
+      }
+    }
+
+    if (zValues.length < 5) {
+      return 0
+    }
+
+    // 计算Z坐标的变异系数
+    const zMean = zValues.reduce((a, b) => a + b, 0) / zValues.length
+    const zStdDev = this.calculateStdDev(zValues)
+    
+    // 照片的Z坐标变异非常小（都在一个平面上）
+    // 活体的Z坐标有较大变异（鼻子比眼睛凸出，下巴和额头深度不同）
+    const zVarianceRatio = zMean > 0 ? zStdDev / zMean : 0
+
+    // 平面性评分：如果Z坐标变异很小，说明是平面（照片）
+    // 如果zVarianceRatio < 0.15，认为是平面
+    // 如果zVarianceRatio > 0.3，认为是立体（活体）
+    const planarity = Math.max(0, (0.15 - zVarianceRatio) / 0.15)
+
+    console.debug('[Planarity]', {
+      zMean: zMean.toFixed(4),
+      zStdDev: zStdDev.toFixed(4),
+      zVarianceRatio: zVarianceRatio.toFixed(4),
+      planarity: planarity.toFixed(3)
+    })
+
+    return Math.min(planarity, 1)
+  }
+
+  /**
+   * 【防护机制】检测刚性运动（照片被拿着旋转/平移）
+   * 
+   * 原理：
+   * - 照片所有关键点运动是【刚性的】→ 所有点以相同方向、相似幅度移动
+   * - 活体肌肉运动是【非刚性的】→ 不同部位独立运动（眼睛、嘴、脸颊等）
+   * 
+   * 【重要修复】使用归一化坐标进行比较
+   * 
+   * 返回值 0-1：值越接近1说明是刚性运动（照片运动）
+   */
+  private detectRigidMotion(): number {
+    // 【关键】使用归一化坐标历史
+    if (this.normalizedLandmarksHistory.length < 2) {
+      return 0  // 数据不足，不判定为刚性运动
+    }
+
+    // 采样关键点（覆盖全脸，去重）
+    const samplePoints = [
+      33, 263,        // 左右眼外角
+      362, 133,       // 左右眼内角
+      234, 454,       // 左右脸颊边缘
+      10, 152,        // 额头、下巴
+      61, 291         // 嘴角
+    ]
+
+    const motionVectors: Array<{ dx: number; dy: number }> = []
+
+    // 【关键】使用归一化坐标计算运动向量
+    const frame1 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 2]
+    const frame2 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 1]
+
+    for (const ptIdx of samplePoints) {
+      if (ptIdx < frame1.length && ptIdx < frame2.length) {
+        const p1 = frame1[ptIdx]
+        const p2 = frame2[ptIdx]
+        if (p1 && p2 && p1.length >= 2 && p2.length >= 2) {
+          motionVectors.push({
+            dx: p2[0] - p1[0],
+            dy: p2[1] - p1[1]
+          })
+        }
+      }
+    }
+
+    if (motionVectors.length < 3) {
+      return 0
+    }
+
+    // 计算所有运动向量的【一致性】
+    // 如果所有向量都指向相同方向（方向角相似），则为刚性运动
+    const angles = motionVectors.map(v => Math.atan2(v.dy, v.dx))
+    const magnitudes = motionVectors.map(v => Math.sqrt(v.dx * v.dx + v.dy * v.dy))
+
+    // 方向一致性：计算方向的标准差
+    const meanAngle = this.calculateMeanAngle(angles)
+    const angleVariance = angles.reduce((sum, angle) => {
+      const diff = angle - meanAngle
+      // 处理角度环绕问题
+      const wrappedDiff = Math.abs(diff) > Math.PI ? 2 * Math.PI - Math.abs(diff) : Math.abs(diff)
+      return sum + wrappedDiff * wrappedDiff
+    }, 0) / angles.length
+    const angleStdDev = Math.sqrt(angleVariance)
+
+    // 幅度一致性：计算幅度的变异系数
+    const meanMagnitude = magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length
+    const magnitudeVariance = magnitudes.reduce((sum, mag) => sum + (mag - meanMagnitude) ** 2, 0) / magnitudes.length
+    const magnitudeStdDev = Math.sqrt(magnitudeVariance)
+    // 使用更低的阈值避免小运动时误判，当运动幅度很小时使用1避免除零
+    const magnitudeCV = meanMagnitude > 0.001 ? magnitudeStdDev / meanMagnitude : 1
+
+    // 综合评分：方向和幅度都一致 → 刚性运动
+    // angleStdDev 越小（接近0）说明方向越一致
+    // magnitudeCV 越小（接近0）说明幅度越一致
+    const rigidityScore = Math.max(0, 1 - angleStdDev / 0.5) * Math.max(0, 1 - magnitudeCV)
+
+    console.debug('[RigidityCheck]', {
+      samplePointCount: motionVectors.length,
+      angleStdDev: angleStdDev.toFixed(4),
+      magnitudeCV: magnitudeCV.toFixed(4),
+      rigidityScore: rigidityScore.toFixed(3)
+    })
+
+    return Math.min(rigidityScore, 1)
+  }
+
+  /**
+   * 计算角度的平均值（考虑循环性）
+   */
+  private calculateMeanAngle(angles: number[]): number {
+    const sinSum = angles.reduce((sum, a) => sum + Math.sin(a), 0)
+    const cosSum = angles.reduce((sum, a) => sum + Math.cos(a), 0)
+    return Math.atan2(sinSum / angles.length, cosSum / angles.length)
+  }
+
+  /**
+   * 检测序列是否呈现【往复波动】而不是【单向变化】
+   * 
+   * 原理：
+   * - 真实眨眼/表情：值会【往复波动】 如 0.4 → 0.3 → 0.4 → 0.5
+   * - 照片透视变形：值会【单向变化】 如 0.4 → 0.3 → 0.25 → 0.2
+   * 
+   * 返回值：true = 检测到往复波动（活体特征）
+   */
+  private detectOscillation(values: number[]): boolean {
+    if (values.length < 4) {
+      return false
+    }
+
+    // 计算相邻值的差分
+    const diffs: number[] = []
+    for (let i = 1; i < values.length; i++) {
+      diffs.push(values[i] - values[i - 1])
+    }
+
+    // 统计方向改变次数（从正变负或从负变正）
+    let directionChanges = 0
+    for (let i = 1; i < diffs.length; i++) {
+      if (diffs[i] * diffs[i - 1] < 0) {  // 符号相反
+        directionChanges++
+      }
+    }
+
+    // 往复波动通常有多次方向改变
+    // 单向变化只有0-1次方向改变
+    const isOscillating = directionChanges >= 1
+
+    return isOscillating
+  }
+
+  /**
+   * 【关键】检测真实眨眼（连续的闭眼→睁眼周期）
+   * 
+   * 原理：
+   * - 真实眨眼：快速下降（EAR↓ 1-2帧）→ 保持低值（EAR低 2-3帧）→ 快速上升（EAR↑ 1-2帧）
+   * - 噪声或光线变化：孤立的异常值，前后没有连续的变化模式
+   * 
+   * 返回值：true = 检测到完整或部分眨眼周期
+   */
+  private detectRealBlink(values: number[]): boolean {
+    if (values.length < 3) {
+      return false
+    }
+
+    // 统计连续下降和上升的段数
+    let descendingSegments = 0
+    let ascendingSegments = 0
+    let inDescending = false
+    let inAscending = false
+
+    for (let i = 1; i < values.length; i++) {
+      const change = values[i] - values[i - 1]
+      const threshold = 0.01  // 判定为"变化"的阈值
+
+      if (change < -threshold) {
+        if (!inDescending) {
+          descendingSegments++
+          inDescending = true
+          inAscending = false
+        }
+      } else if (change > threshold) {
+        if (!inAscending) {
+          ascendingSegments++
+          inAscending = true
+          inDescending = false
+        }
+      } else {
+        // 变化不大，可能在平台期
+        if (inDescending || inAscending) {
+          // 保持当前状态（平台期）
+        }
+      }
+    }
+
+    // 完整眨眼周期：下降→平台→上升，至少要有下降和上升
+    // 或者：最近几帧有明显的下升趋势
+    const hasCompletePattern = descendingSegments > 0 && ascendingSegments > 0
+
+    // 或者检查最近5帧是否有明显变化
+    if (values.length >= 5) {
+      const recent5 = values.slice(-5)
+      const recentRange = Math.max(...recent5) - Math.min(...recent5)
+      const hasRecentBlink = recentRange > 0.02
+      return hasCompletePattern || hasRecentBlink
+    }
+
+    return hasCompletePattern
+  }
+
+  /**
+   * 【新增防护】检测左右眼对称性
+   * 
+   * 原理：
+   * - 真实眨眼：左右眼几乎同时闭合和睁开，EAR变化高度同步
+   * - 照片透视畸变：根据偏转方向，一只眼睛可能比另一只变化更大
+   * 
+   * 返回值 0-1：越接近1说明左右眼越对称（越像真实眨眼）
+   */
+  private detectEyeSymmetry(): number {
+    if (this.leftEyeEARHistory.length < 3 || this.rightEyeEARHistory.length < 3) {
+      return 1  // 数据不足，默认通过
+    }
+
+    // 计算左右眼EAR变化的差分
+    const leftDiffs: number[] = []
+    const rightDiffs: number[] = []
+    for (let i = 1; i < this.leftEyeEARHistory.length; i++) {
+      leftDiffs.push(this.leftEyeEARHistory[i] - this.leftEyeEARHistory[i - 1])
+      rightDiffs.push(this.rightEyeEARHistory[i] - this.rightEyeEARHistory[i - 1])
+    }
+
+    // 计算左右眼变化的相关性
+    // 真实眨眼：leftDiffs ≈ rightDiffs（同向同幅度）
+    // 透视畸变：可能一个大一个小，或方向不一致
+    let sumProduct = 0
+    let sumLeftSq = 0
+    let sumRightSq = 0
+    for (let i = 0; i < leftDiffs.length; i++) {
+      sumProduct += leftDiffs[i] * rightDiffs[i]
+      sumLeftSq += leftDiffs[i] * leftDiffs[i]
+      sumRightSq += rightDiffs[i] * rightDiffs[i]
+    }
+
+    const denominator = Math.sqrt(sumLeftSq * sumRightSq)
+    if (denominator < 0.0001) {
+      return 1  // 几乎没有变化，视为对称
+    }
+
+    // 皮尔逊相关系数，范围 [-1, 1]
+    const correlation = sumProduct / denominator
+    
+    // 转换为对称性得分 [0, 1]，相关性越高越对称
+    const symmetry = (correlation + 1) / 2
+
+    console.debug('[EyeSymmetry]', {
+      correlation: correlation.toFixed(3),
+      symmetry: symmetry.toFixed(3)
+    })
+
+    return symmetry
+  }
+
+  /**
+   * 【新增防护】检测眨眼时间模式
+   * 
+   * 原理：
+   * - 真实眨眼非常快：完整周期 100-400ms（3-12帧@30fps）
+   * - 手动摆动照片：周期通常 500ms-2000ms（15-60帧@30fps）
+   * 
+   * 返回值：true = 检测到符合真实眨眼的快速时间模式
+   */
+  private detectBlinkTiming(): boolean {
+    if (this.eyeAspectRatioHistory.length < 5 || this.frameTimestamps.length < 5) {
+      return true  // 数据不足，默认通过
+    }
+
+    // 找到EAR的局部最小值（眨眼闭合点）
+    const values = this.eyeAspectRatioHistory
+    const timestamps = this.frameTimestamps
+
+    // 检测下降-上升周期的时间
+    let inDescent = false
+    let descentStartIdx = -1
+    let fastBlinkCount = 0
+    let slowBlinkCount = 0
+
+    for (let i = 1; i < values.length; i++) {
+      const change = values[i] - values[i - 1]
+      
+      if (change < -0.01 && !inDescent) {
+        // 开始下降
+        inDescent = true
+        descentStartIdx = i - 1
+      } else if (change > 0.01 && inDescent) {
+        // 开始上升（完成一个眨眼周期）
+        inDescent = false
+        if (descentStartIdx >= 0 && i < timestamps.length) {
+          const duration = timestamps[i] - timestamps[descentStartIdx]
+          if (duration > 0 && duration < 500) {
+            fastBlinkCount++  // 快速眨眼（< 500ms）
+          } else if (duration >= 500) {
+            slowBlinkCount++  // 慢速"眨眼"（可能是照片摆动）
+          }
+        }
+      }
+    }
+
+    // 如果快速眨眼比慢速眨眼多，认为是真实的
+    const hasValidTiming = fastBlinkCount > 0 || slowBlinkCount === 0
+
+    console.debug('[BlinkTiming]', {
+      fastBlinks: fastBlinkCount,
+      slowBlinks: slowBlinkCount,
+      hasValidTiming
+    })
+
+    return hasValidTiming
+  }
+
+  /**
+   * 【新增防护】检测运动-形变相关性
+   * 
+   * 原理：
+   * - 照片偏转攻击：刚性运动越大 → EAR/MAR形变越大（高度相关）
+   * - 真实活体：眨眼/张嘴与头部运动无关（低相关或无相关）
+   * 
+   * 返回值 0-1：越接近1说明运动和形变越相关（越像照片攻击）
+   */
+  private detectMotionDeformCorrelation(): number {
+    if (this.rigidMotionHistory.length < 3 || this.eyeAspectRatioHistory.length < 3) {
+      return 0  // 数据不足，默认不是攻击
+    }
+
+    // 计算EAR变化幅度
+    const earChanges: number[] = []
+    for (let i = 1; i < this.eyeAspectRatioHistory.length; i++) {
+      earChanges.push(Math.abs(this.eyeAspectRatioHistory[i] - this.eyeAspectRatioHistory[i - 1]))
+    }
+
+    // 取最近的刚性运动历史（对齐长度）
+    const motionValues = this.rigidMotionHistory.slice(-(earChanges.length))
+    if (motionValues.length !== earChanges.length || motionValues.length < 3) {
+      return 0
+    }
+
+    // 计算皮尔逊相关系数
+    const n = motionValues.length
+    const meanMotion = motionValues.reduce((a, b) => a + b, 0) / n
+    const meanEAR = earChanges.reduce((a, b) => a + b, 0) / n
+
+    let numerator = 0
+    let denomMotion = 0
+    let denomEAR = 0
+    for (let i = 0; i < n; i++) {
+      const diffMotion = motionValues[i] - meanMotion
+      const diffEAR = earChanges[i] - meanEAR
+      numerator += diffMotion * diffEAR
+      denomMotion += diffMotion * diffMotion
+      denomEAR += diffEAR * diffEAR
+    }
+
+    const denominator = Math.sqrt(denomMotion * denomEAR)
+    if (denominator < 0.0001) {
+      return 0  // 几乎没有变化
+    }
+
+    // 相关系数 [-1, 1]，我们关心正相关（运动大→形变大）
+    const correlation = numerator / denominator
+    
+    // 只有正相关才可疑，负相关或无相关都正常
+    const suspiciousCorrelation = Math.max(0, correlation)
+
+    console.debug('[MotionDeformCorr]', {
+      correlation: correlation.toFixed(3),
+      suspicious: suspiciousCorrelation.toFixed(3)
+    })
+
+    return suspiciousCorrelation
+  }
+
+  /**
+   * 【关键】检测最近几帧是否有运动
+   * 
+   * 防护：某人在检测开始时眨眼，之后就完全静止
+   * 这种情况应该判定为照片，因为照片可以有偶然的反光
+   * 活体应该有【持续的或周期性的】动作
+   * 
+   * 返回值：true = 最近3-5帧内有明显变化
+   */
+  private detectRecentMovement(values: number[]): boolean {
+    if (values.length < 4) {
+      return false  // 数据不足，保守判定
+    }
+
+    // 检查最近帧的变化幅度
+    // 如果最近帧都相同，说明动作已经停止
+    const recentFrames = values.slice(-5)  // 最近5帧
+    const recentRange = Math.max(...recentFrames) - Math.min(...recentFrames)
+    const recentStdDev = this.calculateStdDev(recentFrames)
+
+    // 最近帧还有变化，说明活体在动
+    const hasRecentChange = recentRange > 0.008 || recentStdDev > 0.003
+
+    // 额外检查：不能只是偶然的反光
+    // 如果最后2帧都完全相同或非常接近，说明已经停止
+    const lastTwoChanges = Math.abs(values[values.length - 1] - values[values.length - 2])
+    const isStabiliziing = lastTwoChanges < 0.002
+
+    return hasRecentChange && !isStabiliziing
+  }
+
+  /**
+   * 【核心】照片几何特征检测（逆向检测）
+   * 
+   * 重要说明：
+   * - MediaPipe的Z坐标是从2D图像【推断】的，不是真实深度
+   * - 对照片也可能推断出"假"的3D结构
+   * - 因此【2D几何约束】比【Z坐标分析】更可靠
+   * 
+   * 可靠的检测（基于2D几何，物理定律）：
+   * 1. 单应性变换约束 - 平面必须满足
+   * 2. 特征点相对位置变化 - 照片偏转时遵循透视规律
+   * 
+   * 参考性检测（基于推断的Z坐标，可能被欺骗）：
+   * 1. 深度一致性 - 辅助参考
+   * 2. 跨帧深度模式 - 辅助参考
+   */
+  private detectPhotoGeometry(): any {
+    if (this.faceLandmarksHistory.length < 3) {
+      return { isPhoto: false, confidence: 0, details: {} }
+    }
+
+    // 【核心检测1】平面单应性约束检测（最可靠，纯2D几何）
+    const homographyResult = this.detectHomographyConstraint()
+    
+    // 【核心检测2】特征点相对位置变化模式（照片遵循透视变换规律）
+    const perspectivePattern = this.detectPerspectiveTransformPattern()
+    
+    // 【核心检测3】交叉比率不变性检测（射影几何的核心不变量）
+    const crossRatioResult = this.detectCrossRatioInvariance()
+
+    // 【辅助检测】深度相关（Z坐标是推断的，权重降低）
+    const depthResult = this.detectDepthConsistency()
+    const crossFrameDepth = this.detectCrossFrameDepthPattern()
+
+    // 综合判定：2D几何约束权重高，Z坐标权重低
+    const photoScore = 
+      homographyResult.planarScore * 0.35 +       // 单应性约束（最可靠）
+      perspectivePattern.perspectiveScore * 0.30 + // 透视变换模式（可靠）
+      crossRatioResult.invarianceScore * 0.20 +   // 交叉比率不变性（可靠）
+      (1 - depthResult.depthVariation) * 0.10 +   // 深度（辅助，低权重）
+      crossFrameDepth.planarPattern * 0.05        // 跨帧深度（辅助，低权重）
+
+    const isPhoto = photoScore > 0.60  // 阈值
+    const confidence = Math.min(photoScore, 1)
+
+    // 记录历史
+    this.planarityScores.push(photoScore)
+    if (this.planarityScores.length > this.config.frameBufferSize) {
+      this.planarityScores.shift()
+    }
+
+    console.debug('[PhotoGeometry]', {
+      homography: homographyResult.planarScore.toFixed(3),
+      perspective: perspectivePattern.perspectiveScore.toFixed(3),
+      crossRatio: crossRatioResult.invarianceScore.toFixed(3),
+      depthVariation: depthResult.depthVariation.toFixed(3),
+      crossFrame: crossFrameDepth.planarPattern.toFixed(3),
+      photoScore: photoScore.toFixed(3),
+      isPhoto
+    })
+
+    return {
+      isPhoto,
+      confidence,
+      details: {
+        homographyScore: homographyResult.planarScore,
+        perspectiveScore: perspectivePattern.perspectiveScore,
+        crossRatioScore: crossRatioResult.invarianceScore,
+        depthVariation: depthResult.depthVariation,
+        crossFramePattern: crossFrameDepth.planarPattern
+      }
     }
   }
 
   /**
-   * 从 Human.js 面部检测结果中提取面部关键点
-   * 使用网格标志点（来自 MediaPipe Face Mesh 模型的 468 个点）
+   * 【新增核心检测】交叉比率不变性检测
+   * 
+   * 原理（射影几何的基本定理）：
+   * - 平面上共线4点的【交叉比率】在透视变换下保持不变
+   * - 真实3D人脸旋转时，面部各点不共面，交叉比率会变化
+   * - 照片无论怎么偏转，共线点的交叉比率保持不变
+   * 
+   * 这是纯2D几何检测，非常可靠！
    */
+  /**
+   * 【交叉比率不变性检测】
+   * 
+   * 原理（射影几何的基本定理）：
+   * - 平面上共线4点的【交叉比率】在透视变换下保持不变
+   * - 真实3D人脸旋转时，面部各点不共面，交叉比率会变化
+   * - 照片无论怎么偏转，共线点的交叉比率保持不变
+   * 
+   * 【注意】交叉比率本身是比率，不依赖绝对坐标
+   * 使用归一化坐标只是为了一致性
+   */
+  private detectCrossRatioInvariance(): any {
+    // 【使用归一化坐标历史，保持一致性】
+    if (this.normalizedLandmarksHistory.length < 3) {
+      return { invarianceScore: 0 }
+    }
+
+    // 选择面部中线上近似共线的点（额头-鼻梁-鼻尖-嘴-下巴）
+    const midlinePoints = [10, 168, 1, 0, 152]  // 从上到下
+
+    const crossRatios: number[] = []
+
+    for (const frame of this.normalizedLandmarksHistory) {
+      if (frame.length < 468) continue
+
+      // 提取中线点的Y坐标（它们大致在一条垂直线上）
+      const yCoords: number[] = []
+      for (const idx of midlinePoints) {
+        if (frame[idx]) {
+          yCoords.push(frame[idx][1])
+        }
+      }
+
+      if (yCoords.length >= 4) {
+        // 计算交叉比率 CR(A,B,C,D) = (AC * BD) / (BC * AD)
+        const a = yCoords[0], b = yCoords[1], c = yCoords[2], d = yCoords[3]
+        const ac = Math.abs(c - a)
+        const bd = Math.abs(d - b)
+        const bc = Math.abs(c - b)
+        const ad = Math.abs(d - a)
+        
+        if (bc > 0.001 && ad > 0.001) {
+          const cr = (ac * bd) / (bc * ad)
+          crossRatios.push(cr)
+        }
+      }
+    }
+
+    if (crossRatios.length < 2) {
+      return { invarianceScore: 0 }
+    }
+
+    // 计算交叉比率的变异系数
+    // 照片：交叉比率应该几乎不变（变异系数小）
+    // 真人：交叉比率会变化（变异系数大）
+    const mean = crossRatios.reduce((a, b) => a + b, 0) / crossRatios.length
+    const stdDev = this.calculateStdDev(crossRatios)
+    const cv = mean > 0.001 ? stdDev / mean : 0
+
+    // 变异系数越小，越可能是平面（照片）
+    // cv < 0.05 → 非常稳定（照片）
+    // cv > 0.15 → 变化明显（真人）
+    const invarianceScore = Math.max(0, 1 - cv / 0.1)
+
+    console.debug('[CrossRatio]', {
+      mean: mean.toFixed(4),
+      stdDev: stdDev.toFixed(4),
+      cv: cv.toFixed(4),
+      invarianceScore: invarianceScore.toFixed(3)
+    })
+
+    return { invarianceScore: Math.min(invarianceScore, 1), cv }
+  }
+
+  /**
+   * 【关键】检测单应性变换约束
+   * 
+   * 原理：
+   * - 平面物体（照片）在不同视角下的投影满足 H * p1 = p2（H是3x3单应性矩阵）
+   * - 3D物体不满足这个约束，会有残差误差
+   * 
+   * 方法：用4对点计算H，然后检验其他点是否符合H变换
+   */
+  /**
+   * 【单应性约束检测】判断多帧特征点是否满足平面约束
+   * 
+   * 【重要修复】使用归一化坐标进行比较
+   * 这是纯 2D 几何检测，最可靠！
+   */
+  private detectHomographyConstraint(): any {
+    // 【关键】使用归一化坐标历史
+    if (this.normalizedLandmarksHistory.length < 2) {
+      return { planarScore: 0, error: 0 }
+    }
+
+    const frame1 = this.normalizedLandmarksHistory[0]
+    const frame2 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 1]
+
+    if (frame1.length < 468 || frame2.length < 468) {
+      return { planarScore: 0, error: 0 }
+    }
+
+    // 选择用于计算单应性的4个基准点（面部四角）
+    const basePoints = [10, 152, 234, 454]  // 额头、下巴、左脸颊、右脸颊
+    
+    // 选择用于验证的检验点
+    const testPoints = [33, 263, 61, 291, 1, 168]  // 眼角、嘴角、鼻尖、鼻梁
+
+    // 提取基准点坐标（归一化后的坐标）
+    const srcBase: number[][] = []
+    const dstBase: number[][] = []
+    for (const idx of basePoints) {
+      if (frame1[idx] && frame2[idx]) {
+        srcBase.push([frame1[idx][0], frame1[idx][1]])
+        dstBase.push([frame2[idx][0], frame2[idx][1]])
+      }
+    }
+
+    if (srcBase.length < 4) {
+      return { planarScore: 0, error: 0 }
+    }
+
+    // 计算简化的仿射变换（近似单应性）
+    // 使用最小二乘法拟合仿射变换 [a, b, c; d, e, f] 
+    const transform = this.estimateAffineTransform(srcBase, dstBase)
+    if (!transform) {
+      return { planarScore: 0, error: 0 }
+    }
+
+    // 用仿射变换预测检验点位置，计算误差
+    let totalError = 0
+    let validPoints = 0
+    for (const idx of testPoints) {
+      if (frame1[idx] && frame2[idx]) {
+        const predicted = this.applyAffineTransform(transform, frame1[idx][0], frame1[idx][1])
+        const actual = [frame2[idx][0], frame2[idx][1]]
+        // 归一化坐标下的误差（相对于人脸尺寸的比例）
+        const error = Math.sqrt((predicted[0] - actual[0]) ** 2 + (predicted[1] - actual[1]) ** 2)
+        totalError += error
+        validPoints++
+      }
+    }
+
+    if (validPoints === 0) {
+      return { planarScore: 0, error: 0 }
+    }
+
+    const avgError = totalError / validPoints
+    
+    // 归一化坐标下，误差已经是相对于人脸尺寸的比例
+    // 不需要再除以脸宽
+    const relativeError = avgError
+
+    // 平面得分：误差越小，越可能是平面（照片）
+    // relativeError < 0.02 → 非常可能是平面
+    // relativeError > 0.08 → 不太可能是平面
+    const planarScore = Math.max(0, 1 - relativeError / 0.05)
+
+    // 记录误差历史
+    this.homographyErrors.push(relativeError)
+    if (this.homographyErrors.length > this.config.frameBufferSize) {
+      this.homographyErrors.shift()
+    }
+
+    return { planarScore: Math.min(planarScore, 1), error: relativeError }
+  }
+
+  /**
+   * 估计仿射变换矩阵 (简化的单应性)
+   * 输入：源点和目标点对
+   * 输出：[a, b, c, d, e, f] 表示变换 x' = ax + by + c, y' = dx + ey + f
+   */
+  private estimateAffineTransform(src: number[][], dst: number[][]): number[] | null {
+    if (src.length < 3 || dst.length < 3) return null
+
+    const n = Math.min(src.length, dst.length)
+    
+    // 构建方程组 Ax = b (最小二乘)
+    // 对于 x': [x1, y1, 1, 0, 0, 0] * [a,b,c,d,e,f]^T = x1'
+    // 对于 y': [0, 0, 0, x1, y1, 1] * [a,b,c,d,e,f]^T = y1'
+    
+    let sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0, sumXY = 0
+    let sumXpX = 0, sumXpY = 0, sumYpX = 0, sumYpY = 0, sumXp = 0, sumYp = 0
+
+    for (let i = 0; i < n; i++) {
+      const x = src[i][0], y = src[i][1]
+      const xp = dst[i][0], yp = dst[i][1]
+      
+      sumX += x; sumY += y
+      sumX2 += x * x; sumY2 += y * y; sumXY += x * y
+      sumXpX += xp * x; sumXpY += xp * y; sumXp += xp
+      sumYpX += yp * x; sumYpY += yp * y; sumYp += yp
+    }
+
+    // 简化：假设主要是平移+旋转+缩放
+    // 计算平均平移
+    const cx = sumXp / n - sumX / n
+    const cy = sumYp / n - sumY / n
+
+    // 计算缩放和旋转（简化版本）
+    const det = sumX2 * n - sumX * sumX
+    if (Math.abs(det) < 0.0001) return null
+
+    const a = (sumXpX * n - sumXp * sumX) / (sumX2 * n - sumX * sumX + 0.0001)
+    const b = 0  // 简化，忽略剪切
+    const d = 0
+    const e = (sumYpY * n - sumYp * sumY) / (sumY2 * n - sumY * sumY + 0.0001)
+    
+    const c = sumXp / n - a * sumX / n
+    const f = sumYp / n - e * sumY / n
+
+    return [a || 1, b, c || 0, d, e || 1, f || 0]
+  }
+
+  /**
+   * 应用仿射变换
+   */
+  private applyAffineTransform(t: number[], x: number, y: number): number[] {
+    return [
+      t[0] * x + t[1] * y + t[2],
+      t[3] * x + t[4] * y + t[5]
+    ]
+  }
+
+  /**
+   * 【关键】检测深度一致性
+   * 
+   * 原理：
+   * - 真实人脸：鼻子Z坐标明显大于眼睛和脸颊（凸出）
+   * - 照片：所有点Z坐标接近相同（平面）
+   */
+  private detectDepthConsistency(): any {
+    const latestFrame = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 1]
+    
+    if (!latestFrame || latestFrame.length < 468) {
+      return { depthVariation: 0.5, isFlat: false }
+    }
+
+    // 采样不同深度区域的点
+    const nosePoints = [1, 4, 5, 6]      // 鼻子（应该凸出）
+    const eyePoints = [33, 133, 263, 362] // 眼睛（应该凹陷）
+    const cheekPoints = [234, 454, 50, 280] // 脸颊（中间深度）
+    const foreheadPoints = [10, 67, 297]  // 额头
+
+    const getAvgZ = (points: number[]) => {
+      let sum = 0, count = 0
+      for (const idx of points) {
+        if (latestFrame[idx] && latestFrame[idx].length >= 3) {
+          sum += latestFrame[idx][2]
+          count++
+        }
+      }
+      return count > 0 ? sum / count : 0
+    }
+
+    const noseZ = getAvgZ(nosePoints)
+    const eyeZ = getAvgZ(eyePoints)
+    const cheekZ = getAvgZ(cheekPoints)
+    const foreheadZ = getAvgZ(foreheadPoints)
+
+    // 计算深度差异
+    const allZ = [noseZ, eyeZ, cheekZ, foreheadZ].filter(z => z !== 0)
+    if (allZ.length < 3) {
+      return { depthVariation: 0.5, isFlat: false }
+    }
+
+    const zMean = allZ.reduce((a, b) => a + b, 0) / allZ.length
+    const zStdDev = Math.sqrt(allZ.reduce((sum, z) => sum + (z - zMean) ** 2, 0) / allZ.length)
+    
+    // 深度变异系数
+    const depthVariation = zMean !== 0 ? Math.abs(zStdDev / zMean) : 0
+
+    // 检查深度关系是否符合真实人脸
+    // 真实人脸：鼻子应该比眼睛更接近摄像头（Z更小，因为Z表示深度/距离）
+    // 注意：MediaPipe的Z坐标是负值，越接近0表示越近
+    const noseCloser = noseZ > eyeZ  // 鼻子更近
+
+    // 记录历史
+    this.depthConsistencyScores.push(depthVariation)
+    if (this.depthConsistencyScores.length > this.config.frameBufferSize) {
+      this.depthConsistencyScores.shift()
+    }
+
+    return {
+      depthVariation,
+      isFlat: depthVariation < 0.1,  // 深度变异很小 → 平面（照片）
+      noseCloser,
+      details: { noseZ, eyeZ, cheekZ, foreheadZ }
+    }
+  }
+
+  /**
+   * 【关键】检测跨帧深度模式
+   * 
+   * 原理：
+   * - 照片旋转时：所有点的深度变化遵循平面投影规律（线性关系）
+   * - 真实人脸旋转时：不同部位的深度变化不成线性关系
+   */
+  private detectCrossFrameDepthPattern(): any {
+    if (this.faceLandmarksHistory.length < 3) {
+      return { planarPattern: 0 }
+    }
+
+    // 比较多帧的深度变化模式
+    const samplePoints = [1, 33, 263, 61, 291]  // 鼻尖、眼角、嘴角
+    
+    const depthChanges: number[][] = []
+    for (let i = 1; i < this.faceLandmarksHistory.length; i++) {
+      const prev = this.faceLandmarksHistory[i - 1]
+      const curr = this.faceLandmarksHistory[i]
+      
+      const changes: number[] = []
+      for (const idx of samplePoints) {
+        if (prev[idx]?.length >= 3 && curr[idx]?.length >= 3) {
+          changes.push(curr[idx][2] - prev[idx][2])
+        }
+      }
+      if (changes.length >= 3) {
+        depthChanges.push(changes)
+      }
+    }
+
+    if (depthChanges.length < 2) {
+      return { planarPattern: 0 }
+    }
+
+    // 检测深度变化的一致性（平面特征：所有点同方向变化）
+    let consistentFrames = 0
+    for (const changes of depthChanges) {
+      const signs = changes.map(c => Math.sign(c))
+      const allSame = signs.every(s => s === signs[0]) || signs.every(s => Math.abs(changes[signs.indexOf(s)]) < 0.001)
+      if (allSame) consistentFrames++
+    }
+
+    const planarPattern = consistentFrames / depthChanges.length
+
+    return { planarPattern }
+  }
+
+  /**
+   * 【关键】检测透视变换模式
+   * 
+   * 原理：
+   * - 照片偏转时，特征点位置变化遵循严格的透视变换规律
+   * - 检测左右脸的相对变化是否符合透视投影
+   */
+  /**
+   * 【透视变换模式检测】
+   * 
+   * 【重要修复】使用归一化坐标进行比较
+   * 
+   * 原理：照片左右偏转时，左右脸宽度比例会平滑变化
+   */
+  private detectPerspectiveTransformPattern(): any {
+    // 【关键】使用归一化坐标历史
+    if (this.normalizedLandmarksHistory.length < 3) {
+      return { perspectiveScore: 0 }
+    }
+
+    // 比较左右脸的宽度比例变化
+    // 照片左偏时：右脸变窄，左脸变宽（透视效果）
+    // 这种变化应该是平滑且可预测的
+    
+    const widthRatios: number[] = []
+    for (const frame of this.normalizedLandmarksHistory) {
+      if (frame.length >= 468) {
+        // 使用归一化坐标计算距离比例
+        const leftWidth = this.pointDist(frame[234], frame[1])   // 左脸到鼻子
+        const rightWidth = this.pointDist(frame[1], frame[454])  // 鼻子到右脸
+        if (leftWidth > 0 && rightWidth > 0) {
+          widthRatios.push(leftWidth / rightWidth)
+        }
+      }
+    }
+
+    if (widthRatios.length < 3) {
+      return { perspectiveScore: 0 }
+    }
+
+    // 照片偏转时，宽度比例变化应该是单调的或周期性的
+    // 计算变化的平滑度
+    let smoothChanges = 0
+    for (let i = 2; i < widthRatios.length; i++) {
+      const change1 = widthRatios[i - 1] - widthRatios[i - 2]
+      const change2 = widthRatios[i] - widthRatios[i - 1]
+      // 如果变化方向一致或变化很小，则认为是平滑的
+      if (change1 * change2 >= 0 || Math.abs(change1) < 0.02 || Math.abs(change2) < 0.02) {
+        smoothChanges++
+      }
+    }
+
+    const smoothness = smoothChanges / (widthRatios.length - 2)
+    
+    // 平滑的透视变化模式更可能是照片
+    const perspectiveScore = smoothness
+
+    return { perspectiveScore }
+  }
+
+  /**
+   * 综合判定 - 结合正向检测（生物特征）和逆向检测（照片几何）
+   * 
+   * 双重策略：
+   * 1. 正向：检测生物微动特征（有 → 活体）
+   * 2. 逆向：检测照片几何约束（满足 → 照片）
+   * 
+   * 逆向检测优先级更高，因为照片几何约束是物理定律，无法伪造
+   */
+  private makeLivenessDecision(eyeActivity: any, mouthActivity: any, muscleActivity: any, photoGeometry: any): boolean {
+    if (!this.isReady()) {
+      return true  // 数据不足，默认通过
+    }
+
+    // ============ 逆向检测（照片几何特征）============
+    // 这是最可靠的检测方式，优先级最高
+    const isPhotoByGeometry = photoGeometry.isPhoto
+    const photoConfidence = photoGeometry.confidence || 0
+
+    // 如果照片几何检测高置信度判定为照片，直接拒绝
+    if (isPhotoByGeometry && photoConfidence > 0.75) {
+      console.debug('[Decision] REJECTED by photo geometry detection', {
+        photoConfidence: photoConfidence.toFixed(3),
+        details: photoGeometry.details
+      })
+      return false
+    }
+
+    // ============ 正向检测（生物特征）============
+    const hasEyeMovement = eyeActivity.hasMovement
+    const hasMouthMovement = mouthActivity.hasMovement
+    const hasMuscleMovement = muscleActivity.hasMovement
+    const hasBioFeatures = hasEyeMovement || hasMouthMovement || hasMuscleMovement
+
+    // 获取其他检测结果
+    const rigidityScore = muscleActivity.rigidityScore || 0
+    const isPerspectiveAttack = eyeActivity.isPerspectiveAttack || false
+    const faceShapeStability = this.checkFaceShapeStability()
+
+    // ============ 综合判定 ============
+    // 
+    // 【决策矩阵】
+    // 
+    // | 照片几何检测 | 生物特征 | 透视攻击 | 判定 |
+    // |-------------|---------|---------|------|
+    // | 是照片(>0.75) | - | - | ❌ 拒绝 |
+    // | 可疑(0.5-0.75) | 有 | 否 | ✅ 通过（生物特征覆盖） |
+    // | 可疑(0.5-0.75) | 无 | - | ❌ 拒绝 |
+    // | 不像照片(<0.5) | 有 | 否 | ✅ 通过 |
+    // | 不像照片(<0.5) | 无 | 是 | ❌ 拒绝 |
+    // | 不像照片(<0.5) | 无 | 否 | ⚠️ 待定（看刚性运动） |
+
+    let isLively: boolean
+
+    if (photoConfidence > 0.5) {
+      // 照片可疑度中等以上：需要有明确的生物特征才能通过
+      isLively = hasBioFeatures && !isPerspectiveAttack
+    } else {
+      // 照片可疑度较低：正常的生物特征检测逻辑
+      const hasRigidMotion = rigidityScore > 0.7
+      const isPhotoLikely = faceShapeStability > 0.9
+      
+      isLively = 
+        (hasBioFeatures && !isPerspectiveAttack) || 
+        (hasRigidMotion && !isPhotoLikely && !isPerspectiveAttack)
+    }
+
+    console.debug('[Decision]', {
+      // 逆向检测结果
+      photoGeometry: isPhotoByGeometry,
+      photoConfidence: photoConfidence.toFixed(3),
+      // 正向检测结果
+      eye: eyeActivity.score.toFixed(3),
+      mouth: mouthActivity.score.toFixed(3),
+      muscle: muscleActivity.score.toFixed(3),
+      hasBioFeatures,
+      // 其他指标
+      rigidity: rigidityScore.toFixed(3),
+      faceShapeStability: faceShapeStability.toFixed(3),
+      isPerspectiveAttack,
+      // 最终结果
+      isLively
+    })
+
+    return isLively
+  }
+
+  /**
+   * 【防护机制】检查脸部形状稳定性
+   * 
+   * 原理：
+   * - 真实脸部：眨眼、张嘴等会改变脸部几何形状（EAR/MAR 变化）
+   * - 照片：脸部形状完全固定，不会有任何变化
+   * - 倾角照片：虽然会产生透视变形，但仍然是平面的，Z坐标无深度
+   * 
+   * 返回值 0-1：值越接近1说明脸部形状越稳定（越可能是照片）
+   */
+  /**
+   * 检查脸部形状稳定性
+   * 
+   * 【重要修复】使用归一化坐标进行比较
+   * 这样即使人脸在画面中移动或缩放，比较仍然有效
+   */
+  private checkFaceShapeStability(): number {
+    // 【关键】使用归一化坐标历史
+    if (this.normalizedLandmarksHistory.length < 5) {
+      return 0.5  // 数据不足
+    }
+
+    // 【第一层防护】检测照片平面性（Z坐标深度）
+    // 注意：这个方法使用原始坐标的Z值，因为Z是相对深度
+    const planarity = this.detectPhotoPlanarity()
+    if (planarity > 0.7) {
+      // 检测到照片平面特征（Z坐标变异很小）
+      console.debug('[FaceShapeStability] Detected planar face (photo), planarity:', planarity.toFixed(3))
+      return 0.95  // 非常可能是照片
+    }
+
+    // 【第二层防护】检测脸部形状稳定性
+    // 使用归一化坐标计算距离
+    const faceDistances: number[][] = []
+
+    // 计算以下距离：
+    // 1. 左眼-右眼（眼距）
+    // 2. 上嘴唇-下嘴唇（嘴高）
+    // 3. 左脸颊-右脸颊（脸宽）
+    for (const frame of this.normalizedLandmarksHistory) {
+      if (frame.length >= 468) {
+        const eyeDist = this.pointDist(frame[33], frame[263])          // 左右眼外角距离
+        const mouthHeight = Math.abs(frame[13][1] - frame[14][1])      // 上下嘴唇距离
+        const faceWidth = this.pointDist(frame[234], frame[454])       // 左右脸颊边缘距离
+        faceDistances.push([eyeDist, mouthHeight, faceWidth])
+      }
+    }
+
+    if (faceDistances.length < 3) {
+      return 0.5
+    }
+
+    // 计算每个距离的变异系数（越小说明越固定）
+    let totalCV = 0
+    for (let i = 0; i < 3; i++) {
+      const values = faceDistances.map(d => d[i])
+      const mean = values.reduce((a, b) => a + b, 0) / values.length
+      const stdDev = this.calculateStdDev(values)
+      // 归一化坐标下，调整阈值
+      const cv = mean > 0.01 ? stdDev / mean : 0
+      totalCV += cv
+    }
+
+    const avgCV = totalCV / 3
+    
+    // CV越小，形状越稳定
+    // 如果avgCV < 0.02，说明形状完全不变（可能是照片）
+    // 如果avgCV > 0.1，说明形状在变化（活体）
+    const shapeStability = Math.min(Math.max(0.02 - avgCV, 0) / 0.02, 1)
+
+    // 综合得分：结合平面性和形状稳定性
+    const combinedStability = Math.max(shapeStability, planarity * 0.5)
+
+    console.debug('[FaceShapeStability]', {
+      avgCV: avgCV.toFixed(4),
+      planarity: planarity.toFixed(3),
+      shapeStability: shapeStability.toFixed(3),
+      combinedStability: combinedStability.toFixed(3)
+    })
+
+    return Math.min(combinedStability, 1)
+  }
+
   private extractKeypoints(face: FaceResult): FaceKeypoints {
     const keypoints: FaceKeypoints = {}
 
-    // 提取网格标志点（来自面部网格的 468 个点）
     if (face.mesh && Array.isArray(face.mesh)) {
       keypoints.landmarks = face.mesh
     }
 
-    // 从网格标志点中提取眼睛和嘴巴区域
-    // MediaPipe Face Mesh 标志点索引：
-    // 左眼：362, 385, 387, 390, 25, 55, 154, 133
-    // 右眼：33, 160, 158, 133, 153, 144
-    // 嘴巴：61, 185, 40, 39, 37, 0, 267, 269, 270, 409
     if (keypoints.landmarks && keypoints.landmarks.length >= 468) {
-      // 左眼关键点
+      // 左眼关键点 (MediaPipe Face Mesh 标准索引)
+      // 按顺序：外眼角、上眼睑上、上眼睑、内眼角、下眼睑、下眼睑下
       keypoints.leftEye = [
-        keypoints.landmarks[362],
-        keypoints.landmarks[385],
-        keypoints.landmarks[387],
-        keypoints.landmarks[390],
-        keypoints.landmarks[25],
-        keypoints.landmarks[55]
-      ].filter(point => point !== undefined)
+        keypoints.landmarks[362],  // 外眼角
+        keypoints.landmarks[385],  // 上眼睑上
+        keypoints.landmarks[387],  // 上眼睑
+        keypoints.landmarks[263],  // 内眼角
+        keypoints.landmarks[373],  // 下眼睑
+        keypoints.landmarks[380]   // 下眼睑下
+      ].filter(p => p !== undefined)
 
-      // 右眼关键点
+      // 右眼关键点 (MediaPipe Face Mesh 标准索引)
       keypoints.rightEye = [
-        keypoints.landmarks[33],
-        keypoints.landmarks[160],
-        keypoints.landmarks[158],
-        keypoints.landmarks[133],
-        keypoints.landmarks[153],
-        keypoints.landmarks[144]
-      ].filter(point => point !== undefined)
+        keypoints.landmarks[33],   // 外眼角
+        keypoints.landmarks[160],  // 上眼睑上
+        keypoints.landmarks[158],  // 上眼睑
+        keypoints.landmarks[133],  // 内眼角
+        keypoints.landmarks[153],  // 下眼睑
+        keypoints.landmarks[144]   // 下眼睑下
+      ].filter(p => p !== undefined)
 
       // 嘴巴关键点
       keypoints.mouth = [
-        keypoints.landmarks[61],
-        keypoints.landmarks[185],
-        keypoints.landmarks[40],
-        keypoints.landmarks[39],
-        keypoints.landmarks[37],
-        keypoints.landmarks[0],
-        keypoints.landmarks[267],
-        keypoints.landmarks[269],
-        keypoints.landmarks[270],
-        keypoints.landmarks[409]
-      ].filter(point => point !== undefined)
+        keypoints.landmarks[61],   // 左嘴角
+        keypoints.landmarks[185],  // 上嘴唇左
+        keypoints.landmarks[40],   // 上嘴唇中左
+        keypoints.landmarks[39],   // 上嘴唇中
+        keypoints.landmarks[37],   // 上嘴唇中右
+        keypoints.landmarks[0],    // 上嘴唇右
+        keypoints.landmarks[267],  // 下嘴唇右
+        keypoints.landmarks[269],  // 下嘴唇中右
+        keypoints.landmarks[270],  // 下嘴唇中
+        keypoints.landmarks[409]   // 下嘴唇左
+      ].filter(p => p !== undefined)
     }
 
     return keypoints
   }
 
-  /**
-   * 计算光流幅度（需要 OpenCV）
-   * 检测帧之间的像素运动
-   * 
-   * 针对5帧短视频优化的参数：
-   * - pyr_scale: 0.8（更陡峭的金字塔，保留细节）
-   * - levels: 2（减少层级数，适合小尺寸视频）
-   * - winsize: 7（更小的窗口，捕捉微小运动）
-   */
-  private analyzeOpticalFlow(): number {
-    if (!this.cv || this.frameBuffer.length < 2 || this.frameWidth === 0 || this.frameHeight === 0) {
-      return 0
-    }
-
+  private calculateEyeAspectRatio(eye: any[][]): number {
+    if (!eye || eye.length < 6) return 0
     try {
-      // 从 Uint8Array 创建 Mat 对象进行光流计算
-      const prevFrameData = this.frameBuffer[this.frameBuffer.length - 2]
-      const currFrameData = this.frameBuffer[this.frameBuffer.length - 1]
-
-      // 创建临时 Mat 对象
-      const prevMat = this.cv.matFromArray(this.frameHeight, this.frameWidth, this.cv.CV_8U, prevFrameData)
-      const currMat = this.cv.matFromArray(this.frameHeight, this.frameWidth, this.cv.CV_8U, currFrameData)
-
-      // 计算光流
-      const flow = new this.cv.Mat()
-      this.cv.calcOpticalFlowFarneback(
-        prevMat,
-        currMat,
-        flow,
-        0.8,  // pyr_scale: 更陡峭的金字塔
-        2,    // levels: 减少层级数
-        7,    // winsize: 更小的窗口
-        3,    // iterations
-        5,    // polyN
-        1.2,  // polySigma
-        0     // flags
-      )
-
-      const magnitude = this.calculateFlowMagnitude(flow)
-
-      // 清理临时对象
-      prevMat.delete()
-      currMat.delete()
-      flow.delete()
-
-      return magnitude
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Optical flow calculation failed:', error)
+      const v1 = this.pointDist(eye[1], eye[5])
+      const v2 = this.pointDist(eye[2], eye[4])
+      const h = this.pointDist(eye[0], eye[3])
+      return h === 0 ? 0 : (v1 + v2) / (2 * h)
+    } catch {
       return 0
     }
   }
 
-  /**
-   * 计算光流的平均幅度
-   * 包含诊断日志用于调试
-   */
-  private calculateFlowMagnitude(flowMat: any): number {
-    if (!flowMat || flowMat.empty()) {
-      console.debug('[MotionLivenessDetector] Flow matrix is empty')
-      return 0
-    }
-
+  private calculateMouthAspectRatio(mouth: any[][]): number {
+    if (!mouth || mouth.length < 6) return 0
     try {
-      const flowData = new Float32Array(flowMat.data32F)
-      let sumMagnitude = 0
-      let count = 0
-      let maxMagnitude = 0
-
-      // 处理光流向量（每个像素 2 个值：x 和 y 分量）
-      for (let i = 0; i < flowData.length; i += 2) {
-        const fx = flowData[i]
-        const fy = flowData[i + 1]
-        const mag = Math.sqrt(fx * fx + fy * fy)
-        sumMagnitude += mag
-        maxMagnitude = Math.max(maxMagnitude, mag)
-        count++
-      }
-
-      // 计算平均光流
-      const avgMagnitude = count > 0 ? sumMagnitude / count : 0
-      // 归一化到 0-1 范围（最大预期光流约为 10 像素/帧，针对5帧优化）
-      const normalizedMagnitude = Math.min(avgMagnitude / 10, 1)
-
-      // 诊断日志
-      console.debug('[MotionLivenessDetector] Optical flow stats:', {
-        pixelCount: count,
-        sumMagnitude: sumMagnitude.toFixed(2),
-        avgMagnitude: avgMagnitude.toFixed(4),
-        maxMagnitude: maxMagnitude.toFixed(4),
-        normalizedResult: normalizedMagnitude.toFixed(4)
-      })
-
-      return normalizedMagnitude
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Flow magnitude calculation failed:', error)
+      const upperY = mouth.slice(0, 5).reduce((s, p) => s + (p?.[1] || 0), 0) / 5
+      const lowerY = mouth.slice(5).reduce((s, p) => s + (p?.[1] || 0), 0) / 5
+      const w = this.pointDist(mouth[0], mouth[5])
+      return w === 0 ? 0 : Math.abs(upperY - lowerY) / w
+    } catch {
       return 0
     }
   }
 
-  /**
-   * 计算关键点位置在帧间的方差
-   * 高方差 = 自然运动（活跃）
-   * 低方差 = 静止如照片
-   */
-  private calculateKeypointVariance(): number {
-    if (this.keypointHistory.length < 2) {
-      return 0
-    }
-
-    try {
-      const distances: number[] = []
-
-      // 比较连续的帧
-      for (let i = 1; i < this.keypointHistory.length; i++) {
-        const prevKeypoints = this.keypointHistory[i - 1]
-        const currKeypoints = this.keypointHistory[i]
-
-        if (prevKeypoints.landmarks && currKeypoints.landmarks) {
-          const avgDistance = this.calculateLandmarkDistance(
-            prevKeypoints.landmarks,
-            currKeypoints.landmarks
-          )
-          distances.push(avgDistance)
-        }
-      }
-
-      if (distances.length === 0) {
-        return 0
-      }
-
-      // 计算距离的方差
-      const mean = distances.reduce((a, b) => a + b, 0) / distances.length
-      const variance = distances.reduce((a, d) => a + (d - mean) ** 2, 0) / distances.length
-      const stdDev = Math.sqrt(variance)
-
-      // 归一化到 0-1 范围（按预期的自然变化 ~5 像素归一化）
-      return Math.min(stdDev / 5, 1)
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Keypoint variance calculation failed:', error)
-      return 0
-    }
-  }
-
-  /**
-   * 计算两帧中对应标志点之间的平均距离
-   */
-  private calculateLandmarkDistance(landmarks1: any[][], landmarks2: any[][]): number {
-    if (!landmarks1 || !landmarks2 || landmarks1.length !== landmarks2.length) {
-      return 0
-    }
-
-    let totalDistance = 0
-    let count = 0
-
-    for (let i = 0; i < Math.min(landmarks1.length, landmarks2.length); i++) {
-      const p1 = landmarks1[i]
-      const p2 = landmarks2[i]
-
-      if (p1 && p2 && p1.length >= 2 && p2.length >= 2) {
-        const dx = p1[0] - p2[0]
-        const dy = p1[1] - p2[1]
-        const distance = Math.sqrt(dx * dx + dy * dy)
-        totalDistance += distance
-        count++
-      }
-    }
-
-    return count > 0 ? totalDistance / count : 0
-  }
-
-  /**
-   * 计算所有帧中的平均关键点距离
-   */
-  private calculateAvgKeypointDistance(): number {
-    if (this.keypointHistory.length < 2) {
-      return 0
-    }
-
-    let totalDistance = 0
-    let comparisons = 0
-
-    for (let i = 1; i < this.keypointHistory.length; i++) {
-      const prevKeypoints = this.keypointHistory[i - 1]
-      const currKeypoints = this.keypointHistory[i]
-
-      if (prevKeypoints.landmarks && currKeypoints.landmarks) {
-        const avgDistance = this.calculateLandmarkDistance(
-          prevKeypoints.landmarks,
-          currKeypoints.landmarks
-        )
-        totalDistance += avgDistance
-        comparisons++
-      }
-    }
-
-    return comparisons > 0 ? totalDistance / comparisons : 0
-  }
-
-  /**
-   * 计算帧间的最大关键点距离
-   */
-  private calculateMaxKeypointDistance(): number {
-    if (this.keypointHistory.length < 2) {
-      return 0
-    }
-
-    let maxDistance = 0
-
-    for (let i = 1; i < this.keypointHistory.length; i++) {
-      const prevKeypoints = this.keypointHistory[i - 1]
-      const currKeypoints = this.keypointHistory[i]
-
-      if (prevKeypoints.landmarks && currKeypoints.landmarks) {
-        const avgDistance = this.calculateLandmarkDistance(
-          prevKeypoints.landmarks,
-          currKeypoints.landmarks
-        )
-        maxDistance = Math.max(maxDistance, avgDistance)
-      }
-    }
-
-    return maxDistance
-  }
-
-  /**
-   * 计算眼睛宽高比 (EAR)
-   * 用于检测眨眼和眼睛开度变化
-   */
-  private calculateEyeAspectRatio(eyeKeypoints: any[][]): number {
-    if (!eyeKeypoints || eyeKeypoints.length < 6) {
-      return 0
-    }
-
-    try {
-      // 眼睛关键点：[左角, 上-1, 上-2, 右角, 下-2, 下-1]
-      // 垂直点之间的距离除以水平距离
-      const leftCorner = eyeKeypoints[0]
-      const rightCorner = eyeKeypoints[3]
-      const upperLeft = eyeKeypoints[1]
-      const upperRight = eyeKeypoints[2]
-      const lowerLeft = eyeKeypoints[5]
-      const lowerRight = eyeKeypoints[4]
-
-      // 欧氏距离
-      const verticalLeft = this.pointDistance(upperLeft, lowerLeft)
-      const verticalRight = this.pointDistance(upperRight, lowerRight)
-      const horizontal = this.pointDistance(leftCorner, rightCorner)
-
-      if (horizontal === 0) return 0
-
-      // EAR = (||p2 - p6|| + ||p3 - p5||) / (2 * ||p1 - p4||)
-      return (verticalLeft + verticalRight) / (2 * horizontal)
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Eye aspect ratio calculation failed:', error)
-      return 0
-    }
-  }
-
-  /**
-   * 计算嘴巴宽高比 (MAR)
-   * 用于检测嘴巴张开的变化
-   */
-  private calculateMouthAspectRatio(mouthKeypoints: any[][]): number {
-    if (!mouthKeypoints || mouthKeypoints.length < 6) {
-      return 0
-    }
-
-    try {
-      // 简单的嘴巴张开检测
-      // 使用上唇和下唇之间的垂直距离
-      const upperLipY = mouthKeypoints.slice(0, 5).reduce((sum, p) => sum + (p?.[1] || 0), 0) / 5
-      const lowerLipY = mouthKeypoints.slice(5).reduce((sum, p) => sum + (p?.[1] || 0), 0) / 5
-      const mouthWidth = this.pointDistance(mouthKeypoints[0], mouthKeypoints[5])
-
-      if (mouthWidth === 0) return 0
-
-      const verticalDistance = Math.abs(upperLipY - lowerLipY)
-      return verticalDistance / mouthWidth
-    } catch (error) {
-      console.warn('[MotionLivenessDetector] Mouth aspect ratio calculation failed:', error)
-      return 0
-    }
-  }
-
-  /**
-   * 计算面部中心（所有关键点的平均位置）
-   */
-  private calculateFaceCenter(landmarks: any[][]): number[] | null {
-    if (!landmarks || landmarks.length === 0) {
-      return null
-    }
-
-    try {
-      let sumX = 0
-      let sumY = 0
-      let validPoints = 0
-
-      for (const point of landmarks) {
-        if (point && point.length >= 2) {
-          sumX += point[0]
-          sumY += point[1]
-          validPoints++
-        }
-      }
-
-      if (validPoints === 0) return null
-
-      return [sumX / validPoints, sumY / validPoints]
-    } catch (error) {
-      return null
-    }
-  }
-
-  /**
-   * 计算两个点之间的距离
-   */
-  private pointDistance(p1: any[], p2: any[]): number {
-    if (!p1 || !p2 || p1.length < 2 || p2.length < 2) {
-      return 0
-    }
+  private pointDist(p1: any, p2: any): number {
+    if (!p1 || !p2 || p1.length < 2 || p2.length < 2) return 0
     const dx = p1[0] - p2[0]
     const dy = p1[1] - p2[1]
     return Math.sqrt(dx * dx + dy * dy)
   }
 
-  /**
-   * 基于眼睛宽高比变化计算眼睛运动评分
-   */
-  private calculateEyeMotionScore(): number {
-    if (this.eyeAspectRatioHistory.length < 2) {
-      return 0
-    }
-
-    const variance = this.calculateVariance(this.eyeAspectRatioHistory)
-    // 检查方差是否超过眨眼检测的眼睛宽高比阈值
-    if (variance < this.config.eyeAspectRatioThreshold) {
-      return 0
-    }
-
-    // 归一化：眨眼的预期方差约为 0.05
-    return Math.min(variance / 0.05, 1)
-  }
-
-  /**
-   * 基于嘴巴宽高比变化计算嘴巴运动评分
-   */
-  private calculateMouthMotionScore(): number {
-    if (this.mouthAspectRatioHistory.length < 2) {
-      return 0
-    }
-
-    const variance = this.calculateVariance(this.mouthAspectRatioHistory)
-    // 归一化：嘴巴运动的预期方差约为 0.02
-    return Math.min(variance / 0.02, 1)
-  }
-
-  /**
-   * 计算人脸区域方差
-   */
-  private calculateFaceAreaVariance(): number {
-    return this.calculateVariance(this.faceAreaHistory)
-  }
-
-  /**
-   * 计算人脸区域的变化率 - 用于检测呼吸或其他微妙运动
-   * 活体在呼吸或说话时，面部区域会有微小的周期性变化
-   * 照片：变化很小或波动随机
-   */
-  private calculateFaceAreaChangeRate(): number {
-    if (this.faceAreaHistory.length < 2) {
-      return 0
-    }
-
-    const areas = this.faceAreaHistory
-    const changes: number[] = []
-
-    // 计算相邻帧之间的面积变化率
-    for (let i = 1; i < areas.length; i++) {
-      if (areas[i - 1] === 0) continue
-      const changeRate = Math.abs((areas[i] - areas[i - 1]) / areas[i - 1])
-      changes.push(changeRate)
-    }
-
-    if (changes.length === 0) {
-      return 0
-    }
-
-    // 返回平均变化率（转换为百分比形式，范围 0-1）
-    const avgChangeRate = changes.reduce((a, b) => a + b, 0) / changes.length
-    return Math.min(avgChangeRate * 100, 1)
-  }
-
-  /**
-   * 计算数字数组的方差
-   */
-  private calculateVariance(values: number[]): number {
-    if (values.length < 2) {
-      return 0
-    }
-
+  private calculateStdDev(values: number[]): number {
+    if (values.length < 2) return 0
     const mean = values.reduce((a, b) => a + b, 0) / values.length
     const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length
     return Math.sqrt(variance)
   }
 
   /**
-   * 基于分析检测运动类型
-   */
-  private detectMotionType(opticalFlow: number, keypointVariance: number): MotionType {
-    if (keypointVariance < 0.01 && opticalFlow < 0.1) {
-      return 'none'
-    }
-
-    if (keypointVariance > opticalFlow * 2) {
-      // 关键点运动多于光流表明旋转或表情变化
-      if (
-        this.eyeAspectRatioHistory.length >= 2 &&
-        this.calculateVariance(this.eyeAspectRatioHistory) > this.config.eyeAspectRatioThreshold
-      ) {
-        return 'micro_expression'
-      }
-      return 'rotation'
-    }
-
-    if (opticalFlow > keypointVariance * 2) {
-      return 'translation'
-    }
-
-    // 呼吸运动：一致的小变化
-    if (
-      this.faceAreaHistory.length >= 2 &&
-      this.calculateVariance(this.faceAreaHistory) > 0.001
-    ) {
-      return 'breathing'
-    }
-
-    return 'micro_expression'
-  }
-
-  /**
-   * 从多个来源计算总体运动评分
-   * 针对照片攻击进行优化：提高光流和关键点方差的权重
-   */
-  private calculateOverallMotionScore(
-    opticalFlow: number,
-    keypointVariance: number,
-    eyeMotion: number,
-    mouthMotion: number,
-    motionConsistency: number
-  ): number {
-    // 针对照片防护的优化权重：
-    // - 光流权重提高至 0.45（照片特征是零光流）
-    // - 关键点方差权重保持较高 0.35（照片完全静止）
-    // - 运动一致性权重 0.1（防止微动假正）
-    // - 眼睛和嘴巴运动权重降低 0.05 + 0.05
-    const weights = {
-      opticalFlow: 0.45,
-      keypointVariance: 0.35,
-      motionConsistency: 0.1,
-      eyeMotion: 0.05,
-      mouthMotion: 0.05
-    }
-
-    // 严格模式：进一步提高光流权重
-    if (this.config.strictPhotoDetection) {
-      weights.opticalFlow = 0.55
-      weights.keypointVariance = 0.3
-      weights.motionConsistency = 0.15
-      weights.eyeMotion = 0
-      weights.mouthMotion = 0
-    }
-
-    return (
-      opticalFlow * weights.opticalFlow +
-      keypointVariance * weights.keypointVariance +
-      motionConsistency * weights.motionConsistency +
-      eyeMotion * weights.eyeMotion +
-      mouthMotion * weights.mouthMotion
-    )
-  }
-
-  /**
-   * 根据运动分析确定面部是否活跃
-   * 【针对5帧场景优化】：改为"多数票"制，使用6个独立指标
+   * 【关键方法】将关键点坐标归一化到人脸局部坐标系
    * 
-   * 6个检测指标（互相独立）：
-   * 1. 关键点变化 - 照片无法改变关键点位置
-   * 2. 光流幅度 - 照片产生的光流极低
-   * 3. 运动类型 - 照片只能是'none'
-   * 4. 眼睛运动（眨眼）- 照片眼睛无法眨动
-   * 5. 嘴巴运动 - 照片嘴巴完全静止
-   * 6. 面部区域变化 - 照片无法产生呼吸迹象
+   * 问题：
+   * - MediaPipe 返回的 x,y 坐标是相对于【图像左上角】的像素坐标
+   * - 如果人脸在画面中移动，同一个关键点的绝对坐标会完全不同
+   * - 多帧之间直接比较绝对坐标是错误的！
    * 
-   * 判决规则：
-   * - 数据充足（>= 5帧）：需要至少2个指标支持才判定为活体
-   * - 数据不足（< 5帧）：需要至少3个指标支持
+   * 解决：
+   * - 将坐标转换为相对于人脸边界框的归一化坐标
+   * - 归一化坐标 = (点坐标 - 人脸左上角) / 人脸尺寸
+   * - 这样无论人脸在画面中的位置，归一化坐标都一致
+   * 
+   * @param landmarks 原始关键点数组
+   * @param faceBox 人脸边界框 [x, y, width, height]
+   * @returns 归一化后的关键点数组
    */
-  private determineLiveness(
-    keypointVariance: number,
-    motionType: MotionType,
-    opticalFlow: number,
-    eyeMotionScore: number,
-    mouthMotionScore: number,
-    faceAreaChangeRate: number
-  ): boolean {
-    // 【改进】：使用"多数票"制而非串联AND逻辑
-    // 这样可以识别不同类型的真实运动
-    // - 头部旋转：关键点变化明显，光流可能不足
-    // - 说话/微笑：嘴巴运动明显，整体光流不足
-    // - 眨眼：眼睛运动明显
-    // - 呼吸：面部区域规律变化
-    // - 眨眼+头动：多个弱指标组合
-
-    let livelyVotes = 0
-    const isDataSufficient = this.frameBuffer.length >= this.config.frameBufferSize
-    const requiredVotes = isDataSufficient ? 2 : 3  // 数据不足时更严格
-
-    // 指标1：关键点变化 + 光流一致性
-    // 防御：照片旋转也会改变关键点位置，但光流会极低
-    // 真实旋转：关键点变化 + 有意义的光流
-    // 照片旋转：关键点变化 + 极低光流（< 0.02）
-    if (keypointVariance > 0.01 && opticalFlow > 0.02) {
-      // 关键点变化 + 中等光流 = 真实活体运动
-      livelyVotes++
+  private normalizeLandmarks(landmarks: any[][], faceBox: Box): any[][] {
+    // faceBox: [x, y, width, height] 或 {x, y, width, height}
+    let boxX: number, boxY: number, boxW: number, boxH: number
+    
+    if (Array.isArray(faceBox)) {
+      [boxX, boxY, boxW, boxH] = faceBox
+    } else {
+      // 兼容对象格式
+      boxX = (faceBox as any).x || 0
+      boxY = (faceBox as any).y || 0
+      boxW = (faceBox as any).width || 1
+      boxH = (faceBox as any).height || 1
     }
 
-    // 指标2：光流幅度（照片的明显弱点）
-    // 照片几乎无法产生光流
-    if (opticalFlow > 0.03) {
-      livelyVotes++
-    }
+    // 防止除零
+    if (boxW <= 0) boxW = 1
+    if (boxH <= 0) boxH = 1
 
-    // 指标3：运动类型 + 光流双重确认
-    // 防御：照片旋转会被检测为'rotation'，但光流极低
-    // 活体rotation：运动类型是rotation + 有意义的光流
-    // 照片rotation：运动类型是rotation + 极低光流
-    if (motionType !== 'none' && opticalFlow > 0.02) {
-      // 有明确的运动类型 + 足够的光流 = 活体
-      livelyVotes++
-    }
-
-    // 指标4：眼睛运动（眨眼）
-    // 照片的眼睛无法眨动，这是活体的明确特征
-    // eyeMotionScore = Math.min(variance / 0.05, 1)
-    // 要检测到眨眼，需要 eyeMotionScore > 0.5
-    if (eyeMotionScore > 0.5) {
-      livelyVotes++
-    }
-
-    // 指标5：嘴巴运动
-    // 说话、微笑、张嘴等动作会改变嘴巴宽高比
-    // mouthMotionScore = Math.min(mouthMotionVariance / 0.02, 1)
-    // 要使 mouthMotionVariance > 0.01，需要 mouthMotionScore > 0.5
-    if (mouthMotionScore > 0.5) {
-      livelyVotes++
-    }
-
-    // 指标6：面部区域变化
-    // 呼吸或其他微妙运动会导致面部整体面积变化
-    if (faceAreaChangeRate > 0.005) {
-      livelyVotes++
-    }
-
-    // 投票结果
-    if (livelyVotes >= requiredVotes) {
-      return true  // 足够多的指标支持，判定为活体
-    }
-
-    // 投票不足，进行额外严格检查
-    // 如果所有指标都强烈指向照片，则确定判定为非活体
-    if (opticalFlow < 0.02 && motionType === 'none' && keypointVariance < 0.005 && eyeMotionScore < 0.25 && mouthMotionScore < 0.25) {
-      return false  // 绝对确定是照片
-    }
-
-    // 如果投票数 = 1 但该指标非常强劲，也可以接受
-    if (livelyVotes === 1) {
-      // 关键点变化非常明显 => 活体
-      if (keypointVariance > 0.05) {
-        return true
-      }
-      // 眼睛运动非常明显（明显的眨眼） => 活体
-      if (eyeMotionScore > 1.0) {
-        return true
-      }
-      // 嘴巴运动非常明显 => 活体
-      if (mouthMotionScore > 1.0) {
-        return true
-      }
-      // 光流明显 => 活体
-      if (opticalFlow > 0.08) {
-        return true
+    const normalized: any[][] = []
+    for (const pt of landmarks) {
+      if (pt && pt.length >= 2) {
+        // 归一化 x, y 到 [0, 1] 相对于人脸框
+        const nx = (pt[0] - boxX) / boxW
+        const ny = (pt[1] - boxY) / boxH
+        // Z 坐标保持不变（MediaPipe 的 Z 是相对于人脸中心的）
+        const nz = pt.length >= 3 ? pt[2] : 0
+        normalized.push([nx, ny, nz])
+      } else {
+        normalized.push([0, 0, 0])
       }
     }
-
-    // 默认判定为非活体
-    return false
+    return normalized
   }
 
-  /**
-   * 分析失败时创建空结果
-   */
   private createEmptyResult(): MotionDetectionResult {
-    return new MotionDetectionResult(
-      0,
-      0,
-      0,
-      0,
-      0,
-      'none',
-      true,
-      {
-        frameCount: this.frameBuffer.length,
-        avgKeypointDistance: 0,
-        maxKeypointDistance: 0,
-        faceAreaVariance: 0,
-        eyeAspectRatioVariance: 0,
-        mouthAspectRatioVariance: 0
-      }
-    )
+    return new MotionDetectionResult(true, {
+      frameCount: 0,
+      eyeAspectRatioStdDev: 0,
+      mouthAspectRatioStdDev: 0,
+      eyeFluctuation: 0,
+      mouthFluctuation: 0,
+      muscleVariation: 0,
+      hasEyeMovement: false,
+      hasMouthMovement: false,
+      hasMuscleMovement: false
+    })
   }
 
-  /**
-   * 获取运动检测结果（用于调试）
-   */
   getStatistics(): any {
     return {
-      bufferSize: this.frameBuffer.length,
-      keypointHistorySize: this.keypointHistory.length,
-      faceAreaHistorySize: this.faceAreaHistory.length,
-      eyeAspectRatioHistorySize: this.eyeAspectRatioHistory.length,
-      mouthAspectRatioHistorySize: this.mouthAspectRatioHistory.length,
-      opticalFlowHistorySize: this.opticalFlowHistory.length,
-      pupilSizeHistorySize: this.pupilSizeHistory.length
+      eyeHistorySize: this.eyeAspectRatioHistory.length,
+      mouthHistorySize: this.mouthAspectRatioHistory.length,
+      eyeValues: this.eyeAspectRatioHistory.map(v => v.toFixed(4)),
+      mouthValues: this.mouthAspectRatioHistory.map(v => v.toFixed(4))
     }
   }
 }

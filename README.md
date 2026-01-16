@@ -140,12 +140,11 @@ const engine = new FaceDetectionEngine({
   tensorflow_wasm_path: '/wasm',
   tensorflow_backend: 'auto',
   
-  // 检测设置（建议 ≥720p，否则屏幕检测准确率下降）
+  // 检测设置
   detect_video_ideal_width: 1280,
   detect_video_ideal_height: 720,
   detect_video_mirror: true,
   detect_video_load_timeout: 5000,
-  detect_frame_delay: 120,
 
   // 采集质量要求
   collect_min_collect_count: 3,        // 最少采集 3 张人脸
@@ -159,9 +158,6 @@ const engine = new FaceDetectionEngine({
   action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 60000,
-
-  // 防欺骗设置（运动和屏幕检测使用内置优化算法，通常无需调整）
-  motion_liveness_strict_photo_detection: false,
 })
 
 // 监听核心事件
@@ -258,7 +254,6 @@ startLivenessDetection()
 | `detect_video_ideal_height` | `number` | 视频高度（像素） | `720` |
 | `detect_video_mirror` | `boolean` | 水平翻转视频 | `true` |
 | `detect_video_load_timeout` | `number` | 加载超时（ms） | `5000` |
-| `detect_frame_delay` | `number` | 帧间延迟（ms） | `120` |
 
 ### 人脸采集质量要求
 

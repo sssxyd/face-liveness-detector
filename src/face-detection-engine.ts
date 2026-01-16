@@ -79,8 +79,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
   // Frame-based detection scheduling
   private frameIndex: number = 0
-  private lastDetectionFrameIndex: number = 0
-  private lastScreenFeatureDetectionFrameIndex: number = 0
 
   // Frame Mat objects created per-frame, cleaned up immediately after use
 
@@ -93,8 +91,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   constructor(options?: Partial<FaceDetectionEngineOptions>) {
     super()
     this.options = mergeOptions(options)
-    this.adjustDetectFrameDelay()
-    this.detectionState = createDetectionState(this.videoFPS, this.options.motion_liveness_strict_photo_detection)
+    this.detectionState = createDetectionState()
   }
 
   /**
@@ -165,9 +162,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     
     this.options = mergeOptions(options)
-    this.adjustDetectFrameDelay()
-    this.detectionState = createDetectionState(this.videoFPS, this.options.motion_liveness_strict_photo_detection)
-    this.detectionState.setCVInstance(this.cv)
+    this.detectionState = createDetectionState()
     
     this.emitDebug('config', 'Engine options updated', { wasDetecting }, 'info')
   }
@@ -262,8 +257,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     // Reset frame counters
     this.frameIndex = 0
-    this.lastDetectionFrameIndex = 0
-    this.lastScreenFeatureDetectionFrameIndex = 0
     
     // Keep Mat pool and canvas (they'll be reused)
     // Don't set isDetectingFrameActive = false here (let finally handle it)
@@ -285,8 +278,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     // Reset frame counters
     this.frameIndex = 0
-    this.lastDetectionFrameIndex = 0
-    this.lastScreenFeatureDetectionFrameIndex = 0
     
     // Clear frame canvas (releases memory)
     try {
@@ -340,9 +331,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const cv_version = getOpenCVVersion()
       this.emitDebug('initialization', 'OpenCV loaded successfully', { version: cv_version })
       console.log('[FaceDetectionEngine] OpenCV loaded successfully', { version: cv_version })
-
-      // Inject OpenCV instance into motion detector and screen detector
-      this.detectionState.setCVInstance(this.cv)
 
       // Load Human.js
       console.log('[FaceDetectionEngine] Loading Human.js models...')
@@ -758,131 +746,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     console.log(`[FaceDetectionEngine] Video FPS changed: ${this.videoFPS} -> ${fps}`)
     this.videoFPS = fps
-    this.detectionState.updateVideoFPS(fps)
     
-    // 当FPS变化时，检查是否需要调整检测延迟以保证最小周期
-    this.adjustDetectFrameDelay()
   }
 
-  /**
-   * Adjust detect_frame_delay to ensure main detection interval is at least 3 frames
-   * This is important for proper spacing of corner detection, feature detection, and main detection
-   */
-  private adjustDetectFrameDelay(): void {
-    const minInterval = 3
-    const currentInterval = this.getDetectionFrameInterval()
-    
-    if (currentInterval < minInterval) {
-      // 计算所需的最小 detect_frame_delay
-      // getDetectionFrameInterval() = Math.round(detect_frame_delay * videoFPS / 1000)
-      // 需要: detect_frame_delay * videoFPS / 1000 >= minInterval
-      // 所以: detect_frame_delay >= minInterval * 1000 / videoFPS
-      const minDetectFrameDelay = Math.ceil(minInterval * 1000 / this.videoFPS)
-      
-      const oldDelay = this.options.detect_frame_delay
-      this.options.detect_frame_delay = minDetectFrameDelay
-      
-      this.emitDebug('config', 'Adjusted detect_frame_delay to maintain minimum interval', {
-        reason: 'main detection interval was less than 3 frames',
-        oldDelay: oldDelay,
-        newDelay: minDetectFrameDelay,
-        oldInterval: currentInterval,
-        newInterval: this.getDetectionFrameInterval(),
-        videoFPS: this.videoFPS
-      })
-      
-      console.log(`[FaceDetectionEngine] Adjusted detect_frame_delay: ${oldDelay}ms -> ${minDetectFrameDelay}ms (interval: ${currentInterval} -> ${this.getDetectionFrameInterval()})`)
-    }
-  }
-
-  /**
-   * Get the frame interval for main face detection based on videoFPS and detect_frame_delay
-   * Uses Math.ceil to ensure actual interval >= configured delay
-   * @returns Number of frames between detections
-   */
-  private getDetectionFrameInterval(): number {
-    // Ceil ensures actual delay never goes below configured detect_frame_delay
-    return Math.max(1, Math.ceil(this.options.detect_frame_delay * this.videoFPS / 1000))
-  }
-
-  /**
-   * Check if main face detection should be performed this frame
-   * @returns true if enough frames have passed since last detection
-   */
-  private shouldPerformMainDetection(): boolean {
-    const mainInterval = this.getDetectionFrameInterval()
-    return (this.frameIndex - this.lastDetectionFrameIndex) >= mainInterval
-  }
-
-  /**
-   * Check if screen corner detection should be performed this frame
-   * Executes once per main detection interval
-   * Logic: 
-   * - If mainInterval <= 2: disabled (insufficient frames)
-   * - If mainInterval > 2: executes at calculated point, unless it's the last frame
-   * @returns true if conditions are met
-   */
-  private shouldPerformScreenCornersDetection(): boolean {
-    // 未开始采集前，不执行屏幕检测
-    if(this.detectionState.period === DetectionPeriod.DETECT)
-      return false
-    
-    const mainInterval = this.getDetectionFrameInterval()
-    
-    // 周期太短，无法同时执行主检测、特征检测和边缘检测
-    if (mainInterval <= 2) {
-      return false
-    }
-    
-    const currentPositionInCycle = this.frameIndex % mainInterval
-    
-    // 边缘检测在周期的约80%位置
-    let cornersExecutionPoint = Math.floor(mainInterval * 0.8)
-    
-    // 如果计算出的位置是最后一帧，则往前退一位
-    // 这确保边缘检测不会被当作"周期最后一帧的备选特征检测"
-    if (cornersExecutionPoint === mainInterval - 1 && mainInterval > 3) {
-      cornersExecutionPoint = Math.floor(mainInterval * 0.6)
-    }
-    
-    return currentPositionInCycle === cornersExecutionPoint
-  }
-
-  /**
-   * Check if screen feature detection (multi-frame) should be performed this frame
-   * Logic:
-   * - Executes at calculated point in the cycle (40% position)
-   * - If missed, can execute at last frame of cycle (fallback)
-   * @returns true if conditions are met
-   */
-  private shouldPerformScreenFeatureDetection(): boolean {
-    // 未开始采集前，不执行屏幕检测
-    if(this.detectionState.period === DetectionPeriod.DETECT)
-      return false
-    
-    const mainInterval = this.getDetectionFrameInterval()
-    const currentPositionInCycle = this.frameIndex % mainInterval
-    
-    // 特征检测在周期的40%位置执行（标准点）
-    const featureExecutionPoint = Math.floor(mainInterval * 0.4)
-    
-    // 在标准执行点执行
-    if (currentPositionInCycle === featureExecutionPoint) {
-      return true
-    }
-    
-    // 备选方案：如果是周期的最后一帧，且本周期还未执行过特征检测
-    const isLastFrameInCycle = currentPositionInCycle === (mainInterval - 1)
-    if (isLastFrameInCycle) {
-      // 计算当前周期的起始帧（>=0 的最小值）
-      const cycleStartFrame = Math.floor(this.frameIndex / mainInterval) * mainInterval
-      // 检查此周期是否已执行过特征检测
-      const hasExecutedInThisCycle = this.lastScreenFeatureDetectionFrameIndex >= cycleStartFrame
-      return !hasExecutedInThisCycle
-    }
-    
-    return false
-  }
 
   /**
    * Cancel pending detection frame
@@ -939,50 +805,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     this.emitDebug('detection', '进入检测帧循环', {
       frameIndex: this.frameIndex,
-      frameInterval: this.getDetectionFrameInterval(),
       period: this.detectionState.period,
       engineState: this.engineState,
       videoReadyState: this.videoElement.readyState
     }, 'info')
     
-    let bgrFrame: any = null
-    let grayFrame: any = null
-    
     try {
-      // 确定是否需要捕获帧
-      if (!this.shouldCaptureFrame()) {
-        return
-      }
-      
-      this.emitDebug('detection', '准备采集帧数据', { frameIndex: this.frameIndex }, 'info')
-      const frameData = this.captureAndPrepareFrames()
-      if (!frameData) {
-        this.emitDebug('detection', '帧采集失败，无法继续检测', {
-          frameIndex: this.frameIndex
-        }, 'warn')
-        return
-      }
-      // 帧采集成功日志已移除，减少高频输出
-      bgrFrame = frameData.bgrFrame
-      grayFrame = frameData.grayFrame
-
-      // 添加到屏幕检测器缓冲
-      if (this.detectionState.period !== DetectionPeriod.DETECT) {
-        this.detectionState.screenDetector?.addVideoFrame(grayFrame, bgrFrame)
-        // 帧添加日志已移除，减少高频输出
-      }
-
-      // 执行屏幕检测（边角 + 多帧特征）
-      if (this.performScreenDetection(grayFrame)) {
-        this.emitDebug('detection', '屏幕检测：检测到屏幕，返回', {
-          frameIndex: this.frameIndex
-        }, 'warn')
-        return
-      }
-
-      // 执行主人脸检测
-      await this.performFaceDetection(grayFrame, bgrFrame)
-      // 人脸检测完成日志已移除，减少高频输出
+      // 执行人脸检测
+      await this.performFaceDetection()
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
       this.emitDebug('detection', 'Unexpected error in detection loop', {
@@ -992,18 +822,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         cause: errorInfo.cause
       }, 'error')
     } finally {
-      // 清理非池化的Mat对象（必须执行，即使发生错误也要释放内存）
-      try {
-        this.cleanupFrames(bgrFrame, grayFrame)
-      } catch (cleanupError) {
-        this.emitDebug('detection', 'Error in finally cleanup', {
-          error: (cleanupError as Error).message
-        }, 'error')
-      }
-      
       // 清除检测帧活跃标志
       this.isDetectingFrameActive = false
-
       // 调度下一帧的检测（仅当引擎仍在检测状态时）
       if (this.engineState === EngineState.DETECTING) {
         this.animationFrameId = requestAnimationFrame(() => {
@@ -1011,16 +831,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         })
       }
     }
-  }
-
-  /**
-   * Check if current frame should be captured based on detection scheduling
-   */
-  private shouldCaptureFrame(): boolean {
-    return this.shouldPerformMainDetection() 
-      || this.shouldPerformScreenCornersDetection()
-      || this.shouldPerformScreenFeatureDetection()
-      || this.detectionState.period !== DetectionPeriod.DETECT
   }
 
   /**
@@ -1082,59 +892,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * Perform screen detection (corners and multi-frame features)
-   * @returns true if screen is detected, false otherwise
-   */
-  private performScreenDetection(grayFrame: any): boolean {
-    // 执行屏幕边角检测
-    if (this.shouldPerformScreenCornersDetection()) {
-      try {
-        const isScreenDetected = this.detectScreenCorners(grayFrame)
-        if (isScreenDetected) {
-          this.partialResetDetectionState()
-          return true
-        }
-      } catch (screenDetectError) {
-        const errorInfo = this.extractErrorInfo(screenDetectError)
-        this.emitDebug('screen-detection', 'Screen corners detection failed', {
-          error: errorInfo.message,
-          stack: errorInfo.stack,
-          name: errorInfo.name
-        }, 'error')
-      }
-    }
-
-    // 执行屏幕多帧特征检测
-    if (this.shouldPerformScreenFeatureDetection()) {
-      this.lastScreenFeatureDetectionFrameIndex = this.frameIndex
-      try {
-        const isScreenDetected = this.detectScreenFeatures()
-        if (isScreenDetected) {
-          this.partialResetDetectionState()
-          return true
-        }
-      } catch (screenDetectError) {
-        const errorInfo = this.extractErrorInfo(screenDetectError)
-        this.emitDebug('screen-detection', 'Screen feature detection failed', {
-          error: errorInfo.message,
-          stack: errorInfo.stack,
-          name: errorInfo.name
-        }, 'error')
-      }
-    }
-
-    return false
-  }
-
-  /**
    * Perform main face detection and handle results
    */
-  private async performFaceDetection(grayFrame: any, bgrFrame: any): Promise<void> {
-    if (!this.shouldPerformMainDetection()) {
-      return
-    }
-
-    this.lastDetectionFrameIndex = this.frameIndex
+  private async performFaceDetection(): Promise<void> {
 
     // Perform face detection
     let result
@@ -1163,19 +923,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const gestures = result.gesture || []
 
     if (faces.length === 1) {
-      this.handleSingleFace(faces[0], gestures, grayFrame, bgrFrame)
+      this.handleSingleFace(faces[0], gestures)
     } else {
       this.handleMultipleFaces(faces.length)
     }
-  }
-
-  /**
-   * Clean up frame Mat objects
-   * Note: Both BGR and Gray Mats are preallocated and reused
-   * They are only deleted in clearPreallocatedMats()
-   */
-  private cleanupFrames(bgrFrame: any, grayFrame: any): void {
-    // No-op: both Mats are preallocated and cleaned up separately
   }
 
   private getPerformActionCount(): number{
@@ -1191,85 +942,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * Detect screen by corners and contours analysis (fast detection)
-   */
-  private detectScreenCorners(grayFrame: any): boolean {
-    const cornersContourResult = this.detectionState.cornersContourDetector?.detect(grayFrame)
-    if (cornersContourResult?.isScreenCapture) {
-      this.emitDebug('screen-corners-detection', 'Screen boundary detected - possible screen capture', {
-        confidence: cornersContourResult.confidence,
-        contourCount: cornersContourResult.contourCount,
-        screenBoundaryRatio: cornersContourResult.screenBoundaryRatio,
-        processingTimeMs: cornersContourResult.processingTimeMs,
-      }, 'warn')
-      this.emitDetectorInfo({
-        code: DetectionCode.FACE_NOT_REAL,
-        message: 'Screen capture detected by corners/contour analysis',
-        screenConfidence: cornersContourResult.confidence
-      })
-      return true
-    }
-    if (cornersContourResult) {
-      this.emitDebug('screen-corners-detection', 'Screen boundary not detected', {
-        confidence: cornersContourResult.confidence,
-        contourCount: cornersContourResult.contourCount,
-        screenBoundaryRatio: cornersContourResult.screenBoundaryRatio,
-        processingTimeMs: cornersContourResult.processingTimeMs
-      }, 'info')
-    }
-    return false
-  }
-
-  /**
-   * Detect screen by multi-frame feature analysis
-   */
-  private detectScreenFeatures(): boolean {
-    // 屏幕捕获检测（多帧特征检测）
-    const screenResult = this.detectionState.screenDetector?.detect(this.options.debug_mode, true)
-    if(screenResult?.isScreenCapture){
-      this.emitDebug('screen-detection', 'Screen capture detected - possible video replay attack', {
-        screenConfidence: screenResult.confidenceScore,
-        riskLevel: screenResult.riskLevel,
-        processingTimeMs: screenResult.processingTimeMs,
-        executedMethodsCount: screenResult.executedMethods?.length || 0,
-        executedMethodsSummary: screenResult.executedMethods?.map((m: any) => ({
-          method: m.method,
-          isScreenCapture: m.isScreenCapture,
-          confidence: m.confidence
-          // details 字段已移除，避免输出超大数据
-        })),
-        stageCount: screenResult.debug?.stages?.length || 0,
-        finalDecision: screenResult.debug?.finalDecision
-      }, 'warn')
-      this.emitDetectorInfo({
-        code: DetectionCode.FACE_NOT_REAL,
-        message: screenResult.getMessage(),
-        screenConfidence: screenResult.confidenceScore
-      })
-      return true
-    }
-    if(screenResult) {
-      // 只有ready状态的检测器的success结果才可信
-      if (this.detectionState.screenDetector?.isReady() && !screenResult.isScreenCapture) {
-        this.detectionState.realness = true
-        this.emitDebug('screen-detection', 'Screen capture not detected', {
-          screenConfidence: screenResult.confidenceScore,
-          riskLevel: screenResult.riskLevel,
-          processingTimeMs: screenResult.processingTimeMs,
-          executedMethodsCount: screenResult.executedMethods?.length || 0,
-          methodsSummary: screenResult.executedMethods?.map((m: any) => `${m.method}:${m.confidence?.toFixed(2)}`).join(', ') || 'none',
-          stageCount: screenResult.debug?.stages?.length || 0
-          // 移除了 executedMethods 和 stageDetails 的完整数据，避免超大输出
-        }, 'warn')        
-      }
-    }  
-    return false
-  }
-
-  /**
    * Handle single face detection
    */
-  private handleSingleFace(face: FaceResult, gestures: GestureResult[], grayFrame: any, bgrFrame: any): void {
+  private handleSingleFace(face: FaceResult, gestures: GestureResult[]): void {
     const faceBox = face.box || face.boxRaw
 
     if (!faceBox) {
@@ -1289,41 +964,39 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     
+    let bgrFrame: any = null
+    let grayFrame: any = null
     try {
-      // 运动检测
-      const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, face, faceBox)
+      const frameData = this.captureAndPrepareFrames()
+      if (!frameData) {
+        this.emitDebug('detection', '帧采集失败，无法继续检测', {
+          frameIndex: this.frameIndex
+        }, 'warn')
+        return
+      }
+      bgrFrame = frameData.bgrFrame
+      grayFrame = frameData.grayFrame
+
+      const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, faceBox)
       // 只有ready状态的检测器的结果才可信
       if(this.detectionState.motionDetector.isReady()){
         if(!motionResult.isLively) {
           this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
-            motionScore: motionResult.motionScore,
-            keypointVariance: motionResult.keypointVariance,
-            opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
-            eyeMotionScore: motionResult.eyeMotionScore,
-            mouthMotionScore: motionResult.mouthMotionScore,
-            motionType: motionResult.motionType,
-            details: motionResult.details
+            details: motionResult.details,
+            message: motionResult.getMessage()
           }, 'warn')
           this.emitDetectorInfo({
             code: DetectionCode.FACE_NOT_LIVE,
-            message: motionResult.getMessage(this.detectionState.motionDetector.getOptions().minMotionThreshold, this.detectionState.motionDetector.getOptions().minKeypointVariance),
-            motionScore: motionResult.motionScore,
-            keypointVariance: motionResult.keypointVariance,
-            motionType: motionResult.motionType
+            message: motionResult.getMessage(),
           })
           this.partialResetDetectionState()
           return        
         }
         this.emitDebug('motion-detection', 'Motion liveness check passed', {
-          motionScore: motionResult.motionScore,
-          keypointVariance: motionResult.keypointVariance,
-          opticalFlowMagnitude: motionResult.opticalFlowMagnitude,
-          eyeMotionScore: motionResult.eyeMotionScore,
-          mouthMotionScore: motionResult.mouthMotionScore,
-          motionType: motionResult.motionType
+          details: motionResult.details
         }, 'warn')
         this.detectionState.liveness = true
-      }
+      } 
 
       // 计算面部大小比例，不达标则跳过当前帧
       const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)

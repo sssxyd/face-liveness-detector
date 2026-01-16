@@ -55,8 +55,6 @@ export interface FaceDetectionEngineOptions {
   detect_video_mirror?: boolean
   /** 加载视频流的超时时间（毫秒，默认 5000） */
   detect_video_load_timeout?: number
-  /** 检测帧之间的延迟（毫秒，默认 150） */
-  detect_frame_delay?: number
 
   /** 要采集的静默检测次数（默认 3） */
   collect_min_collect_count?: number
@@ -84,10 +82,6 @@ export interface FaceDetectionEngineOptions {
   /** 最小嘴部张开百分比（默认 0.2） */
   action_liveness_min_mouth_open_percent?: number
 
-  /** 是否启用严格照片检测模式（默认 false） */
-  motion_liveness_strict_photo_detection?: boolean
-
-  
 }
 
 /**
