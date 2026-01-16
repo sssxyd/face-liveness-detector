@@ -59,7 +59,7 @@ export class MotionDetectionResult {
     if (this.details.frameCount < 5) {
       return '数据不足，无法进行活体检测'
     }
-    
+
     if (this.isLively) return ''
     
     // 正向检测信息
@@ -142,7 +142,7 @@ export class MotionLivenessDetector {
   }
 
   isReady(): boolean {
-    return this.eyeAspectRatioHistory.length >= 5  // 只需要5帧就能检测
+    return this.normalizedLandmarksHistory.length >= 5  // 只需要5帧就能检测
   }
 
   reset(): void {
@@ -180,7 +180,7 @@ export class MotionLivenessDetector {
       }
 
       // 数据不足时，继续收集
-      if (this.eyeAspectRatioHistory.length < 5) {
+      if (!this.isReady()) {
         return new MotionDetectionResult(
           true,
           {
