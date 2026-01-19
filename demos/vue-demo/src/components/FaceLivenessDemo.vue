@@ -12,7 +12,7 @@
     </div>
 
     <!-- Configuration Panel -->
-    <div class="config-panel" v-if="!isDetecting || detectionResult == null">
+    <div class="config-panel" v-if="!isDetecting">
       <h3>Detection Configuration</h3>
       <div class="config-item">
         <label>Action Detection Count (0-3):</label>
@@ -224,6 +224,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { version as appVersion } from '../../package.json'
 import FaceDetectionEngine, { 
   LivenessAction,
   type DetectorLoadedEventData,
@@ -329,10 +330,8 @@ function handleEngineReady(data: DetectorLoadedEventData) {
     console.error('❌ Engine loading failed')
     return
   }
-  statusMessage.value = 'Engine is ready, Opencv: ' + data.opencv_version + ', Human: ' + data.human_version
-  console.log(data.opencv_version || 'OpenCV not detected')
-  console.log(data.human_version || 'Human.js not detected')
-  console.log('✅ Engine is ready')
+  statusMessage.value = `App v${appVersion} | Engine ready, Opencv: ${data.opencv_version || 'N/A'}, Human: ${data.human_version || 'N/A'}`
+  console.log(`✅ App v${appVersion} initialized successfully`)
 }
 
 
