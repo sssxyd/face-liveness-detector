@@ -964,20 +964,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
     
-    let bgrFrame: any = null
-    let grayFrame: any = null
     try {
-      const frameData = this.captureAndPrepareFrames()
-      if (!frameData) {
-        this.emitDebug('detection', '帧采集失败，无法继续检测', {
-          frameIndex: this.frameIndex
-        }, 'warn')
-        return
-      }
-      bgrFrame = frameData.bgrFrame
-      grayFrame = frameData.grayFrame
-
-      const motionResult = this.detectionState.motionDetector.analyzeMotion(grayFrame, faceBox)
+      const motionResult = this.detectionState.motionDetector.analyzeMotion(face, faceBox)
       // 只有ready状态的检测器的结果才可信
       if(this.detectionState.motionDetector.isReady()){
         if(!motionResult.isLively) {
@@ -1018,6 +1006,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
         return
       }
+
+      const frameData = this.captureAndPrepareFrames()
+      if (!frameData) {
+        this.emitDebug('detection', '帧采集失败，无法继续检测', {
+          frameIndex: this.frameIndex
+        }, 'warn')
+        return
+      }
+      const bgrFrame = frameData.bgrFrame
+      const grayFrame = frameData.grayFrame      
 
       let frontal = 1
       // 计算面部正对度，不达标则跳过当前帧
