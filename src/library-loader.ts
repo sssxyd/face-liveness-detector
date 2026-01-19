@@ -381,7 +381,8 @@ function _createHumanConfig(backend: string, modelPath?: string, wasmPath?: stri
         return: true 
       },
       mesh: { 
-        enabled: true         // facemesh 脸部关键点（包含表情特征）
+        enabled: true,        // facemesh 脸部关键点（包含表情特征）
+        keepInvalid: false    // 只保留有效的网格数据
       },
       iris: { enabled: false },
       antispoof: { enabled: false },

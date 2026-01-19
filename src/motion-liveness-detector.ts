@@ -16,8 +16,32 @@
  * 3. 【辅助参考】Z 坐标分析——可能被欺骗，仅作辅助
  */
 
-import type { FaceResult, GestureResult } from '@vladmandic/human'
+import type { FaceResult, GestureResult, Point } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
+
+/**
+ * 活体检测结果详情结构
+ */
+export interface MotionDetectionDetails {
+  frameCount: number
+  // 正向检测（生物特征）
+  eyeAspectRatioStdDev: number
+  mouthAspectRatioStdDev: number
+  eyeFluctuation: number           // 眼睛开度波动
+  mouthFluctuation: number          // 嘴巴开度波动
+  muscleVariation: number           // 肌肉变化幅度
+  hasEyeMovement: boolean           // 检测到眼睛微动
+  hasMouthMovement: boolean         // 检测到嘴巴微动
+  hasMuscleMovement: boolean        // 检测到肌肉微动
+  // 逆向检测（照片几何特征）
+  isPhoto?: boolean                 // 是否被检测为照片
+  photoConfidence?: number          // 照片检测置信度 (0-1)
+  homographyScore?: number          // 单应性约束得分
+  perspectiveScore?: number         // 透视变换模式得分
+  crossRatioScore?: number          // 交叉比率不变性得分
+  depthVariation?: number           // Z坐标深度变异
+  crossFramePattern?: number        // 跨帧深度模式
+}
 
 /**
  * 活体检测结果
@@ -25,32 +49,13 @@ import type { Box } from '@vladmandic/human'
 export class MotionDetectionResult {
   // 是否为活体
   isLively: boolean
-  details: {
-    frameCount: number
-    // 正向检测（生物特征）
-    eyeAspectRatioStdDev: number
-    mouthAspectRatioStdDev: number
-    eyeFluctuation: number           // 眼睛开度波动
-    mouthFluctuation: number          // 嘴巴开度波动
-    muscleVariation: number           // 肌肉变化幅度
-    hasEyeMovement: boolean           // 检测到眼睛微动
-    hasMouthMovement: boolean         // 检测到嘴巴微动
-    hasMuscleMovement: boolean        // 检测到肌肉微动
-    // 逆向检测（照片几何特征）
-    isPhoto?: boolean                 // 是否被检测为照片
-    photoConfidence?: number          // 照片检测置信度 (0-1)
-    homographyScore?: number          // 单应性约束得分
-    perspectiveScore?: number         // 透视变换模式得分
-    crossRatioScore?: number          // 交叉比率不变性得分
-    depthVariation?: number           // Z坐标深度变异
-    crossFramePattern?: number        // 跨帧深度模式
-  }
-  debug: {}
+  details: MotionDetectionDetails
+  debug: Record<string, any>
 
   constructor(
     isLively: boolean,
-    details: any,
-    debug: any = {}
+    details: MotionDetectionDetails,
+    debug: Record<string, any> = {}
   ) {
     this.isLively = isLively
     this.debug = debug
@@ -104,10 +109,97 @@ const DEFAULT_OPTIONS: Required<MotionLivenessDetectorOptions> = {
 }
 
 interface FaceKeypoints {
-  landmarks?: any[][]
-  leftEye?: any[][]
-  rightEye?: any[][]
-  mouth?: any[][]
+  landmarks?: Point[]
+  leftEye?: Point[]
+  rightEye?: Point[]
+  mouth?: Point[]
+}
+
+/**
+ * 眼睛波动检测结果
+ */
+interface EyeFluctuationResult {
+  score: number
+  stdDev: number
+  fluctuation: number
+  hasMovement: boolean
+  isPerspectiveAttack?: boolean
+}
+
+/**
+ * 嘴巴波动检测结果
+ */
+interface MouthFluctuationResult {
+  score: number
+  stdDev: number
+  fluctuation: number
+  hasMovement: boolean
+}
+
+/**
+ * 肌肉运动检测结果
+ */
+interface MuscleMovementResult {
+  score: number
+  variation: number
+  hasMovement: boolean
+  rigidityScore?: number
+}
+
+/**
+ * 照片几何特征检测结果
+ */
+interface PhotoGeometryResult {
+  isPhoto: boolean
+  confidence: number
+  details: Record<string, any>
+}
+
+/**
+ * 交叉比率不变性检测结果
+ */
+interface CrossRatioResult {
+  invarianceScore: number
+  cv?: number
+}
+
+/**
+ * 单应性约束检测结果
+ */
+interface HomographyResult {
+  planarScore: number
+  error?: number
+}
+
+/**
+ * 深度一致性检测结果
+ */
+interface DepthConsistencyResult {
+  depthVariation: number
+  isFlat?: boolean
+  noseCloser?: boolean
+  details?: Record<string, number>
+}
+
+/**
+ * 跨帧深度模式检测结果
+ */
+interface CrossFrameDepthResult {
+  planarPattern: number
+}
+
+/**
+ * 透视变换模式检测结果
+ */
+interface PerspectivePatternResult {
+  perspectiveScore: number
+}
+
+/**
+ * 统计信息对象
+ */
+interface DetectionStatistics {
+  [key: string]: any
 }
 
 /**
@@ -121,8 +213,8 @@ export class MotionLivenessDetector {
   private config: Required<MotionLivenessDetectorOptions>
   private eyeAspectRatioHistory: number[] = []
   private mouthAspectRatioHistory: number[] = []
-  private faceLandmarksHistory: any[][][] = []  // 原始坐标（用于Z坐标分析）
-  private normalizedLandmarksHistory: any[][][] = []  // 【关键】归一化坐标（用于几何约束检测）
+  private faceLandmarksHistory: Point[][] = []  // 原始坐标（用于Z坐标分析）
+  private normalizedLandmarksHistory: Point[][] = []  // 【关键】归一化坐标（用于几何约束检测）
   
   // 用于检测透视畸变攻击
   private leftEyeEARHistory: number[] = []
@@ -180,9 +272,18 @@ export class MotionLivenessDetector {
           this.normalizedLandmarksHistory.shift()
         }
       } else {
+        const lm = currentKeypoints.landmarks || []
+        const debug = {
+          'faceResult.mesh存在': !!faceResult.mesh,
+          'mesh长度': faceResult.mesh?.length || 0,
+          'faceResult.annotations存在': !!faceResult.annotations,
+          'annotations键数': Object.keys(faceResult.annotations || {}).length,
+          'currentKeypoints.landmarks长度': lm.length
+        }
         return this.createEmptyResult({
           reason: '缺少面部关键点，无法进行活体检测',
-          landmarks: currentKeypoints.landmarks
+          landmarks: currentKeypoints.landmarks,
+          debug
         })
       }
 
@@ -248,7 +349,7 @@ export class MotionLivenessDetector {
    * 检测眼睛的微妙波动（任何变化）
    * 防护：排除透视畸变、噪声，确保是真实的连续或周期性波动
    */
-  private detectEyeFluctuation(keypoints: FaceKeypoints): any {
+  private detectEyeFluctuation(keypoints: FaceKeypoints): EyeFluctuationResult {
     if (!keypoints.leftEye || !keypoints.rightEye) {
       return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
     }
@@ -346,7 +447,7 @@ export class MotionLivenessDetector {
    * 检测嘴巴的微妙波动（任何变化）
    * 防护：排除噪声，确保是真实的张嘴/闭嘴动作
    */
-  private detectMouthFluctuation(keypoints: FaceKeypoints): any {
+  private detectMouthFluctuation(keypoints: FaceKeypoints): MouthFluctuationResult {
     if (!keypoints.mouth) {
       return { score: 0, stdDev: 0, fluctuation: 0, hasMovement: false }
     }
@@ -451,7 +552,7 @@ export class MotionLivenessDetector {
    * 
    * 【重要修复】使用归一化坐标进行比较，消除人脸在画面中移动的影响
    */
-  private detectMuscleMovement(): any {
+  private detectMuscleMovement(): MuscleMovementResult {
     // 【关键】使用归一化坐标历史，而非绝对坐标
     if (this.normalizedLandmarksHistory.length < 2) {
       return { score: 0, variation: 0, hasMovement: false }
@@ -559,8 +660,9 @@ export class MotionLivenessDetector {
 
     const zValues: number[] = []
     for (const ptIdx of samplePoints) {
-      if (latestFrame[ptIdx] && latestFrame[ptIdx].length >= 3) {
-        zValues.push(latestFrame[ptIdx][2])
+      const point = latestFrame[ptIdx]
+      if (point && point.length >= 3 && typeof point[2] === 'number') {
+        zValues.push(point[2])
       }
     }
 
@@ -998,7 +1100,7 @@ export class MotionLivenessDetector {
    * 1. 深度一致性 - 辅助参考
    * 2. 跨帧深度模式 - 辅助参考
    */
-  private detectPhotoGeometry(): any {
+  private detectPhotoGeometry(): PhotoGeometryResult {
     if (this.faceLandmarksHistory.length < 3) {
       return { isPhoto: false, confidence: 0, details: {} }
     }
@@ -1077,7 +1179,7 @@ export class MotionLivenessDetector {
    * 【注意】交叉比率本身是比率，不依赖绝对坐标
    * 使用归一化坐标只是为了一致性
    */
-  private detectCrossRatioInvariance(): any {
+  private detectCrossRatioInvariance(): CrossRatioResult {
     // 【使用归一化坐标历史，保持一致性】
     if (this.normalizedLandmarksHistory.length < 3) {
       return { invarianceScore: 0 }
@@ -1155,10 +1257,10 @@ export class MotionLivenessDetector {
    * 【重要修复】使用归一化坐标进行比较
    * 这是纯 2D 几何检测，最可靠！
    */
-  private detectHomographyConstraint(): any {
+  private detectHomographyConstraint(): HomographyResult {
     // 【关键】使用归一化坐标历史
     if (this.normalizedLandmarksHistory.length < 2) {
-      return { planarScore: 0, error: 0 }
+      return { planarScore: 0 }
     }
 
     const frame1 = this.normalizedLandmarksHistory[0]
@@ -1297,11 +1399,11 @@ export class MotionLivenessDetector {
    * - 真实人脸：鼻子Z坐标明显大于眼睛和脸颊（凸出）
    * - 照片：所有点Z坐标接近相同（平面）
    */
-  private detectDepthConsistency(): any {
+  private detectDepthConsistency(): DepthConsistencyResult {
     const latestFrame = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 1]
     
     if (!latestFrame || latestFrame.length < 468) {
-      return { depthVariation: 0.5, isFlat: false }
+      return { depthVariation: 0.5 }
     }
 
     // 采样不同深度区域的点
@@ -1313,8 +1415,9 @@ export class MotionLivenessDetector {
     const getAvgZ = (points: number[]) => {
       let sum = 0, count = 0
       for (const idx of points) {
-        if (latestFrame[idx] && latestFrame[idx].length >= 3) {
-          sum += latestFrame[idx][2]
+        const point = latestFrame[idx]
+        if (point && point.length >= 3 && typeof point[2] === 'number') {
+          sum += point[2]
           count++
         }
       }
@@ -1364,7 +1467,7 @@ export class MotionLivenessDetector {
    * - 照片旋转时：所有点的深度变化遵循平面投影规律（线性关系）
    * - 真实人脸旋转时：不同部位的深度变化不成线性关系
    */
-  private detectCrossFrameDepthPattern(): any {
+  private detectCrossFrameDepthPattern(): CrossFrameDepthResult {
     if (this.faceLandmarksHistory.length < 3) {
       return { planarPattern: 0 }
     }
@@ -1379,8 +1482,10 @@ export class MotionLivenessDetector {
       
       const changes: number[] = []
       for (const idx of samplePoints) {
-        if (prev[idx]?.length >= 3 && curr[idx]?.length >= 3) {
-          changes.push(curr[idx][2] - prev[idx][2])
+        const prevPoint = prev[idx]
+        const currPoint = curr[idx]
+        if (prevPoint && currPoint && prevPoint.length >= 3 && currPoint.length >= 3 && typeof prevPoint[2] === 'number' && typeof currPoint[2] === 'number') {
+          changes.push(currPoint[2] - prevPoint[2])
         }
       }
       if (changes.length >= 3) {
@@ -1419,7 +1524,7 @@ export class MotionLivenessDetector {
    * 
    * 原理：照片左右偏转时，左右脸宽度比例会平滑变化
    */
-  private detectPerspectiveTransformPattern(): any {
+  private detectPerspectiveTransformPattern(): PerspectivePatternResult {
     // 【关键】使用归一化坐标历史
     if (this.normalizedLandmarksHistory.length < 3) {
       return { perspectiveScore: 0 }
@@ -1474,7 +1579,7 @@ export class MotionLivenessDetector {
    * 
    * 逆向检测优先级更高，因为照片几何约束是物理定律，无法伪造
    */
-  private makeLivenessDecision(eyeActivity: any, mouthActivity: any, muscleActivity: any, photoGeometry: any): boolean {
+  private makeLivenessDecision(eyeActivity: EyeFluctuationResult, mouthActivity: MouthFluctuationResult, muscleActivity: MuscleMovementResult, photoGeometry: PhotoGeometryResult): boolean {
     if (!this.isReady()) {
       return true  // 数据不足，默认通过
     }
@@ -1642,47 +1747,49 @@ export class MotionLivenessDetector {
       keypoints.landmarks = face.mesh
     }
 
-    if (keypoints.landmarks && keypoints.landmarks.length >= 468) {
+    // 类型守卫：确保landmarks存在且长度足够
+    const landmarks = keypoints.landmarks
+    if (landmarks && Array.isArray(landmarks) && landmarks.length >= 468) {
       // 左眼关键点 (MediaPipe Face Mesh 标准索引)
       // 按顺序：外眼角、上眼睑上、上眼睑、内眼角、下眼睑、下眼睑下
       keypoints.leftEye = [
-        keypoints.landmarks[362],  // 外眼角
-        keypoints.landmarks[385],  // 上眼睑上
-        keypoints.landmarks[387],  // 上眼睑
-        keypoints.landmarks[263],  // 内眼角
-        keypoints.landmarks[373],  // 下眼睑
-        keypoints.landmarks[380]   // 下眼睑下
+        landmarks[362],  // 外眼角
+        landmarks[385],  // 上眼睑上
+        landmarks[387],  // 上眼睑
+        landmarks[263],  // 内眼角
+        landmarks[373],  // 下眼睑
+        landmarks[380]   // 下眼睑下
       ].filter(p => p !== undefined)
 
       // 右眼关键点 (MediaPipe Face Mesh 标准索引)
       keypoints.rightEye = [
-        keypoints.landmarks[33],   // 外眼角
-        keypoints.landmarks[160],  // 上眼睑上
-        keypoints.landmarks[158],  // 上眼睑
-        keypoints.landmarks[133],  // 内眼角
-        keypoints.landmarks[153],  // 下眼睑
-        keypoints.landmarks[144]   // 下眼睑下
+        landmarks[33],   // 外眼角
+        landmarks[160],  // 上眼睑上
+        landmarks[158],  // 上眼睑
+        landmarks[133],  // 内眼角
+        landmarks[153],  // 下眼睑
+        landmarks[144]   // 下眼睑下
       ].filter(p => p !== undefined)
 
       // 嘴巴关键点
       keypoints.mouth = [
-        keypoints.landmarks[61],   // 左嘴角
-        keypoints.landmarks[185],  // 上嘴唇左
-        keypoints.landmarks[40],   // 上嘴唇中左
-        keypoints.landmarks[39],   // 上嘴唇中
-        keypoints.landmarks[37],   // 上嘴唇中右
-        keypoints.landmarks[0],    // 上嘴唇右
-        keypoints.landmarks[267],  // 下嘴唇右
-        keypoints.landmarks[269],  // 下嘴唇中右
-        keypoints.landmarks[270],  // 下嘴唇中
-        keypoints.landmarks[409]   // 下嘴唇左
+        landmarks[61],   // 左嘴角
+        landmarks[185],  // 上嘴唇左
+        landmarks[40],   // 上嘴唇中左
+        landmarks[39],   // 上嘴唇中
+        landmarks[37],   // 上嘴唇中右
+        landmarks[0],    // 上嘴唇右
+        landmarks[267],  // 下嘴唇右
+        landmarks[269],  // 下嘴唇中右
+        landmarks[270],  // 下嘴唇中
+        landmarks[409]   // 下嘴唇左
       ].filter(p => p !== undefined)
     }
 
     return keypoints
   }
 
-  private calculateEyeAspectRatio(eye: any[][]): number {
+  private calculateEyeAspectRatio(eye: Point[]): number {
     if (!eye || eye.length < 6) return 0
     try {
       const v1 = this.pointDist(eye[1], eye[5])
@@ -1694,7 +1801,7 @@ export class MotionLivenessDetector {
     }
   }
 
-  private calculateMouthAspectRatio(mouth: any[][]): number {
+  private calculateMouthAspectRatio(mouth: Point[]): number {
     if (!mouth || mouth.length < 6) return 0
     try {
       const upperY = mouth.slice(0, 5).reduce((s, p) => s + (p?.[1] || 0), 0) / 5
@@ -1706,7 +1813,7 @@ export class MotionLivenessDetector {
     }
   }
 
-  private pointDist(p1: any, p2: any): number {
+  private pointDist(p1: Point, p2: Point): number {
     if (!p1 || !p2 || p1.length < 2 || p2.length < 2) return 0
     const dx = p1[0] - p2[0]
     const dy = p1[1] - p2[1]
@@ -1737,7 +1844,7 @@ export class MotionLivenessDetector {
    * @param faceBox 人脸边界框 [x, y, width, height]
    * @returns 归一化后的关键点数组
    */
-  private normalizeLandmarks(landmarks: any[][], faceBox: Box): any[][] {
+  private normalizeLandmarks(landmarks: Point[], faceBox: Box): Point[] {
     // faceBox: [x, y, width, height] 或 {x, y, width, height}
     let boxX: number, boxY: number, boxW: number, boxH: number
     
@@ -1755,7 +1862,7 @@ export class MotionLivenessDetector {
     if (boxW <= 0) boxW = 1
     if (boxH <= 0) boxH = 1
 
-    const normalized: any[][] = []
+    const normalized: Point[] = []
     for (const pt of landmarks) {
       if (pt && pt.length >= 2) {
         // 归一化 x, y 到 [0, 1] 相对于人脸框
@@ -1771,7 +1878,7 @@ export class MotionLivenessDetector {
     return normalized
   }
 
-  private createEmptyResult(debug: any = {}): MotionDetectionResult {
+  private createEmptyResult(debug: Record<string, any> = {}): MotionDetectionResult {
     return new MotionDetectionResult(true, {
       frameCount: 0,
       eyeAspectRatioStdDev: 0,
@@ -1785,7 +1892,7 @@ export class MotionLivenessDetector {
     }, debug)
   }
 
-  getStatistics(): any {
+  getStatistics(): DetectionStatistics {
     return {
       eyeHistorySize: this.eyeAspectRatioHistory.length,
       mouthHistorySize: this.mouthAspectRatioHistory.length,
