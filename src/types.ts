@@ -71,13 +71,13 @@ export interface FaceDetectionEngineOptions {
   /** 图像质量特征 */
   collect_image_quality_features?: ImageQualityFeatures
 
-  /** 活体检测动作列表（默认 [BLINK, MOUTH_OPEN, NOD]） */
+  /** 活体检测动作列表（默认 [BLINK, MOUTH_OPEN, NOD_DOWN, NOD_UP]） */
   action_liveness_action_list?: LivenessAction[]
   /** 要执行的活体检测动作数量（默认 1） */
   action_liveness_action_count?: number
   /** 是否随机化活体检测动作（默认 true） */
   action_liveness_action_randomize?: boolean
-  /** 活体验证超时时间（毫秒，默认 60000） */
+  /** 单一动作活体验证超时时间（毫秒，默认 15000） */
   action_liveness_verify_timeout?: number
   /** 最小嘴部张开百分比（默认 0.2） */
   action_liveness_min_mouth_open_percent?: number
@@ -106,6 +106,7 @@ export interface DetectorLoadedEventData {
 
 export interface DetectorActionEventData {
   action: LivenessAction
+  detected: LivenessAction[]
   status: LivenessActionStatus
 }
 

@@ -6,8 +6,10 @@ export enum LivenessAction {
   BLINK = 'blink',
   // Mouth open
   MOUTH_OPEN = 'mouth_open',
-  // Nod
-  NOD = 'nod'
+  // Nod down (look down)
+  NOD_DOWN = 'nod_down',
+  // Nod up (look up)
+  NOD_UP = 'nod_up'
 }
 
 /**
@@ -16,6 +18,7 @@ export enum LivenessAction {
 export enum LivenessActionStatus {
   STARTED = 'started',
   COMPLETED = 'completed',
+  MISMATCH = 'mismatch',
   TIMEOUT = 'timeout'
 }
 

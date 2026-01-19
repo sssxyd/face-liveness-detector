@@ -43,10 +43,10 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   },
 
   // action Liveness Settings
-  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
+  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD_DOWN, LivenessAction.NOD_UP],
   action_liveness_action_count: 1,
   action_liveness_action_randomize: true,
-  action_liveness_verify_timeout: 60000,
+  action_liveness_verify_timeout: 15000,
   action_liveness_min_mouth_open_percent: 0.2,
  
 }

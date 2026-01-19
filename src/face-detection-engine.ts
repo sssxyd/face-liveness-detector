@@ -965,6 +965,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     
     try {
+      // 面部区域占比计算
+      const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
+      
+      // 面部区域过小则跳过当前帧
+      if (faceRatio <= this.options.collect_min_face_ratio!) {
+        this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_SMALL, faceRatio: faceRatio })
+        this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
+        return
+      }
+
+      // 静默活体检测
       const motionResult = this.detectionState.motionDetector.analyzeMotion(face, faceBox)
       // 只有ready状态的检测器的结果才可信
       if(this.detectionState.motionDetector.isReady()){
@@ -991,22 +1002,22 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           debug: motionResult.debug,
           details: motionResult.details,
         }, 'warn')
-      }
+      }      
 
-      // 计算面部大小比例，不达标则跳过当前帧
-      const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
-      if (faceRatio <= this.options.collect_min_face_ratio!) {
-        this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_SMALL, faceRatio: faceRatio })
-        this.emitDebug('detection', 'Face is too small', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
+      // 动作活体检测阶段处理
+      if (this.detectionState.period === DetectionPeriod.VERIFY) {
+        this.handleVerifyPhase(gestures)
         return
       }
 
+      // 面部区域过大则跳过当前帧
       if (faceRatio >= this.options.collect_max_face_ratio!) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_LARGE, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
         return
       }
 
+      // 捕获并准备帧数据
       const frameData = this.captureAndPrepareFrames()
       if (!frameData) {
         this.emitDebug('detection', '帧采集失败，无法继续检测', {
@@ -1030,6 +1041,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }
       }
 
+      // 计算图像质量分数，不达标则跳过当前帧
       const qualityResult = calcImageQuality(this.cv, grayFrame, this.options.collect_image_quality_features, this.options.collect_min_image_quality)
       if (!qualityResult.passed || qualityResult.score < this.options.collect_min_image_quality) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_LOW_QUALITY, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score})
@@ -1046,17 +1058,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       // 当前帧通过常规检查
       this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_CHECK_PASS, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
 
-      // 处理不同检测阶段的逻辑
       // 检测阶段，图像各方面合规，进入采集阶段
       if (this.detectionState.period === DetectionPeriod.DETECT) {
         this.handleDetectPhase()
       }
 
-      // 采集阶段，采集当前帧图像，记录采集次数, 达到指定次数后进入验证阶段
+      // 采集阶段，采集当前帧图像
       if (this.detectionState.period === DetectionPeriod.COLLECT) {
         this.handleCollectPhase(bgrFrame, qualityResult.score, faceBox)
       }
-
+      
+      // 采集到足够的图像，并且静默活体通过，进入动作验证阶段
       if (this.detectionState.isReadyToVerify(this.options.collect_min_collect_count)) {
         this.emitDebug('detection', 'Ready to enter action verification phase', {
           collectCount: this.detectionState.collectCount,
@@ -1069,10 +1081,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           this.stopDetection(true)
           return
         }
-      }
-
-      if (this.detectionState.period === DetectionPeriod.VERIFY) {
-        this.handleVerifyPhase(gestures)
       }
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
@@ -1102,12 +1110,14 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * Handle verify phase
+   * 验证动作阶段处理
+   * @param gestures - Detected gestures from Human.js
    */
   private handleVerifyPhase(gestures: GestureResult[]): void {
-    // No action set yet, will continue after setting
     if (!this.detectionState.currentAction) {
+      // 当前无动作，选择下一个动作
       if(!this.selectNextAction()) {
+        // 下一个动作不可用，内部错误
         this.emit('detector-error' as any, {
           code: ErrorCode.INTERNAL_ERROR,
           message: 'No available actions to perform for liveness verification'
@@ -1118,36 +1128,52 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    // Check if action detected
-    const detected = this.detectAction(this.detectionState.currentAction, gestures)
-    if (!detected) {
+    // 检测实际动作
+    const detectedActions = this.detectAction(gestures)
+
+    if(detectedActions.length === 0) {
+      // 没有任何动作，继续检测
       return
     }
 
-    const actionComplete: DetectorActionEventData = {
-      action: this.detectionState.currentAction,
-      status: LivenessActionStatus.COMPLETED
+    // 验证检测到的动作：只有检测到期望的动作才算成功
+    // 如果同时检测到多个动作（如NOD_DOWN和NOD_UP），只要包含期望的动作即可
+    if (!detectedActions.includes(this.detectionState.currentAction)) {
+      this.emitDebug('liveness', 'Action mismatch', {
+        expected: this.detectionState.currentAction,
+        detected: detectedActions
+      }, 'warn')
+      this.emit('detector-action' as any, {
+        action: this.detectionState.currentAction,
+        detected: detectedActions,
+        status: LivenessActionStatus.MISMATCH
+      })
+      this.stopDetection(false)
+      return
     }
 
-    // Action completed
-    this.emit('detector-action', actionComplete)
+    // 动作验证成功
+    this.emit('detector-action' as any, {
+      action: this.detectionState.currentAction,
+      detected: detectedActions,
+      status: LivenessActionStatus.COMPLETED
+    })
     this.emitDebug('liveness', 'Action detected', { action: this.detectionState.currentAction })
     this.detectionState.onActionCompleted()
 
-    // Check if all required actions completed
+    // 检查是否完成所有动作
     if (this.detectionState.completedActions.size >= this.getPerformActionCount()) {
       this.stopDetection(true)
       return
     }
 
-    // Select next action
+    // 选择下一个动作
     if(!this.selectNextAction()) {
       this.emit('detector-error' as any, {
         code: ErrorCode.INTERNAL_ERROR,
         message: 'No available actions to perform for liveness verification'
       })
       this.stopDetection(false)
-      return
     }
   }
 
@@ -1241,6 +1267,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
     const actionStart: DetectorActionEventData = {
       action: nextAction,
+      detected: [],
       status: LivenessActionStatus.STARTED
     }
     this.emit('detector-action', actionStart)
@@ -1253,6 +1280,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         }, 'warn')
         this.emit('detector-action' as any, {
           action: nextAction,
+          detected: [],
           status: LivenessActionStatus.TIMEOUT
         })
         this.partialResetDetectionState()      
@@ -1262,45 +1290,64 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   }
 
   /**
-   * Detect specific action
+   * Detect all actions from gestures
+   * @returns Array of detected actions, empty array if none detected
    */
-  private detectAction(action: LivenessAction, gestures: GestureResult[]): boolean {
+  private detectAction(gestures: GestureResult[]): LivenessAction[] {
+    const detectedActions: LivenessAction[] = []
+
     if (!gestures || gestures.length === 0) {
-      this.emitDebug('liveness', 'No gestures detected for action verification', { action, gestureCount: gestures?.length ?? 0 }, 'info')
-      return false
+      this.emitDebug('liveness', 'No gestures detected for action verification', { gestureCount: gestures?.length ?? 0 }, 'info')
+      return detectedActions
     }
 
     try {
-      switch (action) {
-        case LivenessAction.BLINK:
-          return gestures.some(g => {
-            if (!g.gesture) return false
-            return g.gesture.includes('blink')
-          })
-        case LivenessAction.MOUTH_OPEN:
-          return gestures.some(g => {
-            const gestureStr = g.gesture
-            if (!gestureStr || !gestureStr.includes('mouth')) return false
-            const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
-            if (!percentMatch || !percentMatch[1]) return false
-            const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
-            return percent > (this.options.action_liveness_min_mouth_open_percent)
-          })
-        case LivenessAction.NOD:
-          return gestures.some(g => {
-            if (!g.gesture) return false
-            // Check for continuous head movement (up -> down or down -> up)
-            const headPattern = g.gesture.match(/head\s+(up|down)/i)
-            return !!headPattern && !!headPattern[1]
-          })
-        default:
-          this.emitDebug('liveness', 'Unknown action type in detection', { action }, 'warn')
-          return false
+      // Check for BLINK
+      if (gestures.some(g => {
+        if (!g.gesture) return false
+        return g.gesture.includes('blink')
+      })) {
+        detectedActions.push(LivenessAction.BLINK)
+      }
+
+      // Check for MOUTH_OPEN
+      if (gestures.some(g => {
+        const gestureStr = g.gesture
+        if (!gestureStr || !gestureStr.includes('mouth')) return false
+        const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
+        if (!percentMatch || !percentMatch[1]) return false
+        const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
+        return percent > (this.options.action_liveness_min_mouth_open_percent)
+      })) {
+        detectedActions.push(LivenessAction.MOUTH_OPEN)
+      }
+
+      // Check for NOD_DOWN (head down)
+      if (gestures.some(g => {
+        if (!g.gesture) return false
+        const headPattern = g.gesture.match(/head\s+down/i)
+        return !!headPattern
+      })) {
+        detectedActions.push(LivenessAction.NOD_DOWN)
+      }
+
+      // Check for NOD_UP (head up)
+      if (gestures.some(g => {
+        if (!g.gesture) return false
+        const headPattern = g.gesture.match(/head\s+up/i)
+        return !!headPattern
+      })) {
+        detectedActions.push(LivenessAction.NOD_UP)
+      }
+
+      if (detectedActions.length > 0) {
+        this.emitDebug('liveness', 'Actions detected', { detectedActions }, 'info')
       }
     } catch (error) {
-      this.emitDebug('liveness', 'Error during action detection', { action, error: (error as Error).message }, 'error')
-      return false
+      this.emitDebug('liveness', 'Error during action detection', { error: (error as Error).message }, 'error')
     }
+
+    return detectedActions
   }
 
   /**
