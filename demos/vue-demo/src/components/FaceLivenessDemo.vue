@@ -291,7 +291,6 @@ const options = computed<FaceDetectionEngineOptions>(() => ({
   collect_min_face_frontal: 0.9,
   collect_min_collect_count: 3,
   action_liveness_action_count: actionCount.value,
-  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
 }))
 
 // 初始化引擎
