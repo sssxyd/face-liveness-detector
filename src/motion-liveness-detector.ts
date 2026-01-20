@@ -16,7 +16,6 @@
  * 3. 【辅助参考】Z 坐标分析——可能被欺骗，仅作辅助
  */
 
-import { max } from '@techstark/opencv-js'
 import type { FaceResult, Point } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
 
@@ -224,12 +223,33 @@ export class MotionLivenessDetector {
   private rigidMotionHistory: number[] = []
   
   // 【新增】用于照片几何特征检测
-  private homographyErrors: number[] = []        // 单应性变换误差历史
   private depthConsistencyScores: number[] = []  // 深度一致性得分历史
   private planarityScores: number[] = []         // 平面性得分历史
 
+  private emitDebug: (
+    stage: string,
+    message: string,
+    details?: Record<string, any>,
+    level?: 'info' | 'warn' | 'error'
+  ) => void = () => {} // 默认空实现（不emit）
+
   constructor() {
     this.config = { ...DEFAULT_OPTIONS }
+  }
+
+  /**
+  * 设置 emitDebug 方法（依赖注入）
+  * @param emitDebugFn - 来自 FaceDetectionEngine 的 emitDebug 方法
+  */
+  setEmitDebug(
+    emitDebugFn: (
+      stage: string,
+      message: string,
+      details?: Record<string, any>,
+      level?: 'info' | 'warn' | 'error'
+    ) => void
+  ): void {
+    this.emitDebug = emitDebugFn
   }
 
   getOptions(): Required<MotionLivenessDetectorOptions> {
@@ -253,7 +273,6 @@ export class MotionLivenessDetector {
     this.rightEyeEARHistory = []
     this.frameTimestamps = []
     this.rigidMotionHistory = []
-    this.homographyErrors = []
     this.depthConsistencyScores = []
     this.planarityScores = []
   }
@@ -344,7 +363,9 @@ export class MotionLivenessDetector {
         }
       )
     } catch (error) {
-      console.warn('[MotionLivenessDetector]', error)
+      this.emitDebug('motion-liveness', '活体检测异常', {
+        error: (error as Error).message
+      }, 'error')
       return this.createEmptyResult({
         reason: '活体检测异常',
         error: (error as Error).message
@@ -433,7 +454,7 @@ export class MotionLivenessDetector {
     const baseScore = hasMovement ? Math.min((fluctuation + stdDev) / 0.05, 1) : 0
     const score = baseScore * (1 - motionDeformCorrelation * 0.5)
 
-    console.debug('[Eye]', {
+    this.emitDebug('eye-detection', 'Eye aspect ratio analysis', {
       EAR: avgEAR.toFixed(4),
       fluctuation: fluctuation.toFixed(5),
       stdDev: stdDev.toFixed(5),
@@ -493,14 +514,14 @@ export class MotionLivenessDetector {
     // 评分
     const score = hasMovement ? Math.min((fluctuation + stdDev) / 0.05, 1) : 0
 
-    console.debug('[Mouth]', {
+    this.emitDebug('mouth-detection', 'Mouth aspect ratio analysis', {
       MAR: MAR.toFixed(4),
       fluctuation: fluctuation.toFixed(5),
       stdDev: stdDev.toFixed(5),
       realMovement: hasRealMouthMovement,
       recentMovement: hasRecentMouthMovement,
       score: score.toFixed(3)
-    })
+    }, 'info')
 
     return { score, stdDev, fluctuation, hasMovement }
   }
@@ -627,7 +648,12 @@ export class MotionLivenessDetector {
     // 评分
     const score = Math.min((variation + avgDist) / 0.05, 1)
 
-    console.debug('[Muscle] avgDist:', avgDist.toFixed(4), 'variation:', variation.toFixed(5), 'rigidity:', rigidityScore.toFixed(3), 'score:', score.toFixed(3))
+    this.emitDebug('muscle-detection', 'Muscle movement analysis', {
+      avgDist: avgDist.toFixed(4),
+      variation: variation.toFixed(5),
+      rigidity: rigidityScore.toFixed(3),
+      score: score.toFixed(3)
+    })
 
     return { score: Math.max(score, 0), variation, hasMovement, rigidityScore }
   }
@@ -693,7 +719,7 @@ export class MotionLivenessDetector {
     // 如果zVarianceRatio > 0.3，认为是立体（活体）
     const planarity = Math.max(0, (0.15 - zVarianceRatio) / 0.15)
 
-    console.debug('[Planarity]', {
+    this.emitDebug('planarity-detection', 'Face planarity analysis', {
       zMean: zMean.toFixed(4),
       zStdDev: zStdDev.toFixed(4),
       zVarianceRatio: zVarianceRatio.toFixed(4),
@@ -781,7 +807,7 @@ export class MotionLivenessDetector {
     // magnitudeCV 越小（接近0）说明幅度越一致
     const rigidityScore = Math.max(0, 1 - angleStdDev / 0.5) * Math.max(0, 1 - magnitudeCV)
 
-    console.debug('[RigidityCheck]', {
+    this.emitDebug('rigidity-detection', 'Rigid motion consistency check', {
       samplePointCount: motionVectors.length,
       angleStdDev: angleStdDev.toFixed(4),
       magnitudeCV: magnitudeCV.toFixed(4),
@@ -939,7 +965,7 @@ export class MotionLivenessDetector {
     // 转换为对称性得分 [0, 1]，相关性越高越对称
     const symmetry = (correlation + 1) / 2
 
-    console.debug('[EyeSymmetry]', {
+    this.emitDebug('eye-symmetry-detection', 'Eye symmetry analysis', {
       correlation: correlation.toFixed(3),
       symmetry: symmetry.toFixed(3)
     })
@@ -995,7 +1021,7 @@ export class MotionLivenessDetector {
     // 如果快速眨眼比慢速眨眼多，认为是真实的
     const hasValidTiming = fastBlinkCount > 0 || slowBlinkCount === 0
 
-    console.debug('[BlinkTiming]', {
+    this.emitDebug('blink-timing-detection', 'Blink timing analysis', {
       fastBlinks: fastBlinkCount,
       slowBlinks: slowBlinkCount,
       hasValidTiming
@@ -1057,7 +1083,7 @@ export class MotionLivenessDetector {
     // 只有正相关才可疑，负相关或无相关都正常
     const suspiciousCorrelation = Math.max(0, correlation)
 
-    console.debug('[MotionDeformCorr]', {
+    this.emitDebug('motion-deform-correlation', 'Motion and deformation correlation', {
       correlation: correlation.toFixed(3),
       suspicious: suspiciousCorrelation.toFixed(3)
     })
@@ -1148,7 +1174,7 @@ export class MotionLivenessDetector {
       this.planarityScores.shift()
     }
 
-    console.debug('[PhotoGeometry]', {
+    this.emitDebug('photo-geometry-detection', 'Photo geometry analysis', {
       homography: homographyResult.planarScore.toFixed(3),
       perspective: perspectivePattern.perspectiveScore.toFixed(3),
       crossRatio: crossRatioResult.invarianceScore.toFixed(3),
@@ -1246,7 +1272,7 @@ export class MotionLivenessDetector {
     // cv > 0.15 → 变化明显（真人）
     const invarianceScore = Math.max(0, 1 - cv / 0.1)
 
-    console.debug('[CrossRatio]', {
+    this.emitDebug('cross-ratio-detection', 'Cross ratio invariance analysis', {
       mean: mean.toFixed(4),
       stdDev: stdDev.toFixed(4),
       cv: cv.toFixed(4),
@@ -1295,13 +1321,27 @@ export class MotionLivenessDetector {
     // 照片的几何约束是瞬间的，2帧就足够；多帧用来验证一致性
     const recentFrameCount = Math.min(5, this.faceLandmarksHistory.length)
     
+    this.emitDebug('homography-constraint', 'Starting homography constraint analysis', {
+      totalFrames: this.faceLandmarksHistory.length,
+      recentFrameCount,
+      startIndex: Math.max(1, this.faceLandmarksHistory.length - recentFrameCount)
+    })
+    
     // 计算最近帧对的变换误差（重点在最近的帧）
     for (let i = Math.max(1, this.faceLandmarksHistory.length - recentFrameCount); 
          i < this.faceLandmarksHistory.length; i++) {
       const frame1 = this.faceLandmarksHistory[i - 1]
       const frame2 = this.faceLandmarksHistory[i]
 
-      if (frame1.length < 100 || frame2.length < 100) continue  // 至少100个有效点
+      this.emitDebug('homography-constraint', `Processing frame pair [${i-1}, ${i}]`, {
+        frame1Length: frame1.length,
+        frame2Length: frame2.length
+      })
+
+      if (frame1.length < 100 || frame2.length < 100) {
+        this.emitDebug('homography-constraint', `Frame pair skipped (insufficient points)`, {}, 'info')
+        continue  // 至少100个有效点
+      }
 
       // 【改进】收集所有有效的点对（而不是只采样10个点）
       // 这给出更好的H矩阵估计
@@ -1326,34 +1366,73 @@ export class MotionLivenessDetector {
         }
       }
 
-      if (srcPoints.length < 10) continue  // 至少10个匹配点对（DLT最少需要4个）
+      this.emitDebug('homography-constraint', `Collected points`, {
+        srcPointsCount: srcPoints.length,
+        dstPointsCount: dstPoints.length
+      })
+
+      if (srcPoints.length < 10) {
+        this.emitDebug('homography-constraint', `Point pair skipped (only ${srcPoints.length} < 10 points)`, {}, 'info')
+        continue  // 至少10个匹配点对（DLT最少需要4个）
+      }
 
       // 保存这一组点对（用于后面计算特征尺度）
       lastSrcPoints = srcPoints
 
       // 【新增】使用DLT算法计算完整的3x3单应性矩阵
       const H = this.estimateHomographyDLT(srcPoints, dstPoints)
-      if (!H) continue
+      if (!H) {
+        this.emitDebug('homography-constraint', `DLT failed to estimate homography`, {}, 'warn')
+        continue
+      }
+
+      this.emitDebug('homography-constraint', `H matrix estimated`, {
+        h00: H[0][0].toFixed(4),
+        h11: H[1][1].toFixed(4),
+        h22: H[2][2].toFixed(4),
+        det: (H[0][0]*H[1][1]*H[2][2] + H[0][1]*H[1][2]*H[2][0] + H[0][2]*H[1][0]*H[2][1] 
+              - H[0][2]*H[1][1]*H[2][0] - H[0][0]*H[1][2]*H[2][1] - H[0][1]*H[1][0]*H[2][2]).toFixed(4)
+      })
 
       homographyMatrices.push(H)
 
       // 【改进】使用单应性矩阵计算误差（而不是仿射变换）
       let frameError = 0
       let validCount = 0
+      const sampleErrors: number[] = []
+      
       for (let j = 0; j < srcPoints.length; j++) {
         const transformed = this.applyHomography(H, srcPoints[j][0], srcPoints[j][1])
         const actual = dstPoints[j]
         const error = Math.sqrt((transformed[0] - actual[0]) ** 2 + (transformed[1] - actual[1]) ** 2)
         frameError += error
         validCount++
+        
+        // 记录前5个误差用于调试
+        if (j < 5) {
+          sampleErrors.push(error)
+        }
       }
 
       if (validCount > 0) {
-        errors.push(frameError / validCount)
+        const avgFrameError = frameError / validCount
+        errors.push(avgFrameError)
+        
+        this.emitDebug('homography-constraint', `Frame error computed`, {
+          pointCount: validCount,
+          avgFrameError: avgFrameError.toFixed(4),
+          sampleErrors: sampleErrors.map(e => e.toFixed(4)).join(', ')
+        })
       }
     }
 
+    this.emitDebug('homography-constraint', `Error collection complete`, {
+      totalErrors: errors.length,
+      matrixCount: homographyMatrices.length
+    })
+
     if (errors.length === 0) {
+      this.emitDebug('homography-constraint', `No errors computed, returning 0`, {}, 'warn')
       return { planarScore: 0, error: 0 }
     }
 
@@ -1379,10 +1458,12 @@ export class MotionLivenessDetector {
     const errorScore = Math.max(0, 1 - relativeError / 0.1)
     const planarScore = errorScore * matrixConsistency
 
-    console.debug('[HomographyConstraint]', {
+    this.emitDebug('homography-constraint', 'FINAL RESULT', {
       recentFrameCount,
       frameCount: errors.length,
       avgError: avgError.toFixed(4),
+      characteristicScale: characteristicScale.toFixed(4),
+      relativeError: relativeError.toFixed(4),
       errorScore: errorScore.toFixed(3),
       matrixConsistency: matrixConsistency.toFixed(3),
       planarScore: planarScore.toFixed(3),
@@ -1418,7 +1499,10 @@ export class MotionLivenessDetector {
    * 4. 反演应化矩阵到原始坐标系
    */
   private estimateHomographyDLT(src: number[][], dst: number[][]): number[][] | null {
-    if (src.length < 4 || dst.length < 4 || src.length !== dst.length) return null
+    if (src.length < 4 || dst.length < 4 || src.length !== dst.length) {
+      this.emitDebug('dlt-estimation', 'Invalid input for DLT', { srcLen: src.length, dstLen: dst.length }, 'warn')
+      return null
+    }
 
     const n = src.length
     
@@ -1426,7 +1510,16 @@ export class MotionLivenessDetector {
     const srcNorm = this.normalizePoints(src)
     const dstNorm = this.normalizePoints(dst)
 
-    if (!srcNorm || !dstNorm) return null
+    if (!srcNorm || !dstNorm) {
+      this.emitDebug('dlt-estimation', 'Point normalization failed', {}, 'warn')
+      return null
+    }
+
+    this.emitDebug('dlt-estimation', 'Normalization success', {
+      pointCount: n,
+      srcScale: srcNorm.T[0][0].toFixed(4),
+      dstScale: dstNorm.T[0][0].toFixed(4)
+    })
 
     // 构建DLT方程矩阵 A (2n × 9)
     // 
@@ -1583,67 +1676,126 @@ export class MotionLivenessDetector {
 
   /**
    * 求9x9对称矩阵(A^T*A)的最小特征向量
-   * 使用改进的迭代方法
    * 
-   * 原理：
-   * - A^T*A 是对称半正定矩阵
-   * - 最小特征值对应的特征向量是最小二乘解
-   * - 使用迭代幂法（Power Iteration）的变种求最小特征向量
+   * 【关键】使用 Jacobi 特征值分解而不是幂法
+   * 
+   * 问题分析：
+   * - 迭代幂法（Power Iteration）求的是**最大**特征值的特征向量
+   * - 我们需要**最小**特征值的特征向量
+   * - 之前的幂法实现虽然标记为最小，但实际求的是最大 → 算法失败！
+   * 
+   * 解决方案：
+   * 1. 使用 QR 算法或 Jacobi 方法求完整的特征值分解
+   * 2. 选择最小特征值对应的特征向量
+   * 
+   * 此处实现简化的 Jacobi 迭代：
+   * - 对称矩阵对角化
+   * - 提取最小特征值的特征向量
    */
   private getSmallestEigenvector(mat: number[][]): number[] | null {
     if (mat.length !== 9) return null
 
-    // 初始随机向量
-    let v = [1, 0, 0, 0, 1, 0, 0, 0, 1]  // 初始值更稳定
-    let prevEigenvalue = Infinity
-    
-    // 迭代求解最小特征值对应的特征向量
-    for (let iter = 0; iter < 50; iter++) {
-      // 计算 A*v
-      const Av = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    // 复制矩阵，Jacobi方法会修改原矩阵
+    const A: number[][] = mat.map(row => [...row])
+    const V: number[][] = Array(9).fill(0).map((_, i) => {
+      const row = Array(9).fill(0)
+      row[i] = 1
+      return row
+    })  // 9×9 单位矩阵，用于存储特征向量
+
+    // Jacobi迭代（简化版）
+    // 目标：将 A 对角化为 D = V^T * A * V
+    for (let iteration = 0; iteration < 20; iteration++) {
+      let maxOffDiag = 0
+      let p = 0, q = 1
+
+      // 找非对角元素中绝对值最大的
       for (let i = 0; i < 9; i++) {
-        for (let j = 0; j < 9; j++) {
-          Av[i] += mat[i][j] * v[j]
+        for (let j = i + 1; j < 9; j++) {
+          if (Math.abs(A[i][j]) > maxOffDiag) {
+            maxOffDiag = Math.abs(A[i][j])
+            p = i
+            q = j
+          }
         }
       }
-      
-      // 计算 Rayleigh 商（特征值估计）
-      let vTAv = 0
-      let vTv = 0
-      for (let i = 0; i < 9; i++) {
-        vTAv += v[i] * Av[i]
-        vTv += v[i] * v[i]
-      }
-      
-      const eigenvalue = vTv > 1e-10 ? vTAv / vTv : 0
-      
-      // 标准化 Av
-      const AvNorm = Math.sqrt(Av.reduce((a, b) => a + b * b, 0))
-      if (AvNorm < 1e-10) {
+
+      // 收敛判断
+      if (maxOffDiag < 1e-10) {
         break
       }
+
+      // 计算Givens旋转角
+      const Aqq = A[q][q]
+      const App = A[p][p]
+      const Apq = A[p][q]
       
-      // 更新 v
+      let theta = 0
+      if (Math.abs(Aqq - App) < 1e-10) {
+        theta = Math.PI / 4
+      } else {
+        theta = 0.5 * Math.atan2(2 * Apq, Aqq - App)
+      }
+
+      const c = Math.cos(theta)
+      const s = Math.sin(theta)
+
+      // 更新矩阵 A（2×2 子块旋转）
+      const App_new = c * c * App - 2 * s * c * Apq + s * s * Aqq
+      const Aqq_new = s * s * App + 2 * s * c * Apq + c * c * Aqq
+      const Apq_new = 0  // 旋转后的非对角元素为0
+
+      // 更新第p行第q列的其他元素
       for (let i = 0; i < 9; i++) {
-        v[i] = Av[i] / AvNorm
+        if (i !== p && i !== q) {
+          const Aip = A[i][p]
+          const Aiq = A[i][q]
+          A[i][p] = c * Aip - s * Aiq
+          A[p][i] = A[i][p]
+          A[i][q] = s * Aip + c * Aiq
+          A[q][i] = A[i][q]
+        }
       }
-      
-      // 收敛判断：特征值变化很小
-      if (Math.abs(eigenvalue - prevEigenvalue) < 1e-8) {
-        break
+
+      A[p][p] = App_new
+      A[q][q] = Aqq_new
+      A[p][q] = Apq_new
+      A[q][p] = Apq_new
+
+      // 更新特征向量矩阵 V
+      for (let i = 0; i < 9; i++) {
+        const Vip = V[i][p]
+        const Viq = V[i][q]
+        V[i][p] = c * Vip - s * Viq
+        V[i][q] = s * Vip + c * Viq
       }
-      prevEigenvalue = eigenvalue
     }
 
-    // 最后做一次归一化
-    const norm = Math.sqrt(v.reduce((a, b) => a + b * b, 0))
+    // 找到最小特征值的位置
+    let minIdx = 0
+    let minEigenvalue = A[0][0]
+    for (let i = 1; i < 9; i++) {
+      if (A[i][i] < minEigenvalue) {
+        minEigenvalue = A[i][i]
+        minIdx = i
+      }
+    }
+
+    // 提取对应的特征向量（V的第 minIdx 列）
+    const eigenvector = Array(9)
+    for (let i = 0; i < 9; i++) {
+      eigenvector[i] = V[i][minIdx]
+    }
+
+    // 归一化
+    const norm = Math.sqrt(eigenvector.reduce((a, b) => a + b * b, 0))
     if (norm > 1e-10) {
       for (let i = 0; i < 9; i++) {
-        v[i] = v[i] / norm
+        eigenvector[i] = eigenvector[i] / norm
       }
     }
 
-    return v
+    return eigenvector
   }
 
   /**
@@ -2096,7 +2248,7 @@ export class MotionLivenessDetector {
     // 如果照片几何检测高置信度判定为照片，直接拒绝
     // 【改进】根据帧数和具体特征调整阈值
     if (isPhotoByGeometry && photoConfidence > photoConfidenceThreshold) {
-      console.debug('[Decision] REJECTED by photo geometry detection', {
+      this.emitDebug('decision', 'REJECTED by photo geometry detection', {
         photoConfidence: photoConfidence.toFixed(3),
         photoConfidenceThreshold: photoConfidenceThreshold.toFixed(3),
         perspectiveScore: (photoGeometry.details?.perspectiveScore || 0).toFixed(3),
@@ -2145,7 +2297,7 @@ export class MotionLivenessDetector {
         (hasRigidMotion && !isPhotoLikely && !isPerspectiveAttack)
     }
 
-    console.debug('[Decision]', {
+    this.emitDebug('decision', 'Motion liveness detection decision', {
       // 逆向检测结果
       photoGeometry: isPhotoByGeometry,
       photoConfidence: photoConfidence.toFixed(3),
@@ -2194,7 +2346,7 @@ export class MotionLivenessDetector {
     const planarity = this.detectPhotoPlanarity()
     if (planarity > 0.7) {
       // 检测到照片平面特征（Z坐标变异很小）
-      console.debug('[FaceShapeStability] Detected planar face (photo), planarity:', planarity.toFixed(3))
+      this.emitDebug('face-shape-stability', 'Detected planar face (photo)', { planarity: planarity.toFixed(3) })
       return 0.95  // 非常可能是照片
     }
 
@@ -2240,7 +2392,7 @@ export class MotionLivenessDetector {
     // 综合得分：结合平面性和形状稳定性
     const combinedStability = Math.max(shapeStability, planarity * 0.5)
 
-    console.debug('[FaceShapeStability]', {
+    this.emitDebug('face-shape-stability', 'Face shape stability analysis', {
       avgCV: avgCV.toFixed(4),
       planarity: planarity.toFixed(3),
       shapeStability: shapeStability.toFixed(3),

@@ -91,7 +91,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   constructor(options?: Partial<FaceDetectionEngineOptions>) {
     super()
     this.options = mergeOptions(options)
-    this.detectionState = createDetectionState()
+    this.detectionState = createDetectionState(this)
   }
 
   /**
@@ -162,7 +162,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     
     this.options = mergeOptions(options)
-    this.detectionState = createDetectionState()
+    this.detectionState = createDetectionState(this)
     
     this.emitDebug('config', 'Engine options updated', { wasDetecting }, 'info')
   }
@@ -1357,7 +1357,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Emit debug event
    */
-  private emitDebug(
+  emitDebug(
     stage: string,
     message: string,
     details?: Record<string, any>,

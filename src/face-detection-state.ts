@@ -1,4 +1,5 @@
 import { DetectionPeriod, LivenessAction } from "./enums"
+import { FaceDetectionEngine } from "./face-detection-engine"
 import { MotionLivenessDetector } from "./motion-liveness-detector"
 
 /**
@@ -82,8 +83,9 @@ export class DetectionState {
 
  // <-- Add this import at the top if ResolvedEngineOptions is defined in types.ts
 
-export function createDetectionState(): DetectionState {
+export function createDetectionState(engine: FaceDetectionEngine): DetectionState {
     const detectionState = new DetectionState({})
     detectionState.motionDetector = new MotionLivenessDetector()
+    detectionState.motionDetector.setEmitDebug(engine.emitDebug.bind(engine))
     return detectionState
 }
