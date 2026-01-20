@@ -48,6 +48,8 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   action_liveness_action_randomize: true,
   action_liveness_verify_timeout: 15000,
   action_liveness_min_mouth_open_percent: 0.2,
+
+  photo_attack_detected_max_count: 5,
  
 }
 

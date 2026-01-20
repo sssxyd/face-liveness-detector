@@ -897,6 +897,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   private async performFaceDetection(): Promise<void> {
 
     // Perform face detection
+    const timestamp = performance.now()
     let result
     try {
       result = await this.human?.detect(this.videoElement)
@@ -923,7 +924,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const gestures = result.gesture || []
 
     if (faces.length === 1) {
-      this.handleSingleFace(faces[0], gestures)
+      this.handleSingleFace(faces[0], gestures, timestamp)
     } else {
       this.handleMultipleFaces(faces.length)
     }
@@ -944,7 +945,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
   /**
    * Handle single face detection
    */
-  private handleSingleFace(face: FaceResult, gestures: GestureResult[]): void {
+  private handleSingleFace(face: FaceResult, gestures: GestureResult[], timestamp: number): void {
     const faceBox = face.box || face.boxRaw
 
     if (!faceBox) {
@@ -953,10 +954,21 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       return
     }
 
-    if(!this.detectionState.motionDetector){
+    if(!this.detectionState.faceMovingDetector){
       this.emit('detector-error' as any, {
         code: ErrorCode.INTERNAL_ERROR,
-        message: 'Motion liveness detector is not initialized'
+        message: 'Face moving detector is not initialized'
+      })
+      // Clear the detecting flag before stopping to avoid deadlock
+      this.isDetectingFrameActive = false
+      this.stopDetection(false)
+      return
+    }
+
+    if(!this.detectionState.photoAttackDetector){
+      this.emit('detector-error' as any, {
+        code: ErrorCode.INTERNAL_ERROR,
+        message: 'Photo attack detector is not initialized'
       })
       // Clear the detecting flag before stopping to avoid deadlock
       this.isDetectingFrameActive = false
@@ -965,6 +977,12 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
     
     try {
+      // 动作活体检测阶段处理
+      if (this.detectionState.period === DetectionPeriod.VERIFY) {
+        this.handleVerifyPhase(gestures)
+        return
+      }
+
       // 面部区域占比计算
       const faceRatio = (faceBox[2] * faceBox[3]) / (this.actualVideoWidth * this.actualVideoHeight)
       
@@ -975,50 +993,62 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return
       }
 
-      // 静默活体检测
-      const motionResult = this.detectionState.motionDetector.analyzeMotion(face, faceBox)
-      
-      if(this.detectionState.motionDetector.collectedMinFrames()){
-        // 采集到最小帧数后，否定性判定才可信
-        if(!motionResult.isLively) {
-          this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
-            details: motionResult.details,
-            debug: motionResult.debug,
-            message: motionResult.getMessage(),
-          }, 'warn')
-          this.emitDetectorInfo({
-            code: DetectionCode.FACE_NOT_LIVE,
-            message: motionResult.getMessage(),
-          })
-          this.partialResetDetectionState()
-          return        
-        }
-        // 采集到足够帧数后，肯定性判定才可信
-        if(this.detectionState.motionDetector.collectedFullFrames()){
-          this.emitDebug('motion-detection', 'Motion liveness check passed', {
-            debug: motionResult.debug,
-            details: motionResult.details,
-          }, 'warn')
-          this.detectionState.liveness = true
-        } else {
-          this.emitDebug('motion-detection', 'Motion liveness check ongoing - collecting more frames', {
-            debug: motionResult.debug,
-            details: motionResult.details,
-          }, 'warn')
-        }
-      } 
-
-      // 动作活体检测阶段处理
-      if (this.detectionState.period === DetectionPeriod.VERIFY) {
-        this.handleVerifyPhase(gestures)
-        return
-      }
-
       // 面部区域过大则跳过当前帧
       if (faceRatio >= this.options.collect_max_face_ratio!) {
         this.emitDetectorInfo({ code: DetectionCode.FACE_TOO_LARGE, faceRatio: faceRatio })
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
         return
+      }
+
+      this.detectionState.faceMovingDetector.addFrame(face, timestamp)
+      if(!this.detectionState.faceMovingDetector.isAvailable()){
+        // 面部移动数据尚不可用，等待更多帧
+        this.emitDebug('motion-detection', 'Face moving data not yet available - collecting more frames', {
+          collectedFrames: this.detectionState.faceMovingDetector.getFrameCount()
+        }, 'info')
+        return
+      }
+
+      const faceMovingResult = this.detectionState.faceMovingDetector.detect()
+      if(!faceMovingResult.isMoving){
+        // 面部移动检测失败，可能为照片攻击
+        this.emitDebug('motion-detection', 'Face moving detection failed - possible photo attack', {
+          details: faceMovingResult.details,
+          debug: faceMovingResult.debug
+        }, 'warn')
+        this.emitDetectorInfo({
+          code: DetectionCode.PLEASE_MOVING_FACE,
+          message: '请动一动您的脸部',
+        })
+        this.partialResetDetectionState()
+        return
+      }
+
+      this.detectionState.photoAttackDetector.addFrame(face)
+      const photoAttackResult = this.detectionState.photoAttackDetector.detect()
+      if(photoAttackResult.isAvailable()){
+        // 照片攻击检测可用（仅当判定为照片攻击时)
+        if(photoAttackResult.isPhoto){
+          this.emitDetectorInfo({
+            code: DetectionCode.PHOTO_ATTACK_DETECTED,
+            message: photoAttackResult.getMessage(),
+          })
+          this.emitDebug('motion-detection', 'Photo attack detected', {
+            details: photoAttackResult.details,
+            debug: photoAttackResult.debug,
+          }, 'warn')
+          this.partialResetDetectionState()
+          return
+        } else {
+          if(photoAttackResult.isTrusted()){
+            // 仅当采集到足够帧，且判定为非照片攻击时，才采信
+            this.detectionState.liveness = true
+            this.emitDebug('motion-detection', 'Photo attack detection passed - face is live', {
+              debug: photoAttackResult.debug,
+              details: photoAttackResult.details,
+            }, 'warn')
+          }
+        }
       }
 
       // 捕获并准备帧数据

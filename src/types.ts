@@ -82,6 +82,9 @@ export interface FaceDetectionEngineOptions {
   /** 最小嘴部张开百分比（默认 0.2） */
   action_liveness_min_mouth_open_percent?: number
 
+  /** 最大允许的照片攻击检测次数（默认 5） */
+  photo_attack_detected_max_count?: number
+
 }
 
 /**

@@ -21,6 +21,13 @@ export type {
   EventListener,
 } from './types'
 
+export {
+  PhotoAttackDetector,
+  PhotoAttackDetectionResult,
+  type PhotoAttackDetectionDetails,
+  type PhotoAttackDetectorOptions,
+} from './photo-attack-detector'
+
 export { LivenessAction, ErrorCode, DetectionCode, LivenessActionStatus, DetectionPeriod, EngineState } from './enums'
 
 export { preloadOpenCV, getCvSync, getOpenCVVersion, detectBrowserEngine } from './library-loader'

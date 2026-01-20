@@ -475,7 +475,9 @@ function getPromptMessage(code: string): string {
     [DetectionCode.FACE_TOO_LARGE]: 'Face too large, please move away from the camera',
     [DetectionCode.FACE_NOT_FRONTAL]: 'Please face the camera directly',
     [DetectionCode.FACE_LOW_QUALITY]: 'Image quality too low, please improve lighting or camera focus',
-    [DetectionCode.FACE_CHECK_PASS]: 'Face detected successfully'
+    [DetectionCode.FACE_CHECK_PASS]: 'Face detected successfully',
+    [DetectionCode.PHOTO_ATTACK_DETECTED]: 'Photo attack detected',
+    [DetectionCode.PLEASE_MOVING_FACE]: 'Please move your face to verify liveness',
   }
   return messages[code] || 'Detecting...'
 }

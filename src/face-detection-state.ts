@@ -1,6 +1,7 @@
 import { DetectionPeriod, LivenessAction } from "./enums"
 import { FaceDetectionEngine } from "./face-detection-engine"
-import { MotionLivenessDetector } from "./motion-liveness-detector"
+import { FaceMovingDetector } from "./face-moving-detector"
+import { PhotoAttackDetector } from "./photo-attack-detector"
 
 /**
  * Internal detection state interface
@@ -9,7 +10,6 @@ export class DetectionState {
     period: DetectionPeriod = DetectionPeriod.DETECT
     startTime: number = performance.now()
     collectCount: number = 0
-    suspectedFraudsCount: number = 0
     bestQualityScore: number = 0
     bestFrameImage: string | null = null
     bestFaceImage: string | null = null
@@ -17,7 +17,8 @@ export class DetectionState {
     currentAction: LivenessAction | null = null
     actionVerifyTimeout: ReturnType<typeof setTimeout> | null = null
     lastFrontalScore: number = 1
-    motionDetector: MotionLivenessDetector | null = null
+    faceMovingDetector: FaceMovingDetector | null = null
+    photoAttackDetector: PhotoAttackDetector | null = null
     liveness: boolean = false
 
     constructor(options: Partial<DetectionState>) {
@@ -27,13 +28,16 @@ export class DetectionState {
     reset(): void {
         this.clearActionVerifyTimeout()
 
-        const savedMotionDetector = this.motionDetector
+        const savedFaceMovingDetector = this.faceMovingDetector
+        const savedPhotoAttackDetector = this.photoAttackDetector
 
-        savedMotionDetector?.reset()
+        savedFaceMovingDetector?.reset()
+        savedPhotoAttackDetector?.reset()
 
         Object.assign(this, new DetectionState({}))
 
-        this.motionDetector = savedMotionDetector
+        this.faceMovingDetector = savedFaceMovingDetector
+        this.photoAttackDetector = savedPhotoAttackDetector
     }
 
     // 默认方法
@@ -81,11 +85,11 @@ export class DetectionState {
     }    
 }
 
- // <-- Add this import at the top if ResolvedEngineOptions is defined in types.ts
-
 export function createDetectionState(engine: FaceDetectionEngine): DetectionState {
     const detectionState = new DetectionState({})
-    detectionState.motionDetector = new MotionLivenessDetector()
-    detectionState.motionDetector.setEmitDebug(engine.emitDebug.bind(engine))
+    detectionState.faceMovingDetector = new FaceMovingDetector()
+    detectionState.faceMovingDetector.setEmitDebug(engine.emitDebug.bind(engine))
+    detectionState.photoAttackDetector = new PhotoAttackDetector()
+    detectionState.photoAttackDetector.setEmitDebug(engine.emitDebug.bind(engine))
     return detectionState
 }
