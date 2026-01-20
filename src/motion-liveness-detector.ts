@@ -354,12 +354,12 @@ export class MotionLivenessDetector {
           hasMuscleMovement: muscleActivity.hasMovement,
           // 逆向检测结果（照片几何特征）
           isPhoto: photoGeometryResult.isPhoto,
-          photoConfidence: photoGeometryResult.confidence,
-          homographyScore: photoGeometryResult.details?.homographyScore,
-          perspectiveScore: photoGeometryResult.details?.perspectiveScore,
-          crossRatioScore: photoGeometryResult.details?.crossRatioScore,
-          depthVariation: photoGeometryResult.details?.depthVariation,
-          crossFramePattern: photoGeometryResult.details?.crossFramePattern
+          photoConfidence: photoGeometryResult.confidence.toFixed(3) ? Number(photoGeometryResult.confidence.toFixed(3)) : undefined,
+          homographyScore: photoGeometryResult.details?.homographyScore.toFixed(3) ? Number(photoGeometryResult.details?.homographyScore.toFixed(3)) : undefined,
+          perspectiveScore: photoGeometryResult.details?.perspectiveScore.toFixed(3) ? Number(photoGeometryResult.details?.perspectiveScore.toFixed(3)) : undefined,
+          crossRatioScore: photoGeometryResult.details?.crossRatioScore.toFixed(3) ? Number(photoGeometryResult.details?.crossRatioScore.toFixed(3)) : undefined,
+          depthVariation: photoGeometryResult.details?.depthVariation.toFixed(3) ? Number(photoGeometryResult.details?.depthVariation.toFixed(3)) : undefined,
+          crossFramePattern: photoGeometryResult.details?.crossFramePattern.toFixed(3) ? Number(photoGeometryResult.details?.crossFramePattern.toFixed(3)) : undefined,
         }
       )
     } catch (error) {
@@ -1152,18 +1152,33 @@ export class MotionLivenessDetector {
     // 【核心检测3】交叉比率不变性检测（射影几何的核心不变量）
     const crossRatioResult = this.detectCrossRatioInvariance()
 
-    // 【辅助检测】深度相关（Z坐标是推断的，权重降低）
-    const depthResult = this.detectDepthConsistency()
-    const crossFrameDepth = this.detectCrossFrameDepthPattern()
+    // ...已删除深度相关辅助检测（Z坐标推断对照片无区分意义）
 
     // 综合判定：2D几何约束权重高，Z坐标权重低
-    // 【改进】提高perspectiveScore的权重，因为完美的平滑变换是照片的强特征
-    const photoScore = 
-      homographyResult.planarScore * 0.30 +       // 单应性约束（最可靠）
-      perspectivePattern.perspectiveScore * 0.40 + // 透视变换模式（可靠且权重提高）
-      crossRatioResult.invarianceScore * 0.15 +   // 交叉比率不变性（可靠）
-      (1 - Math.min(depthResult.depthVariation, 1)) * 0.10 +   // 深度（辅助，低权重）
-      crossFrameDepth.planarPattern * 0.05        // 跨帧深度（辅助，低权重）
+    // 
+    // 【关键改进】当有强照片特征信号时，不应该被低的homographyScore拖累
+    // 改用"任意一个足够强"的策略，而非简单加权平均：
+    // - 如果perspectiveScore > 0.85 OR crossRatioScore > 0.90 → 强照片信号，直接判定为照片
+    // - 否则使用加权平均
+    const strongPerspectiveScore = (perspectivePattern.perspectiveScore || 0) > 0.85
+    const strongCrossRatioScore = (crossRatioResult.invarianceScore || 0) > 0.90
+    const hasStrongGeometricSignal = strongPerspectiveScore || strongCrossRatioScore
+
+    let photoScore: number
+    if (hasStrongGeometricSignal) {
+      // 【强照片信号路径】任何一个几何约束强到足够高，就是照片
+      photoScore = Math.max(
+        perspectivePattern.perspectiveScore * 0.60,
+        crossRatioResult.invarianceScore * 0.70
+      )
+      // homographyScore太低时不参与计算，但其他强信号就足够了
+    } else {
+      // 【正常路径】使用加权平均，权重为纯2D几何约束
+      photoScore = 
+        homographyResult.planarScore * 0.50 +       // 单应性约束（最可靠，纯2D几何）
+        perspectivePattern.perspectiveScore * 0.35 + // 透视变换模式（可靠）
+        crossRatioResult.invarianceScore * 0.15     // 交叉比率不变性（可靠）
+    }
 
     const isPhoto = photoScore > 0.50  // 【改进】降低阈值到0.50（从0.60）
     const confidence = Math.min(photoScore, 1)
@@ -1178,8 +1193,6 @@ export class MotionLivenessDetector {
       homography: homographyResult.planarScore.toFixed(3),
       perspective: perspectivePattern.perspectiveScore.toFixed(3),
       crossRatio: crossRatioResult.invarianceScore.toFixed(3),
-      depthVariation: depthResult.depthVariation.toFixed(3),
-      crossFrame: crossFrameDepth.planarPattern.toFixed(3),
       photoScore: photoScore.toFixed(3),
       isPhoto
     })
@@ -1190,9 +1203,7 @@ export class MotionLivenessDetector {
       details: {
         homographyScore: homographyResult.planarScore,
         perspectiveScore: perspectivePattern.perspectiveScore,
-        crossRatioScore: crossRatioResult.invarianceScore,
-        depthVariation: depthResult.depthVariation,
-        crossFramePattern: crossFrameDepth.planarPattern
+        crossRatioScore: crossRatioResult.invarianceScore
       }
     }
   }
@@ -1283,194 +1294,134 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 【关键】检测单应性变换约束
-   * 
+   * 【关键】检测单应性变换约束（视野充满人脸场景）
+   *
    * 原理：
-   * - 平面物体（照片）在不同视角下的投影满足 H * p1 = p2（H是3x3单应性矩阵）
-   * - 3D物体不满足这个约束，会有残差误差
-   * 
-   * 方法：用4对点计算H，然后检验其他点是否符合H变换
-   */
-  /**
-   * 【单应性约束检测】判断多帧特征点是否满足平面约束
-   * 
-   * 【关键改进】：
-   * 1. 使用DLT算法计算完整的3x3单应性矩阵（8参数）
-   * 2. 使用相邻帧而不是首尾帧（减少变化幅度）
-   * 3. 检查单应性矩阵的性质（秩、行列式等）
-   * 4. 计算多帧的平均误差（更稳定）
-   * 5. 对所有帧对的H矩阵一致性进行验证
-   * 
-   * 这是纯 2D 几何检测，最可靠！
+   * - 在视野充满人脸的场景下，全局单应性矩阵对照片和真实脸都可能拟合良好
+   * - 使用局部几何约束：将脸部分为多个区域，分析各区域的相对运动一致性
+   * - 照片：所有区域变换一致（平面特性）
+   * - 真实脸：不同区域深度变化导致变换不一致（立体特性）
+   *
+   * 方法：对脸部各区域分别计算局部单应性，比较区域间一致性
    */
   private detectHomographyConstraint(): HomographyResult {
-    // 【关键】使用原始坐标历史，而不是归一化坐标
-    // 原因：单应性矩阵在原始图像坐标中定义
-    // 归一化坐标虽然消除平移影响，但破坏了H矩阵的定义
+    // 【关键】在视野充满人脸的场景下，使用局部几何约束检测
+    // 因为全局单应性矩阵可能对真实脸和照片都拟合很好
+    // 局部几何通过分析脸部不同区域的相对运动来区分平面和立体结构
     if (this.faceLandmarksHistory.length < 2) {
       return { planarScore: 0 }
     }
 
-    // 【改进】使用所有面部关键点（468个点）而不是采样点
-    // 更多的点对会给出更准确的单应性矩阵估计
-    const errors: number[] = []
-    const homographyMatrices: Array<number[][]> = []
-    let lastSrcPoints: number[][] = []  // 保存最后一组点对，用于计算特征尺度
+    return this.detectHomographyConstraintWithLocalGeometry()
+  }
 
-    // 【策略改进】优先使用最近的帧对（尽早检测）
-    // 照片的几何约束是瞬间的，2帧就足够；多帧用来验证一致性
-    const recentFrameCount = Math.min(5, this.faceLandmarksHistory.length)
-    
-    this.emitDebug('homography-constraint', 'Starting homography constraint analysis', {
-      totalFrames: this.faceLandmarksHistory.length,
-      recentFrameCount,
-      startIndex: Math.max(1, this.faceLandmarksHistory.length - recentFrameCount)
-    })
-    
-    // 计算最近帧对的变换误差（重点在最近的帧）
-    for (let i = Math.max(1, this.faceLandmarksHistory.length - recentFrameCount); 
-         i < this.faceLandmarksHistory.length; i++) {
-      const frame1 = this.faceLandmarksHistory[i - 1]
-      const frame2 = this.faceLandmarksHistory[i]
 
-      this.emitDebug('homography-constraint', `Processing frame pair [${i-1}, ${i}]`, {
-        frame1Length: frame1.length,
-        frame2Length: frame2.length
-      })
 
-      if (frame1.length < 100 || frame2.length < 100) {
-        this.emitDebug('homography-constraint', `Frame pair skipped (insufficient points)`, {}, 'info')
-        continue  // 至少100个有效点
-      }
+  /**
+   * 【新增】当视野充满人脸时的局部几何约束检测
+   * 
+   * 策略：不依赖全局单应性矩阵，而是使用局部变形约束
+   * 
+   * 检测原理：
+   * 1. 将脸部分为多个区域（眼睛、鼻子、嘴巴、脸颊等）
+   * 2. 对每个区域内的点进行局部单应性检测
+   * 3. 计算区域间的相对运动一致性
+   * 
+   * 差异：
+   * - 照片：所有区域的运动都满足统一的H矩阵 → 得分高
+   * - 真实脸：不同区域的相对深度变化不同 → 得分低
+   */
+  private detectHomographyConstraintWithLocalGeometry(): HomographyResult {
+    if (this.faceLandmarksHistory.length < 2) {
+      return { planarScore: 0 }
+    }
 
-      // 【改进】收集所有有效的点对（而不是只采样10个点）
-      // 这给出更好的H矩阵估计
+    // 定义脸部的关键区域（使用MediaPipe的标准关键点索引）
+    const faceRegions = {
+      leftEye: [33, 133, 156, 158, 159, 160, 161, 163, 246],           // 左眼及周围
+      rightEye: [263, 362, 385, 387, 388, 389, 390, 392, 466],         // 右眼及周围
+      nose: [1, 2, 3, 4, 5, 6, 48, 51, 57, 94, 97, 98, 99, 100, 102], // 鼻子
+      mouth: [61, 185, 40, 39, 37, 267, 269, 270, 409, 415, 291],     // 嘴巴
+      leftCheek: [234, 227, 217, 207, 206],                            // 左脸颊
+      rightCheek: [454, 447, 437, 427, 426],                           // 右脸颊
+      forehead: [10, 67, 69, 104, 108, 109, 151, 337, 338, 297]       // 额头
+    }
+
+    const regionNames = Object.keys(faceRegions) as Array<keyof typeof faceRegions>
+    const regionScores: number[] = []
+
+    // 对每个区域计算局部单应性约束
+    for (const regionName of regionNames) {
+      const regionIndices = faceRegions[regionName]
+      const frame1 = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 2]
+      const frame2 = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 1]
+
+      if (!frame1 || !frame2) continue
+
+      // 从两帧中提取该区域的点
       const srcPoints: number[][] = []
       const dstPoints: number[][] = []
-      
-      for (let ptIdx = 0; ptIdx < Math.min(frame1.length, frame2.length); ptIdx++) {
-        if (frame1[ptIdx] && frame2[ptIdx] && 
-            frame1[ptIdx].length >= 2 && frame2[ptIdx].length >= 2) {
-          const x1 = frame1[ptIdx][0]
-          const y1 = frame1[ptIdx][1]
-          const x2 = frame2[ptIdx][0]
-          const y2 = frame2[ptIdx][1]
-          
-          // 【修复】只排除明显的异常值（移动过大），保留所有其他点
-          // 包括静止的点和微妙移动的点，DLT需要全局点分布
+
+      for (const idx of regionIndices) {
+        if (frame1[idx] && frame2[idx] && 
+            frame1[idx].length >= 2 && frame2[idx].length >= 2) {
+          const x1 = frame1[idx][0]
+          const y1 = frame1[idx][1]
+          const x2 = frame2[idx][0]
+          const y2 = frame2[idx][1]
+
+          // 排除过大的跳变
           const displacement = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
-          if (displacement < 200) {  // 仅排除极端异常
+          if (displacement < 200) {
             srcPoints.push([x1, y1])
             dstPoints.push([x2, y2])
           }
         }
       }
 
-      this.emitDebug('homography-constraint', `Collected points`, {
-        srcPointsCount: srcPoints.length,
-        dstPointsCount: dstPoints.length
-      })
+      if (srcPoints.length >= 4) {
+        // 计算该区域的局部H矩阵
+        const H = this.estimateHomographyDLT(srcPoints, dstPoints)
+        if (H) {
+          // 计算该区域的变换误差
+          let regionError = 0
+          for (let j = 0; j < srcPoints.length; j++) {
+            const transformed = this.applyHomography(H, srcPoints[j][0], srcPoints[j][1])
+            const actual = dstPoints[j]
+            const error = Math.sqrt((transformed[0] - actual[0]) ** 2 + (transformed[1] - actual[1]) ** 2)
+            regionError += error
+          }
 
-      if (srcPoints.length < 10) {
-        this.emitDebug('homography-constraint', `Point pair skipped (only ${srcPoints.length} < 10 points)`, {}, 'info')
-        continue  // 至少10个匹配点对（DLT最少需要4个）
-      }
+          const avgRegionError = regionError / srcPoints.length
+          const regionScore = Math.max(0, 1 - avgRegionError / 50)  // 阈值50像素
+          regionScores.push(regionScore)
 
-      // 保存这一组点对（用于后面计算特征尺度）
-      lastSrcPoints = srcPoints
-
-      // 【新增】使用DLT算法计算完整的3x3单应性矩阵
-      const H = this.estimateHomographyDLT(srcPoints, dstPoints)
-      if (!H) {
-        this.emitDebug('homography-constraint', `DLT failed to estimate homography`, {}, 'warn')
-        continue
-      }
-
-      this.emitDebug('homography-constraint', `H matrix estimated`, {
-        h00: H[0][0].toFixed(4),
-        h11: H[1][1].toFixed(4),
-        h22: H[2][2].toFixed(4),
-        det: (H[0][0]*H[1][1]*H[2][2] + H[0][1]*H[1][2]*H[2][0] + H[0][2]*H[1][0]*H[2][1] 
-              - H[0][2]*H[1][1]*H[2][0] - H[0][0]*H[1][2]*H[2][1] - H[0][1]*H[1][0]*H[2][2]).toFixed(4)
-      })
-
-      homographyMatrices.push(H)
-
-      // 【改进】使用单应性矩阵计算误差（而不是仿射变换）
-      let frameError = 0
-      let validCount = 0
-      const sampleErrors: number[] = []
-      
-      for (let j = 0; j < srcPoints.length; j++) {
-        const transformed = this.applyHomography(H, srcPoints[j][0], srcPoints[j][1])
-        const actual = dstPoints[j]
-        const error = Math.sqrt((transformed[0] - actual[0]) ** 2 + (transformed[1] - actual[1]) ** 2)
-        frameError += error
-        validCount++
-        
-        // 记录前5个误差用于调试
-        if (j < 5) {
-          sampleErrors.push(error)
+          this.emitDebug('homography-constraint', `Local region [${regionName}]`, {
+            pointCount: srcPoints.length,
+            avgError: avgRegionError.toFixed(2),
+            regionScore: regionScore.toFixed(3)
+          })
         }
-      }
-
-      if (validCount > 0) {
-        const avgFrameError = frameError / validCount
-        errors.push(avgFrameError)
-        
-        this.emitDebug('homography-constraint', `Frame error computed`, {
-          pointCount: validCount,
-          avgFrameError: avgFrameError.toFixed(4),
-          sampleErrors: sampleErrors.map(e => e.toFixed(4)).join(', ')
-        })
       }
     }
 
-    this.emitDebug('homography-constraint', `Error collection complete`, {
-      totalErrors: errors.length,
-      matrixCount: homographyMatrices.length
-    })
-
-    if (errors.length === 0) {
-      this.emitDebug('homography-constraint', `No errors computed, returning 0`, {}, 'warn')
+    // 只用区域平均得分作为平面性指标，不再用区域间差异判据
+    if (regionScores.length < 3) {
       return { planarScore: 0, error: 0 }
     }
 
-    // 计算所有帧的平均误差
-    const avgError = errors.reduce((a, b) => a + b, 0) / errors.length
+    const avgRegionScore = regionScores.reduce((a, b) => a + b) / regionScores.length
+    // 平面性得分直接取区域平均得分
+    const planarScore = Math.min(1, avgRegionScore)
 
-    // 【新增】检查H矩阵的一致性
-    // 照片的H矩阵在不同帧对中应该保持相对稳定
-    let matrixConsistency = 1.0
-    if (homographyMatrices.length > 1) {
-      matrixConsistency = this.checkHomographyConsistency(homographyMatrices)
-    }
-
-    // 【改进】使用相对误差而不是绝对误差
-    // 相对误差 = avgError / 点集特征尺度
-    // 这样对不同分辨率和点集大小更鲁棒
-    const characteristicScale = lastSrcPoints.length > 0 ? this.computeCharacteristicScale(lastSrcPoints) : 1
-    const relativeError = characteristicScale > 0.1 ? avgError / characteristicScale : avgError
-    
-    // 平面性判决：
-    // relativeError < 0.05 → 很可能是平面（照片）
-    // relativeError > 0.1  → 很可能是立体（活体）
-    const errorScore = Math.max(0, 1 - relativeError / 0.1)
-    const planarScore = errorScore * matrixConsistency
-
-    this.emitDebug('homography-constraint', 'FINAL RESULT', {
-      recentFrameCount,
-      frameCount: errors.length,
-      avgError: avgError.toFixed(4),
-      characteristicScale: characteristicScale.toFixed(4),
-      relativeError: relativeError.toFixed(4),
-      errorScore: errorScore.toFixed(3),
-      matrixConsistency: matrixConsistency.toFixed(3),
+    this.emitDebug('homography-constraint', 'FINAL RESULT (fill-frame mode)', {
+      regionCount: regionScores.length,
+      avgRegionScore: avgRegionScore.toFixed(3),
       planarScore: planarScore.toFixed(3),
-      homographyMatrixCount: homographyMatrices.length
+      mode: 'local-geometry'
     })
 
-    return { planarScore: Math.min(planarScore, 1), error: avgError }
+    return { planarScore, error: 0 }
   }
 
   /**
@@ -1979,178 +1930,7 @@ export class MotionLivenessDetector {
     
     return count > 0 ? totalDist / count : 1
   }
-
-  /**
-   * 【新增】检查单应性矩阵的一致性
-   * 
-   * 原理：
-   * - 照片旋转时，每对相邻帧的H矩阵应该相近（因为是持续旋转）
-   * - 真实人脸做随机动作时，H矩阵会变化很大
-   */
-  private checkHomographyConsistency(matrices: number[][][]): number {
-    if (matrices.length < 2) return 1
-
-    // 计算矩阵间的相似度
-    let totalSimilarity = 0
-    let pairCount = 0
-
-    for (let i = 1; i < matrices.length; i++) {
-      const M1 = matrices[i - 1]
-      const M2 = matrices[i]
-
-      // Frobenius范数相似度
-      let sumDiff = 0
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) {
-          const diff = M1[r][c] - M2[r][c]
-          sumDiff += diff * diff
-        }
-      }
-
-      const frobeniusDist = Math.sqrt(sumDiff)
-      
-      // 标准化距离（除以矩阵范数）
-      let normM1 = 0, normM2 = 0
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) {
-          normM1 += M1[r][c] * M1[r][c]
-          normM2 += M2[r][c] * M2[r][c]
-        }
-      }
-      normM1 = Math.sqrt(normM1)
-      normM2 = Math.sqrt(normM2)
-      
-      const avgNorm = (normM1 + normM2) / 2
-      const normalizedDist = avgNorm > 0.1 ? Math.min(frobeniusDist / avgNorm, 2) : 2
-
-      // 将距离转换为相似度 (0-1)
-      // 距离越小，相似度越高
-      const similarity = Math.max(0, 1 - normalizedDist / 2)
-      totalSimilarity += similarity
-      pairCount++
-    }
-
-    return pairCount > 0 ? totalSimilarity / pairCount : 1
-  }
-
-  /**
-   * 【关键】检测深度一致性
-   * 
-   * 原理：
-   * - 真实人脸：鼻子Z坐标明显大于眼睛和脸颊（凸出）
-   * - 照片：所有点Z坐标接近相同（平面）
-   */
-  private detectDepthConsistency(): DepthConsistencyResult {
-    const latestFrame = this.faceLandmarksHistory[this.faceLandmarksHistory.length - 1]
-    
-    if (!latestFrame || latestFrame.length < 468) {
-      return { depthVariation: 0.5 }
-    }
-
-    // 采样不同深度区域的点
-    const nosePoints = [1, 4, 5, 6]      // 鼻子（应该凸出）
-    const eyePoints = [33, 133, 263, 362] // 眼睛（应该凹陷）
-    const cheekPoints = [234, 454, 50, 280] // 脸颊（中间深度）
-    const foreheadPoints = [10, 67, 297]  // 额头
-
-    const getAvgZ = (points: number[]) => {
-      let sum = 0, count = 0
-      for (const idx of points) {
-        const point = latestFrame[idx]
-        if (point && point.length >= 3 && typeof point[2] === 'number') {
-          sum += point[2]
-          count++
-        }
-      }
-      return count > 0 ? sum / count : 0
-    }
-
-    const noseZ = getAvgZ(nosePoints)
-    const eyeZ = getAvgZ(eyePoints)
-    const cheekZ = getAvgZ(cheekPoints)
-    const foreheadZ = getAvgZ(foreheadPoints)
-
-    // 计算深度差异
-    const allZ = [noseZ, eyeZ, cheekZ, foreheadZ].filter(z => z !== 0)
-    if (allZ.length < 3) {
-      return { depthVariation: 0.5, isFlat: false }
-    }
-
-    const zMean = allZ.reduce((a, b) => a + b, 0) / allZ.length
-    const zStdDev = Math.sqrt(allZ.reduce((sum, z) => sum + (z - zMean) ** 2, 0) / allZ.length)
-    
-    // 深度变异系数
-    const depthVariation = zMean !== 0 ? Math.abs(zStdDev / zMean) : 0
-
-    // 检查深度关系是否符合真实人脸
-    // 真实人脸：鼻子应该比眼睛更接近摄像头（Z更小，因为Z表示深度/距离）
-    // 注意：MediaPipe的Z坐标是负值，越接近0表示越近
-    const noseCloser = noseZ > eyeZ  // 鼻子更近
-
-    // 记录历史
-    this.depthConsistencyScores.push(depthVariation)
-    if (this.depthConsistencyScores.length > this.config.frameBufferSize) {
-      this.depthConsistencyScores.shift()
-    }
-
-    return {
-      depthVariation,
-      isFlat: depthVariation < 0.1,  // 深度变异很小 → 平面（照片）
-      noseCloser,
-      details: { noseZ, eyeZ, cheekZ, foreheadZ }
-    }
-  }
-
-  /**
-   * 【关键】检测跨帧深度模式
-   * 
-   * 原理：
-   * - 照片旋转时：所有点的深度变化遵循平面投影规律（线性关系）
-   * - 真实人脸旋转时：不同部位的深度变化不成线性关系
-   */
-  private detectCrossFrameDepthPattern(): CrossFrameDepthResult {
-    if (this.faceLandmarksHistory.length < 3) {
-      return { planarPattern: 0 }
-    }
-
-    // 比较多帧的深度变化模式
-    const samplePoints = [1, 33, 263, 61, 291]  // 鼻尖、眼角、嘴角
-    
-    const depthChanges: number[][] = []
-    for (let i = 1; i < this.faceLandmarksHistory.length; i++) {
-      const prev = this.faceLandmarksHistory[i - 1]
-      const curr = this.faceLandmarksHistory[i]
-      
-      const changes: number[] = []
-      for (const idx of samplePoints) {
-        const prevPoint = prev[idx]
-        const currPoint = curr[idx]
-        if (prevPoint && currPoint && prevPoint.length >= 3 && currPoint.length >= 3 && typeof prevPoint[2] === 'number' && typeof currPoint[2] === 'number') {
-          changes.push(currPoint[2] - prevPoint[2])
-        }
-      }
-      if (changes.length >= 3) {
-        depthChanges.push(changes)
-      }
-    }
-
-    if (depthChanges.length < 2) {
-      return { planarPattern: 0 }
-    }
-
-    // 检测深度变化的一致性（平面特征：所有点同方向变化）
-    let consistentFrames = 0
-    for (const changes of depthChanges) {
-      const signs = changes.map(c => Math.sign(c))
-      const allSame = signs.every(s => s === signs[0]) || signs.every(s => Math.abs(changes[signs.indexOf(s)]) < 0.001)
-      if (allSame) consistentFrames++
-    }
-
-    const planarPattern = consistentFrames / depthChanges.length
-
-    return { planarPattern }
-  }
-
+  
   /**
    * 【透视变换模式检测】
    * 
@@ -2233,6 +2013,25 @@ export class MotionLivenessDetector {
     )
 
     // 【改进】根据帧数调整照片检测的敏感度
+    // 关键原则：强几何约束信号（perspectiveScore > 0.85 或 crossRatioScore > 0.90）
+    // 无论置信度如何，都应该拒绝（这些是物理定律，无法伪造）
+    const strongPerspectiveScore = (photoGeometry.details?.perspectiveScore || 0) > 0.85
+    const strongCrossRatioScore = (photoGeometry.details?.crossRatioScore || 0) > 0.90
+    const hasStrongPhotoSignal = strongPerspectiveScore || strongCrossRatioScore
+    
+    if (hasStrongPhotoSignal) {
+      // 【强特征路径】强几何约束直接拒绝，无需考虑置信度
+      this.emitDebug('decision', 'REJECTED by strong photo geometry signal', {
+        perspectiveScore: (photoGeometry.details?.perspectiveScore || 0).toFixed(3),
+        crossRatioScore: (photoGeometry.details?.crossRatioScore || 0).toFixed(3),
+        photoConfidence: photoConfidence.toFixed(3),
+        frameCount,
+        details: photoGeometry.details
+      })
+      return false
+    }
+
+    // 【普通路径】根据帧数调整照片检测的敏感度
     // 少帧情况下，照片特征更容易误判，但如果几何约束强，仍应拒绝
     let photoConfidenceThreshold = 0.55
     if (frameCount < 8) {
