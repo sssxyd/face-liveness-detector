@@ -21,7 +21,7 @@
  * ```
  */
 
-import FaceDetectionEngine from './index'
+import { FaceDetectionEngine } from './face-detection-engine'
 import type { 
   FaceDetectionEngineOptions, 
   EventEmitter,

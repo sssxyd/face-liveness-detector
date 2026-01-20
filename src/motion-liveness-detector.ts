@@ -18,6 +18,7 @@
 
 import type { FaceResult, Point } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
+import { parse } from 'path'
 
 /**
  * 活体检测结果详情结构
@@ -344,22 +345,22 @@ export class MotionLivenessDetector {
             this.normalizedLandmarksHistory.length
           ),
           // 正向检测结果（生物特征）
-          eyeAspectRatioStdDev: eyeActivity.stdDev,
-          mouthAspectRatioStdDev: mouthActivity.stdDev,
-          eyeFluctuation: eyeActivity.fluctuation,
-          mouthFluctuation: mouthActivity.fluctuation,
-          muscleVariation: muscleActivity.variation,
+          eyeAspectRatioStdDev: parseFloat(eyeActivity.stdDev.toFixed(4)),
+          mouthAspectRatioStdDev: parseFloat(mouthActivity.stdDev.toFixed(4)),
+          eyeFluctuation: parseFloat(eyeActivity.fluctuation.toFixed(4)),
+          mouthFluctuation: parseFloat(mouthActivity.fluctuation.toFixed(4)),
+          muscleVariation: parseFloat(muscleActivity.variation.toFixed(4)),
           hasEyeMovement: eyeActivity.hasMovement,
           hasMouthMovement: mouthActivity.hasMovement,
           hasMuscleMovement: muscleActivity.hasMovement,
           // 逆向检测结果（照片几何特征）
           isPhoto: photoGeometryResult.isPhoto,
-          photoConfidence: photoGeometryResult.confidence.toFixed(3) ? Number(photoGeometryResult.confidence.toFixed(3)) : undefined,
-          homographyScore: photoGeometryResult.details?.homographyScore.toFixed(3) ? Number(photoGeometryResult.details?.homographyScore.toFixed(3)) : undefined,
-          perspectiveScore: photoGeometryResult.details?.perspectiveScore.toFixed(3) ? Number(photoGeometryResult.details?.perspectiveScore.toFixed(3)) : undefined,
-          crossRatioScore: photoGeometryResult.details?.crossRatioScore.toFixed(3) ? Number(photoGeometryResult.details?.crossRatioScore.toFixed(3)) : undefined,
-          depthVariation: photoGeometryResult.details?.depthVariation.toFixed(3) ? Number(photoGeometryResult.details?.depthVariation.toFixed(3)) : undefined,
-          crossFramePattern: photoGeometryResult.details?.crossFramePattern.toFixed(3) ? Number(photoGeometryResult.details?.crossFramePattern.toFixed(3)) : undefined,
+          photoConfidence: parseFloat(photoGeometryResult.confidence.toFixed(4)),
+          homographyScore: parseFloat((photoGeometryResult.details?.homographyScore || 0).toFixed(4)),
+          perspectiveScore: parseFloat((photoGeometryResult.details?.perspectiveScore || 0).toFixed(4)),
+          crossRatioScore: parseFloat((photoGeometryResult.details?.crossRatioScore || 0).toFixed(4)),
+          depthVariation: parseFloat((photoGeometryResult.details?.depthVariation || 0).toFixed(4)),
+          crossFramePattern: parseFloat((photoGeometryResult.details?.crossFramePattern || 0).toFixed(4)),
         }
       )
     } catch (error) {
@@ -1930,7 +1931,7 @@ export class MotionLivenessDetector {
     
     return count > 0 ? totalDist / count : 1
   }
-  
+
   /**
    * 【透视变换模式检测】
    * 
