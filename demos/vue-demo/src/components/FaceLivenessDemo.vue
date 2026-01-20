@@ -484,7 +484,8 @@ function getActionText(action: LivenessAction): string {
   const texts: Record<string, string> = {
     [LivenessAction.BLINK]: 'Please blink',
     [LivenessAction.MOUTH_OPEN]: 'Please open your mouth',
-    [LivenessAction.NOD]: 'Please nod'
+    [LivenessAction.NOD_DOWN]: 'Please nod down',
+    [LivenessAction.NOD_UP]: 'Please nod up'
   }
   return texts[action] || action
 }
@@ -493,7 +494,8 @@ function getActionIcon(action: LivenessAction): string {
   const icons: Record<string, string> = {
     [LivenessAction.BLINK]: '👁️',
     [LivenessAction.MOUTH_OPEN]: '👄',
-    [LivenessAction.NOD]: '👆'
+    [LivenessAction.NOD_DOWN]: '👇',
+    [LivenessAction.NOD_UP]: '👆'
   }
   return icons[action] || '🔄'
 }
