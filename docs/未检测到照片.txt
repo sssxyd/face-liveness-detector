@@ -1,0 +1,126 @@
+{
+  "debug": {},
+  "details": {
+    "frameCount": 5,
+    "eyeAspectRatioStdDev": 0,
+    "mouthAspectRatioStdDev": 0,
+    "eyeFluctuation": 0,
+    "mouthFluctuation": 0,
+    "muscleVariation": 0.0492721962723938,
+    "hasEyeMovement": false,
+    "hasMouthMovement": false,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.2779120908016096,
+    "homographyScore": 0,
+    "perspectiveScore": 0.3333333333333333,
+    "crossRatioScore": 0.9638583831218418,
+    "depthVariation": 23.910667075596198,
+    "crossFramePattern": 0
+  }
+},
+{
+  "debug": {},
+  "details": {
+    "frameCount": 6,
+    "eyeAspectRatioStdDev": 0.009567123761318519,
+    "mouthAspectRatioStdDev": 0.0002763559164746521,
+    "eyeFluctuation": 0.019134247522637038,
+    "mouthFluctuation": 0.0005527118329493041,
+    "muscleVariation": 0.045591831891174286,
+    "hasEyeMovement": false,
+    "hasMouthMovement": false,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.344662040009747,
+    "homographyScore": 0,
+    "perspectiveScore": 0.5,
+    "crossRatioScore": 0.9644136000649799,
+    "depthVariation": 7.575143413267435,
+    "crossFramePattern": 0
+  }
+},
+{
+  "debug": {},
+  "details": {
+    "frameCount": 7,
+    "eyeAspectRatioStdDev": 0.009821116820494469,
+    "mouthAspectRatioStdDev": 0.010729757538339995,
+    "eyeFluctuation": 0.022194670594133714,
+    "mouthFluctuation": 0.02303257524140484,
+    "muscleVariation": 0.0452285580637515,
+    "hasEyeMovement": false,
+    "hasMouthMovement": false,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.3845835850957817,
+    "homographyScore": 0,
+    "perspectiveScore": 0.6,
+    "crossRatioScore": 0.9638905673052116,
+    "depthVariation": 17.083812014786794,
+    "crossFramePattern": 0
+  }
+},
+{
+  "debug": {},
+  "details": {
+    "frameCount": 8,
+    "eyeAspectRatioStdDev": 0.012398618777835962,
+    "mouthAspectRatioStdDev": 0.012701679746095961,
+    "eyeFluctuation": 0.0346102521713626,
+    "mouthFluctuation": 0.027860015048285613,
+    "muscleVariation": 0.04273314127027508,
+    "hasEyeMovement": true,
+    "hasMouthMovement": true,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.41159777844513373,
+    "homographyScore": 0,
+    "perspectiveScore": 0.6666666666666666,
+    "crossRatioScore": 0.9662074118564472,
+    "depthVariation": 13.675806435486708,
+    "crossFramePattern": 0
+  }
+},
+{
+  "debug": {},
+  "details": {
+    "frameCount": 9,
+    "eyeAspectRatioStdDev": 0.012294436986999984,
+    "mouthAspectRatioStdDev": 0.012602343142553046,
+    "eyeFluctuation": 0.0346102521713626,
+    "mouthFluctuation": 0.028635248372581135,
+    "muscleVariation": 0.0405690911242521,
+    "hasEyeMovement": true,
+    "hasMouthMovement": true,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.4309143095275436,
+    "homographyScore": 0,
+    "perspectiveScore": 0.7142857142857143,
+    "crossRatioScore": 0.9680001587550524,
+    "depthVariation": 18.146510903977262,
+    "crossFramePattern": 0
+  }
+},
+{
+  "debug": {},
+  "details": {
+    "frameCount": 10,
+    "eyeAspectRatioStdDev": 0.011224473974012744,
+    "mouthAspectRatioStdDev": 0.011745280000453658,
+    "eyeFluctuation": 0.0346102521713626,
+    "mouthFluctuation": 0.028635248372581135,
+    "muscleVariation": 0.04084373361118915,
+    "hasEyeMovement": true,
+    "hasMouthMovement": true,
+    "hasMuscleMovement": true,
+    "isPhoto": false,
+    "photoConfidence": 0.4449262718096896,
+    "homographyScore": 0,
+    "perspectiveScore": 0.75,
+    "crossRatioScore": 0.9661751453979303,
+    "depthVariation": 10.719920073887332,
+    "crossFramePattern": 0
+  }
+}

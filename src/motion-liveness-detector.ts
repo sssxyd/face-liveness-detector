@@ -236,8 +236,12 @@ export class MotionLivenessDetector {
     return this.config
   }
 
-  isReady(): boolean {
-    return this.normalizedLandmarksHistory.length >= 5  // 只需要5帧就能检测
+  collectedMinFrames(): boolean {
+    return this.normalizedLandmarksHistory.length >= 5
+  }
+
+  collectedFullFrames(): boolean {
+    return this.normalizedLandmarksHistory.length >= this.config.frameBufferSize
   }
 
   reset(): void {
@@ -289,7 +293,7 @@ export class MotionLivenessDetector {
       }
 
       // 数据不足时，继续收集
-      if (!this.isReady()) {
+      if (!this.collectedMinFrames()) {
         return this.createEmptyResult({
           reason: '数据收集中，帧数不足',
           collectedFrames: this.normalizedLandmarksHistory.length
@@ -1285,29 +1289,47 @@ export class MotionLivenessDetector {
     // 更多的点对会给出更准确的单应性矩阵估计
     const errors: number[] = []
     const homographyMatrices: Array<number[][]> = []
+    let lastSrcPoints: number[][] = []  // 保存最后一组点对，用于计算特征尺度
 
-    // 计算相邻帧的变换误差
-    for (let i = 1; i < this.faceLandmarksHistory.length; i++) {
+    // 【策略改进】优先使用最近的帧对（尽早检测）
+    // 照片的几何约束是瞬间的，2帧就足够；多帧用来验证一致性
+    const recentFrameCount = Math.min(5, this.faceLandmarksHistory.length)
+    
+    // 计算最近帧对的变换误差（重点在最近的帧）
+    for (let i = Math.max(1, this.faceLandmarksHistory.length - recentFrameCount); 
+         i < this.faceLandmarksHistory.length; i++) {
       const frame1 = this.faceLandmarksHistory[i - 1]
       const frame2 = this.faceLandmarksHistory[i]
 
-      if (frame1.length < 468 || frame2.length < 468) continue
+      if (frame1.length < 100 || frame2.length < 100) continue  // 至少100个有效点
 
       // 【改进】收集所有有效的点对（而不是只采样10个点）
       // 这给出更好的H矩阵估计
       const srcPoints: number[][] = []
       const dstPoints: number[][] = []
       
-      for (let ptIdx = 0; ptIdx < frame1.length; ptIdx++) {
+      for (let ptIdx = 0; ptIdx < Math.min(frame1.length, frame2.length); ptIdx++) {
         if (frame1[ptIdx] && frame2[ptIdx] && 
             frame1[ptIdx].length >= 2 && frame2[ptIdx].length >= 2) {
-          // 使用x, y原始坐标
-          srcPoints.push([frame1[ptIdx][0], frame1[ptIdx][1]])
-          dstPoints.push([frame2[ptIdx][0], frame2[ptIdx][1]])
+          const x1 = frame1[ptIdx][0]
+          const y1 = frame1[ptIdx][1]
+          const x2 = frame2[ptIdx][0]
+          const y2 = frame2[ptIdx][1]
+          
+          // 【修复】只排除明显的异常值（移动过大），保留所有其他点
+          // 包括静止的点和微妙移动的点，DLT需要全局点分布
+          const displacement = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+          if (displacement < 200) {  // 仅排除极端异常
+            srcPoints.push([x1, y1])
+            dstPoints.push([x2, y2])
+          }
         }
       }
 
-      if (srcPoints.length < 4) continue
+      if (srcPoints.length < 10) continue  // 至少10个匹配点对（DLT最少需要4个）
+
+      // 保存这一组点对（用于后面计算特征尺度）
+      lastSrcPoints = srcPoints
 
       // 【新增】使用DLT算法计算完整的3x3单应性矩阵
       const H = this.estimateHomographyDLT(srcPoints, dstPoints)
@@ -1345,41 +1367,55 @@ export class MotionLivenessDetector {
       matrixConsistency = this.checkHomographyConsistency(homographyMatrices)
     }
 
-    // 平面得分 = 误差低 且 H矩阵一致
-    // avgError < 0.01 → 非常可能是平面
-    // avgError > 0.05 → 可能是立体（活体）
-    const errorScore = Math.max(0, 1 - avgError / 0.03)
+    // 【改进】使用相对误差而不是绝对误差
+    // 相对误差 = avgError / 点集特征尺度
+    // 这样对不同分辨率和点集大小更鲁棒
+    const characteristicScale = lastSrcPoints.length > 0 ? this.computeCharacteristicScale(lastSrcPoints) : 1
+    const relativeError = characteristicScale > 0.1 ? avgError / characteristicScale : avgError
+    
+    // 平面性判决：
+    // relativeError < 0.05 → 很可能是平面（照片）
+    // relativeError > 0.1  → 很可能是立体（活体）
+    const errorScore = Math.max(0, 1 - relativeError / 0.1)
     const planarScore = errorScore * matrixConsistency
 
     console.debug('[HomographyConstraint]', {
+      recentFrameCount,
       frameCount: errors.length,
       avgError: avgError.toFixed(4),
       errorScore: errorScore.toFixed(3),
       matrixConsistency: matrixConsistency.toFixed(3),
-      planarScore: planarScore.toFixed(3)
+      planarScore: planarScore.toFixed(3),
+      homographyMatrixCount: homographyMatrices.length
     })
 
     return { planarScore: Math.min(planarScore, 1), error: avgError }
   }
 
   /**
-   * 估计仿射变换矩阵
-   * 【改进】使用完整的6参数仿射变换（包含剪切分量）
-   * 
-   * 变换形式: x' = ax + by + c, y' = dx + ey + f
-   * 其中 [a, b] 和 [d, e] 可以包含旋转、缩放、剪切分量
-  /**
-   * 【新增】使用DLT算法估计单应性矩阵
+   * 使用DLT算法估计单应性矩阵（Homography Estimation using DLT）
    * 
    * DLT (Direct Linear Transform) 是估计射影变换的标准算法
-   * 输入：源点和目标点对 (至少4对)
-   * 输出：3x3单应性矩阵H，使得 p' = H * p (齐次坐标)
    * 
-   * 相比仿射变换：
-   * - 仿射：6参数，处理旋转+缩放+平移+剪切
-   * - 单应性：8参数，处理完整的射影变换（包括透视）
+   * 输入：
+   * - src: 源点坐标数组 (至少4对)
+   * - dst: 目标点坐标数组
    * 
-   * 照片倾斜拍摄时，需要完整的单应性矩阵！
+   * 输出：
+   * - 3x3单应性矩阵H，使得 p' = H * p (齐次坐标表示)
+   * 
+   * 关键特性：
+   * - 与仿射变换的区别：
+   *   * 仿射：6参数，处理旋转+缩放+平移+剪切
+   *   * 单应性：8参数，处理完整的射影变换（包括透视失真）
+   * - 适用场景：照片倾斜拍摄、相机透视变换
+   * - 数值稳定性：使用点集归一化提高数值精度
+   * 
+   * 算法步骤：
+   * 1. 归一化源点和目标点（改进数值稳定性）
+   * 2. 构建 2n×9 的 A 矩阵（n为点对数）
+   * 3. 使用最小二乘法求解 Ah = 0
+   * 4. 反演应化矩阵到原始坐标系
    */
   private estimateHomographyDLT(src: number[][], dst: number[][]): number[][] | null {
     if (src.length < 4 || dst.length < 4 || src.length !== dst.length) return null
@@ -1392,10 +1428,30 @@ export class MotionLivenessDetector {
 
     if (!srcNorm || !dstNorm) return null
 
-    // 构建DLT方程矩阵 A (2n x 9)
-    // 对每对点，构建2行方程：
-    // [-x, -y, -1, 0, 0, 0, x*x', y*x', x']
-    // [0, 0, 0, -x, -y, -1, x*y', y*y', y']
+    // 构建DLT方程矩阵 A (2n × 9)
+    // 
+    // 标准DLT形式推导：
+    // 已知齐次坐标关系：p' = H * p
+    // 即：[x', y', 1]^T = H * [x, y, 1]^T / w
+    // 其中：w = h7*x + h8*y + h9 (齐次化分母)
+    // 
+    // 展开得到：
+    // x' = (h1*x + h2*y + h3) / (h7*x + h8*y + h9)
+    // y' = (h4*x + h5*y + h6) / (h7*x + h8*y + h9)
+    // 
+    // 交叉相乘消去分母：
+    // x'*(h7*x + h8*y + h9) = h1*x + h2*y + h3
+    // y'*(h7*x + h8*y + h9) = h4*x + h5*y + h6
+    // 
+    // 整理为齐次线性方程 Ah = 0：
+    // h1*x + h2*y + h3 - xp*h7*x - xp*h8*y - xp*h9 = 0
+    // h4*x + h5*y + h6 - yp*h7*x - yp*h8*y - yp*h9 = 0
+    // 
+    // 矩阵形式（每对点产生2行方程）：
+    // [x,  y,  1,  0,  0,  0, -xp*x, -xp*y, -xp]   [h1]
+    // [0,  0,  0,  x,  y,  1, -yp*x, -yp*y, -yp] * [h2] = 0
+    //                                               [...]
+    //                                               [h9]
     const A: number[][] = []
     
     for (let i = 0; i < n; i++) {
@@ -1404,26 +1460,46 @@ export class MotionLivenessDetector {
       const xp = dstNorm.points[i][0]
       const yp = dstNorm.points[i][1]
 
-      // 第一行
-      A.push([-x, -y, -1, 0, 0, 0, x * xp, y * xp, xp])
-      // 第二行
-      A.push([0, 0, 0, -x, -y, -1, x * yp, y * yp, yp])
+      // 第一行：h1*x + h2*y + h3 - xp*h7*x - xp*h8*y - xp*h9 = 0
+      A.push([x, y, 1, 0, 0, 0, -xp * x, -xp * y, -xp])
+      
+      // 第二行：h4*x + h5*y + h6 - yp*h7*x - yp*h8*y - yp*h9 = 0
+      A.push([0, 0, 0, x, y, 1, -yp * x, -yp * y, -yp])
     }
 
-    // 使用SVD求解 Ah = 0
-    // h 是最小奇异值对应的右奇异向量
+    // 使用最小二乘法求解 Ah = 0
+    // h 是 A^T*A 最小特征值对应的特征向量
     const h = this.solveHomographyLSQ(A)
     if (!h) return null
 
-    // 反演应化矩阵（从归一化坐标回到原始坐标）
+    // 反演应化：从归一化坐标回到原始图像坐标
+    // H_orig = T_dst^(-1) * H_norm * T_src
     const H = this.denormalizeHomography(h, srcNorm, dstNorm)
     
     return H
   }
 
   /**
-   * 点集归一化（提高数值稳定性）
-   * 变换点使得重心在原点，平均距离为sqrt(2)
+   * 点集归一化（Hartley标准化）- 提高DLT数值稳定性
+   * 
+   * 目的：
+   * - DLT算法对坐标尺度敏感，归一化可显著改善数值稳定性
+   * - 避免矩阵条件数过大，减少数值误差
+   * 
+   * 方法：
+   * 1. 计算点集的重心 (cx, cy)
+   * 2. 计算点到重心的平均距离
+   * 3. 缩放使得平均距离为 √2
+   * 
+   * 变换：T = [s, 0, -s*cx; 0, s, -s*cy; 0, 0, 1]
+   * 其中 s = √2 / avgDistance
+   * 
+   * 好处：
+   * - 点集的重心在原点
+   * - 点到原点的平均距离为 √2（标准化）
+   * - A^T*A 矩阵条件数接近最优
+   * 
+   * 逆操作：在得到矩阵后需要反归一化回原始坐标
    */
   private normalizePoints(points: number[][]): { points: number[][], T: number[][] } | null {
     if (points.length === 0) return null
@@ -1469,16 +1545,26 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 最小二乘法求解 Ah = 0
-   * 其中 h 是3x3矩阵的向量化形式
+   * 最小二乘法求解齐次线性方程 Ah = 0
+   * 
+   * 问题：找到使 ||Ah|| 最小的单位向量 h
+   * 
+   * 标准解法：
+   * - 完整SVD：对 A 进行 SVD 分解，h 是最小奇异值的右奇异向量
+   * - 特征向量法（此处使用）：
+   *   1. 计算 A^T * A（9×9对称矩阵）
+   *   2. 求 A^T*A 的最小特征值对应的特征向量
+   *   3. 该特征向量即为所求的 h
+   * 
+   * 说明：
+   * - h 是 3×3 单应性矩阵 H 的向量化形式
+   * - 返回的特征向量已归一化
    */
   private solveHomographyLSQ(A: number[][]): number[] | null {
-    // 简化的SVD求解：找使 ||Ah|| 最小的 h
-    // 为了简化，使用迭代最小二乘法或对称矩阵的特征向量
-
     if (A.length < 8) return null
 
-    // A^T * A 矩阵 (9x9)
+    // 构造 A^T * A 矩阵 (9×9)
+    // 这是一个对称半正定矩阵
     const ATA: number[][] = Array(9).fill(0).map(() => Array(9).fill(0))
     
     for (let i = 0; i < 9; i++) {
@@ -1489,42 +1575,71 @@ export class MotionLivenessDetector {
       }
     }
 
-    // 求ATA的最小特征向量（对应最小特征值）
+    // 求 A^T*A 的最小特征向量
+    // 最小特征向量对应最小特征值，使 ||Ah|| 最小
     const eigenVec = this.getSmallestEigenvector(ATA)
     return eigenVec
   }
 
   /**
-   * 求3x3对称矩阵的最小特征向量（简化版本）
-   * 使用幂迭代法或直接求解
+   * 求9x9对称矩阵(A^T*A)的最小特征向量
+   * 使用改进的迭代方法
+   * 
+   * 原理：
+   * - A^T*A 是对称半正定矩阵
+   * - 最小特征值对应的特征向量是最小二乘解
+   * - 使用迭代幂法（Power Iteration）的变种求最小特征向量
    */
   private getSmallestEigenvector(mat: number[][]): number[] | null {
     if (mat.length !== 9) return null
 
-    // 为了简化，使用初步估计：取行和最小的方向
-    // 或者使用固定迭代次数的幂法
+    // 初始随机向量
+    let v = [1, 0, 0, 0, 1, 0, 0, 0, 1]  // 初始值更稳定
+    let prevEigenvalue = Infinity
     
-    // 简化：返回一个初步猜测的向量
-    // 实际应用应该使用完整的SVD或特征值分解库
-    
-    // 这里使用Power Iteration的反向版本（找最小特征值）
-    let v = [1, 1, 1, 1, 1, 1, 1, 1, 1]
-    
-    for (let iter = 0; iter < 10; iter++) {
-      // v_new = A * v
-      const v_new = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+    // 迭代求解最小特征值对应的特征向量
+    for (let iter = 0; iter < 50; iter++) {
+      // 计算 A*v
+      const Av = [0, 0, 0, 0, 0, 0, 0, 0, 0]
       for (let i = 0; i < 9; i++) {
         for (let j = 0; j < 9; j++) {
-          v_new[i] += mat[i][j] * v[j]
+          Av[i] += mat[i][j] * v[j]
         }
       }
-
-      // 归一化
-      const norm = Math.sqrt(v_new.reduce((a, b) => a + b * b, 0))
-      if (norm < 0.0001) break
       
+      // 计算 Rayleigh 商（特征值估计）
+      let vTAv = 0
+      let vTv = 0
       for (let i = 0; i < 9; i++) {
-        v[i] = v_new[i] / norm
+        vTAv += v[i] * Av[i]
+        vTv += v[i] * v[i]
+      }
+      
+      const eigenvalue = vTv > 1e-10 ? vTAv / vTv : 0
+      
+      // 标准化 Av
+      const AvNorm = Math.sqrt(Av.reduce((a, b) => a + b * b, 0))
+      if (AvNorm < 1e-10) {
+        break
+      }
+      
+      // 更新 v
+      for (let i = 0; i < 9; i++) {
+        v[i] = Av[i] / AvNorm
+      }
+      
+      // 收敛判断：特征值变化很小
+      if (Math.abs(eigenvalue - prevEigenvalue) < 1e-8) {
+        break
+      }
+      prevEigenvalue = eigenvalue
+    }
+
+    // 最后做一次归一化
+    const norm = Math.sqrt(v.reduce((a, b) => a + b * b, 0))
+    if (norm > 1e-10) {
+      for (let i = 0; i < 9; i++) {
+        v[i] = v[i] / norm
       }
     }
 
@@ -1532,8 +1647,20 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 反演应化矩阵
-   * H_orig = T_dst^-1 * H_norm * T_src
+   * 反演应化矩阵 - 从归一化坐标回到原始图像坐标
+   * 
+   * 原理：
+   * - 在归一化坐标系中估算的H矩阵需要转换回原始坐标
+   * 
+   * 公式：H_orig = T_dst^(-1) * H_norm * T_src
+   * 
+   * 说明：
+   * - T_src：源点的归一化变换矩阵
+   * - T_dst：目标点的归一化变换矩阵
+   * - H_norm：在归一化坐标中计算得到的3×3矩阵
+   * - H_orig：最终的单应性矩阵（用于原始图像坐标）
+   * 
+   * 验证：p'_orig = H_orig * p_src_orig
    */
   private denormalizeHomography(h: number[], srcNorm: any, dstNorm: any): number[][] {
     // 将向量h转换为3x3矩阵
@@ -1555,6 +1682,35 @@ export class MotionLivenessDetector {
     const H = this.multiplyMatrix3x3(temp, T_src)
 
     return H
+  }
+
+  /**
+   * 检查点集的分布范围（防止点集集中在小区域）
+   * 返回值：0-1，值越大说明分布越分散
+   */
+  private checkPointSpread(points: number[][]): number {
+    if (points.length < 2) return 0
+
+    let minX = Infinity, maxX = -Infinity
+    let minY = Infinity, maxY = -Infinity
+
+    for (const p of points) {
+      minX = Math.min(minX, p[0])
+      maxX = Math.max(maxX, p[0])
+      minY = Math.min(minY, p[1])
+      maxY = Math.max(maxY, p[1])
+    }
+
+    const rangeX = maxX - minX
+    const rangeY = maxY - minY
+    const area = rangeX * rangeY
+
+    // 点集的相对面积（相对于整个图像，假设1920x1080）
+    // 面积越大，点的分布越分散
+    const imageArea = 1920 * 1080
+    const relativeArea = Math.min(area / imageArea, 1)
+
+    return relativeArea
   }
 
   /**
@@ -1611,26 +1767,65 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 应用单应性变换（齐次坐标）
-   * p' = H * p / (H * p 的 Z 分量)
+   * 应用单应性变换 - 齐次坐标变换与反齐次化
+   * 
+   * 操作步骤：
+   * 1. 输入：(x, y) → 齐次坐标 [x, y, 1]
+   * 2. 矩阵乘法：H * p 得到齐次结果 [x'w, y'w, w]
+   * 3. 反齐次化：[x'w/w, y'w/w] = [x', y']
+   * 
+   * 公式：
+   * [x']     [h11 h12 h13] [x]
+   * [y'  ] = [h21 h22 h23] [y]
+   * [w']     [h31 h32 h33] [1]
+   * 
+   * 最后：x' = x'w / w, y' = y'w / w
+   * 
+   * 注意：如果 w' ≈ 0，点被投影到无穷远（退化情况）
    */
   private applyHomography(H: number[][], x: number, y: number): number[] {
-    // 齐次坐标
+    // 齐次坐标表示
     const p = [x, y, 1]
     
-    // H * p
+    // 矩阵乘法：H * p
     const Hp = [
       H[0][0] * p[0] + H[0][1] * p[1] + H[0][2] * p[2],
       H[1][0] * p[0] + H[1][1] * p[1] + H[1][2] * p[2],
       H[2][0] * p[0] + H[2][1] * p[1] + H[2][2] * p[2]
     ]
 
-    // 反齐次化
+    // 反齐次化：除以齐次坐标的 Z 分量
+    // 如果 w ≈ 0，则点在无穷远，返回齐次结果
     if (Math.abs(Hp[2]) < 0.0001) {
-      return [Hp[0], Hp[1]]
+      return [Hp[0], Hp[1]]  // 异常情况：接近无穷
     }
 
-    return [Hp[0] / Hp[2], Hp[1] / Hp[2]]
+    return [Hp[0] / Hp[2], Hp[1] / Hp[2]]  // 正常情况：反齐次化
+  }
+
+  /**
+   * 【新增】计算点集的特征尺度（点间的平均距离）
+   * 
+   * 用于相对误差计算，使算法对不同分辨率和点集大小更鲁棒
+   */
+  private computeCharacteristicScale(points: number[][]): number {
+    if (points.length < 2) return 1
+
+    let totalDist = 0
+    let count = 0
+    
+    // 采样计算点间距离，避免 O(n²) 复杂度
+    const sampleSize = Math.min(points.length, 30)
+    for (let i = 0; i < sampleSize; i++) {
+      for (let j = i + 1; j < sampleSize; j++) {
+        const dx = points[i][0] - points[j][0]
+        const dy = points[i][1] - points[j][1]
+        totalDist += Math.sqrt(dx * dx + dy * dy)
+        count++
+      }
+    }
+    
+    return count > 0 ? totalDist / count : 1
   }
 
   /**
@@ -1870,7 +2065,7 @@ export class MotionLivenessDetector {
    * 逆向检测优先级更高，因为照片几何约束是物理定律，无法伪造
    */
   private makeLivenessDecision(eyeActivity: EyeFluctuationResult, mouthActivity: MouthFluctuationResult, muscleActivity: MuscleMovementResult, photoGeometry: PhotoGeometryResult): boolean {
-    if (!this.isReady()) {
+    if (!this.collectedMinFrames()) {
       return true  // 数据不足，默认通过
     }
 

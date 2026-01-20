@@ -977,8 +977,9 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
 
       // 静默活体检测
       const motionResult = this.detectionState.motionDetector.analyzeMotion(face, faceBox)
-      // 只有ready状态的检测器的结果才可信
-      if(this.detectionState.motionDetector.isReady()){
+      
+      if(this.detectionState.motionDetector.collectedMinFrames()){
+        // 采集到最小帧数后，否定性判定才可信
         if(!motionResult.isLively) {
           this.emitDebug('motion-detection', 'Motion liveness check failed - possible photo attack', {
             details: motionResult.details,
@@ -992,17 +993,20 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           this.partialResetDetectionState()
           return        
         }
-        this.emitDebug('motion-detection', 'Motion liveness check passed', {
-          debug: motionResult.debug,
-          details: motionResult.details,
-        }, 'warn')
-        this.detectionState.liveness = true
-      } else {
-        this.emitDebug('motion-detection', 'Motion liveness detector not ready yet', {
-          debug: motionResult.debug,
-          details: motionResult.details,
-        }, 'warn')
-      }      
+        // 采集到足够帧数后，肯定性判定才可信
+        if(this.detectionState.motionDetector.collectedFullFrames()){
+          this.emitDebug('motion-detection', 'Motion liveness check passed', {
+            debug: motionResult.debug,
+            details: motionResult.details,
+          }, 'warn')
+          this.detectionState.liveness = true
+        } else {
+          this.emitDebug('motion-detection', 'Motion liveness check ongoing - collecting more frames', {
+            debug: motionResult.debug,
+            details: motionResult.details,
+          }, 'warn')
+        }
+      } 
 
       // 动作活体检测阶段处理
       if (this.detectionState.period === DetectionPeriod.VERIFY) {

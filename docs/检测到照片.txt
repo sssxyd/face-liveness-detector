@@ -1,0 +1,22 @@
+{
+  "details": {
+    "frameCount": 5,
+    "eyeAspectRatioStdDev": 0,
+    "mouthAspectRatioStdDev": 0,
+    "eyeFluctuation": 0,
+    "mouthFluctuation": 0,
+    "muscleVariation": 0.01914015018637469,
+    "hasEyeMovement": false,
+    "hasMouthMovement": false,
+    "hasMuscleMovement": true,
+    "isPhoto": true,
+    "photoConfidence": 0.554505316267954,
+    "homographyScore": 0,
+    "perspectiveScore": 1,
+    "crossRatioScore": 0.9467021084530267,
+    "depthVariation": 14.472381524463048,
+    "crossFramePattern": 0.25
+  },
+  "debug": {},
+  "message": "检测到照片特征（透视规律、交叉比率），置信度55%"
+}
