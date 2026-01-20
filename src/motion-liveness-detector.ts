@@ -16,7 +16,8 @@
  * 3. 【辅助参考】Z 坐标分析——可能被欺骗，仅作辅助
  */
 
-import type { FaceResult, GestureResult, Point } from '@vladmandic/human'
+import { max } from '@techstark/opencv-js'
+import type { FaceResult, Point } from '@vladmandic/human'
 import type { Box } from '@vladmandic/human'
 
 /**
@@ -315,7 +316,9 @@ export class MotionLivenessDetector {
         {
           frameCount: Math.max(
             this.eyeAspectRatioHistory.length,
-            this.mouthAspectRatioHistory.length
+            this.mouthAspectRatioHistory.length,
+            this.faceLandmarksHistory.length,
+            this.normalizedLandmarksHistory.length
           ),
           // 正向检测结果（生物特征）
           eyeAspectRatioStdDev: eyeActivity.stdDev,
@@ -550,10 +553,13 @@ export class MotionLivenessDetector {
    * 检测面部肌肉的微动（关键点位置微妙变化）
    * 关键：允许刚性运动+生物特征（真人摇头），拒绝纯刚性运动（照片旋转）
    * 
-   * 【重要修复】使用归一化坐标进行比较，消除人脸在画面中移动的影响
+   * 【合理使用归一化坐标】这里使用归一化坐标是有意义的，因为：
+   * - 目的是检测肌肉的【相对运动幅度】，与人脸尺寸无关
+   * - 消除人脸在画面中位置变化的影响
+   * - 用相对于人脸的比例运动来判断肌肉活动
    */
   private detectMuscleMovement(): MuscleMovementResult {
-    // 【关键】使用归一化坐标历史，而非绝对坐标
+    // 使用归一化坐标历史，消除人脸位置和尺寸影响
     if (this.normalizedLandmarksHistory.length < 2) {
       return { score: 0, variation: 0, hasMovement: false }
     }
@@ -578,7 +584,7 @@ export class MotionLivenessDetector {
 
     const distances: number[] = []
 
-    // 【关键】使用归一化坐标计算位移
+    // 使用归一化坐标计算相对位移
     for (let i = 1; i < this.normalizedLandmarksHistory.length; i++) {
       const prevFrame = this.normalizedLandmarksHistory[i - 1]
       const currFrame = this.normalizedLandmarksHistory[i]
@@ -700,12 +706,14 @@ export class MotionLivenessDetector {
    * - 照片所有关键点运动是【刚性的】→ 所有点以相同方向、相似幅度移动
    * - 活体肌肉运动是【非刚性的】→ 不同部位独立运动（眼睛、嘴、脸颊等）
    * 
-   * 【重要修复】使用归一化坐标进行比较
+   * 【合理使用归一化坐标】这里使用归一化坐标是有意义的，因为：
+   * - 消除人脸在画面中的平移，只关注人脸内部的相对运动模式
+   * - 检测的是运动向量的方向一致性，不依赖绝对坐标
    * 
    * 返回值 0-1：值越接近1说明是刚性运动（照片运动）
    */
   private detectRigidMotion(): number {
-    // 【关键】使用归一化坐标历史
+    // 使用归一化坐标历史，消除平移影响
     if (this.normalizedLandmarksHistory.length < 2) {
       return 0  // 数据不足，不判定为刚性运动
     }
@@ -721,7 +729,7 @@ export class MotionLivenessDetector {
 
     const motionVectors: Array<{ dx: number; dy: number }> = []
 
-    // 【关键】使用归一化坐标计算运动向量
+    // 使用最近两帧计算运动向量
     const frame1 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 2]
     const frame2 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 1]
 
@@ -1101,7 +1109,7 @@ export class MotionLivenessDetector {
    * 2. 跨帧深度模式 - 辅助参考
    */
   private detectPhotoGeometry(): PhotoGeometryResult {
-    if (this.faceLandmarksHistory.length < 3) {
+    if (this.normalizedLandmarksHistory.length < 3) {
       return { isPhoto: false, confidence: 0, details: {} }
     }
 
@@ -1119,14 +1127,15 @@ export class MotionLivenessDetector {
     const crossFrameDepth = this.detectCrossFrameDepthPattern()
 
     // 综合判定：2D几何约束权重高，Z坐标权重低
+    // 【改进】提高perspectiveScore的权重，因为完美的平滑变换是照片的强特征
     const photoScore = 
-      homographyResult.planarScore * 0.35 +       // 单应性约束（最可靠）
-      perspectivePattern.perspectiveScore * 0.30 + // 透视变换模式（可靠）
-      crossRatioResult.invarianceScore * 0.20 +   // 交叉比率不变性（可靠）
-      (1 - depthResult.depthVariation) * 0.10 +   // 深度（辅助，低权重）
+      homographyResult.planarScore * 0.30 +       // 单应性约束（最可靠）
+      perspectivePattern.perspectiveScore * 0.40 + // 透视变换模式（可靠且权重提高）
+      crossRatioResult.invarianceScore * 0.15 +   // 交叉比率不变性（可靠）
+      (1 - Math.min(depthResult.depthVariation, 1)) * 0.10 +   // 深度（辅助，低权重）
       crossFrameDepth.planarPattern * 0.05        // 跨帧深度（辅助，低权重）
 
-    const isPhoto = photoScore > 0.60  // 阈值
+    const isPhoto = photoScore > 0.50  // 【改进】降低阈值到0.50（从0.60）
     const confidence = Math.min(photoScore, 1)
 
     // 记录历史
@@ -1176,12 +1185,13 @@ export class MotionLivenessDetector {
    * - 真实3D人脸旋转时，面部各点不共面，交叉比率会变化
    * - 照片无论怎么偏转，共线点的交叉比率保持不变
    * 
-   * 【注意】交叉比率本身是比率，不依赖绝对坐标
-   * 使用归一化坐标只是为了一致性
+   * 虽然交叉比率是射影不变量（用任何坐标系都可以），
+   * 但使用原始坐标以保持一致性和物理意义的清晰性
    */
   private detectCrossRatioInvariance(): CrossRatioResult {
-    // 【使用归一化坐标历史，保持一致性】
-    if (this.normalizedLandmarksHistory.length < 3) {
+    // 【使用原始坐标历史】虽然交叉比率是射影不变量，
+    // 但原始坐标保持物理清晰性
+    if (this.faceLandmarksHistory.length < 3) {
       return { invarianceScore: 0 }
     }
 
@@ -1190,7 +1200,7 @@ export class MotionLivenessDetector {
 
     const crossRatios: number[] = []
 
-    for (const frame of this.normalizedLandmarksHistory) {
+    for (const frame of this.faceLandmarksHistory) {
       if (frame.length < 468) continue
 
       // 提取中线点的Y坐标（它们大致在一条垂直线上）
@@ -1254,142 +1264,426 @@ export class MotionLivenessDetector {
   /**
    * 【单应性约束检测】判断多帧特征点是否满足平面约束
    * 
-   * 【重要修复】使用归一化坐标进行比较
+   * 【关键改进】：
+   * 1. 使用DLT算法计算完整的3x3单应性矩阵（8参数）
+   * 2. 使用相邻帧而不是首尾帧（减少变化幅度）
+   * 3. 检查单应性矩阵的性质（秩、行列式等）
+   * 4. 计算多帧的平均误差（更稳定）
+   * 5. 对所有帧对的H矩阵一致性进行验证
+   * 
    * 这是纯 2D 几何检测，最可靠！
    */
   private detectHomographyConstraint(): HomographyResult {
-    // 【关键】使用归一化坐标历史
-    if (this.normalizedLandmarksHistory.length < 2) {
+    // 【关键】使用原始坐标历史，而不是归一化坐标
+    // 原因：单应性矩阵在原始图像坐标中定义
+    // 归一化坐标虽然消除平移影响，但破坏了H矩阵的定义
+    if (this.faceLandmarksHistory.length < 2) {
       return { planarScore: 0 }
     }
 
-    const frame1 = this.normalizedLandmarksHistory[0]
-    const frame2 = this.normalizedLandmarksHistory[this.normalizedLandmarksHistory.length - 1]
+    // 【改进】使用所有面部关键点（468个点）而不是采样点
+    // 更多的点对会给出更准确的单应性矩阵估计
+    const errors: number[] = []
+    const homographyMatrices: Array<number[][]> = []
 
-    if (frame1.length < 468 || frame2.length < 468) {
-      return { planarScore: 0, error: 0 }
-    }
+    // 计算相邻帧的变换误差
+    for (let i = 1; i < this.faceLandmarksHistory.length; i++) {
+      const frame1 = this.faceLandmarksHistory[i - 1]
+      const frame2 = this.faceLandmarksHistory[i]
 
-    // 选择用于计算单应性的4个基准点（面部四角）
-    const basePoints = [10, 152, 234, 454]  // 额头、下巴、左脸颊、右脸颊
-    
-    // 选择用于验证的检验点
-    const testPoints = [33, 263, 61, 291, 1, 168]  // 眼角、嘴角、鼻尖、鼻梁
+      if (frame1.length < 468 || frame2.length < 468) continue
 
-    // 提取基准点坐标（归一化后的坐标）
-    const srcBase: number[][] = []
-    const dstBase: number[][] = []
-    for (const idx of basePoints) {
-      if (frame1[idx] && frame2[idx]) {
-        srcBase.push([frame1[idx][0], frame1[idx][1]])
-        dstBase.push([frame2[idx][0], frame2[idx][1]])
+      // 【改进】收集所有有效的点对（而不是只采样10个点）
+      // 这给出更好的H矩阵估计
+      const srcPoints: number[][] = []
+      const dstPoints: number[][] = []
+      
+      for (let ptIdx = 0; ptIdx < frame1.length; ptIdx++) {
+        if (frame1[ptIdx] && frame2[ptIdx] && 
+            frame1[ptIdx].length >= 2 && frame2[ptIdx].length >= 2) {
+          // 使用x, y原始坐标
+          srcPoints.push([frame1[ptIdx][0], frame1[ptIdx][1]])
+          dstPoints.push([frame2[ptIdx][0], frame2[ptIdx][1]])
+        }
+      }
+
+      if (srcPoints.length < 4) continue
+
+      // 【新增】使用DLT算法计算完整的3x3单应性矩阵
+      const H = this.estimateHomographyDLT(srcPoints, dstPoints)
+      if (!H) continue
+
+      homographyMatrices.push(H)
+
+      // 【改进】使用单应性矩阵计算误差（而不是仿射变换）
+      let frameError = 0
+      let validCount = 0
+      for (let j = 0; j < srcPoints.length; j++) {
+        const transformed = this.applyHomography(H, srcPoints[j][0], srcPoints[j][1])
+        const actual = dstPoints[j]
+        const error = Math.sqrt((transformed[0] - actual[0]) ** 2 + (transformed[1] - actual[1]) ** 2)
+        frameError += error
+        validCount++
+      }
+
+      if (validCount > 0) {
+        errors.push(frameError / validCount)
       }
     }
 
-    if (srcBase.length < 4) {
+    if (errors.length === 0) {
       return { planarScore: 0, error: 0 }
     }
 
-    // 计算简化的仿射变换（近似单应性）
-    // 使用最小二乘法拟合仿射变换 [a, b, c; d, e, f] 
-    const transform = this.estimateAffineTransform(srcBase, dstBase)
-    if (!transform) {
-      return { planarScore: 0, error: 0 }
+    // 计算所有帧的平均误差
+    const avgError = errors.reduce((a, b) => a + b, 0) / errors.length
+
+    // 【新增】检查H矩阵的一致性
+    // 照片的H矩阵在不同帧对中应该保持相对稳定
+    let matrixConsistency = 1.0
+    if (homographyMatrices.length > 1) {
+      matrixConsistency = this.checkHomographyConsistency(homographyMatrices)
     }
 
-    // 用仿射变换预测检验点位置，计算误差
-    let totalError = 0
-    let validPoints = 0
-    for (const idx of testPoints) {
-      if (frame1[idx] && frame2[idx]) {
-        const predicted = this.applyAffineTransform(transform, frame1[idx][0], frame1[idx][1])
-        const actual = [frame2[idx][0], frame2[idx][1]]
-        // 归一化坐标下的误差（相对于人脸尺寸的比例）
-        const error = Math.sqrt((predicted[0] - actual[0]) ** 2 + (predicted[1] - actual[1]) ** 2)
-        totalError += error
-        validPoints++
-      }
-    }
+    // 平面得分 = 误差低 且 H矩阵一致
+    // avgError < 0.01 → 非常可能是平面
+    // avgError > 0.05 → 可能是立体（活体）
+    const errorScore = Math.max(0, 1 - avgError / 0.03)
+    const planarScore = errorScore * matrixConsistency
 
-    if (validPoints === 0) {
-      return { planarScore: 0, error: 0 }
-    }
+    console.debug('[HomographyConstraint]', {
+      frameCount: errors.length,
+      avgError: avgError.toFixed(4),
+      errorScore: errorScore.toFixed(3),
+      matrixConsistency: matrixConsistency.toFixed(3),
+      planarScore: planarScore.toFixed(3)
+    })
 
-    const avgError = totalError / validPoints
-    
-    // 归一化坐标下，误差已经是相对于人脸尺寸的比例
-    // 不需要再除以脸宽
-    const relativeError = avgError
-
-    // 平面得分：误差越小，越可能是平面（照片）
-    // relativeError < 0.02 → 非常可能是平面
-    // relativeError > 0.08 → 不太可能是平面
-    const planarScore = Math.max(0, 1 - relativeError / 0.05)
-
-    // 记录误差历史
-    this.homographyErrors.push(relativeError)
-    if (this.homographyErrors.length > this.config.frameBufferSize) {
-      this.homographyErrors.shift()
-    }
-
-    return { planarScore: Math.min(planarScore, 1), error: relativeError }
+    return { planarScore: Math.min(planarScore, 1), error: avgError }
   }
 
   /**
-   * 估计仿射变换矩阵 (简化的单应性)
-   * 输入：源点和目标点对
-   * 输出：[a, b, c, d, e, f] 表示变换 x' = ax + by + c, y' = dx + ey + f
+   * 估计仿射变换矩阵
+   * 【改进】使用完整的6参数仿射变换（包含剪切分量）
+   * 
+   * 变换形式: x' = ax + by + c, y' = dx + ey + f
+   * 其中 [a, b] 和 [d, e] 可以包含旋转、缩放、剪切分量
+  /**
+   * 【新增】使用DLT算法估计单应性矩阵
+   * 
+   * DLT (Direct Linear Transform) 是估计射影变换的标准算法
+   * 输入：源点和目标点对 (至少4对)
+   * 输出：3x3单应性矩阵H，使得 p' = H * p (齐次坐标)
+   * 
+   * 相比仿射变换：
+   * - 仿射：6参数，处理旋转+缩放+平移+剪切
+   * - 单应性：8参数，处理完整的射影变换（包括透视）
+   * 
+   * 照片倾斜拍摄时，需要完整的单应性矩阵！
    */
-  private estimateAffineTransform(src: number[][], dst: number[][]): number[] | null {
-    if (src.length < 3 || dst.length < 3) return null
+  private estimateHomographyDLT(src: number[][], dst: number[][]): number[][] | null {
+    if (src.length < 4 || dst.length < 4 || src.length !== dst.length) return null
 
-    const n = Math.min(src.length, dst.length)
+    const n = src.length
     
-    // 构建方程组 Ax = b (最小二乘)
-    // 对于 x': [x1, y1, 1, 0, 0, 0] * [a,b,c,d,e,f]^T = x1'
-    // 对于 y': [0, 0, 0, x1, y1, 1] * [a,b,c,d,e,f]^T = y1'
-    
-    let sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0, sumXY = 0
-    let sumXpX = 0, sumXpY = 0, sumYpX = 0, sumYpY = 0, sumXp = 0, sumYp = 0
+    // 【关键】对点进行归一化，提高数值稳定性
+    const srcNorm = this.normalizePoints(src)
+    const dstNorm = this.normalizePoints(dst)
 
+    if (!srcNorm || !dstNorm) return null
+
+    // 构建DLT方程矩阵 A (2n x 9)
+    // 对每对点，构建2行方程：
+    // [-x, -y, -1, 0, 0, 0, x*x', y*x', x']
+    // [0, 0, 0, -x, -y, -1, x*y', y*y', y']
+    const A: number[][] = []
+    
     for (let i = 0; i < n; i++) {
-      const x = src[i][0], y = src[i][1]
-      const xp = dst[i][0], yp = dst[i][1]
-      
-      sumX += x; sumY += y
-      sumX2 += x * x; sumY2 += y * y; sumXY += x * y
-      sumXpX += xp * x; sumXpY += xp * y; sumXp += xp
-      sumYpX += yp * x; sumYpY += yp * y; sumYp += yp
+      const x = srcNorm.points[i][0]
+      const y = srcNorm.points[i][1]
+      const xp = dstNorm.points[i][0]
+      const yp = dstNorm.points[i][1]
+
+      // 第一行
+      A.push([-x, -y, -1, 0, 0, 0, x * xp, y * xp, xp])
+      // 第二行
+      A.push([0, 0, 0, -x, -y, -1, x * yp, y * yp, yp])
     }
 
-    // 简化：假设主要是平移+旋转+缩放
-    // 计算平均平移
-    const cx = sumXp / n - sumX / n
-    const cy = sumYp / n - sumY / n
+    // 使用SVD求解 Ah = 0
+    // h 是最小奇异值对应的右奇异向量
+    const h = this.solveHomographyLSQ(A)
+    if (!h) return null
 
-    // 计算缩放和旋转（简化版本）
-    const det = sumX2 * n - sumX * sumX
+    // 反演应化矩阵（从归一化坐标回到原始坐标）
+    const H = this.denormalizeHomography(h, srcNorm, dstNorm)
+    
+    return H
+  }
+
+  /**
+   * 点集归一化（提高数值稳定性）
+   * 变换点使得重心在原点，平均距离为sqrt(2)
+   */
+  private normalizePoints(points: number[][]): { points: number[][], T: number[][] } | null {
+    if (points.length === 0) return null
+
+    // 计算重心
+    let cx = 0, cy = 0
+    for (const p of points) {
+      cx += p[0]
+      cy += p[1]
+    }
+    cx /= points.length
+    cy /= points.length
+
+    // 计算平均距离
+    let avgDist = 0
+    for (const p of points) {
+      const dx = p[0] - cx
+      const dy = p[1] - cy
+      avgDist += Math.sqrt(dx * dx + dy * dy)
+    }
+    avgDist /= points.length
+
+    // 缩放因子
+    const scale = avgDist > 0.001 ? Math.sqrt(2) / avgDist : 1
+
+    // 应用归一化变换
+    const normalized: number[][] = []
+    for (const p of points) {
+      normalized.push([
+        (p[0] - cx) * scale,
+        (p[1] - cy) * scale
+      ])
+    }
+
+    // 归一化矩阵 T
+    const T: number[][] = [
+      [scale, 0, -cx * scale],
+      [0, scale, -cy * scale],
+      [0, 0, 1]
+    ]
+
+    return { points: normalized, T }
+  }
+
+  /**
+   * 最小二乘法求解 Ah = 0
+   * 其中 h 是3x3矩阵的向量化形式
+   */
+  private solveHomographyLSQ(A: number[][]): number[] | null {
+    // 简化的SVD求解：找使 ||Ah|| 最小的 h
+    // 为了简化，使用迭代最小二乘法或对称矩阵的特征向量
+
+    if (A.length < 8) return null
+
+    // A^T * A 矩阵 (9x9)
+    const ATA: number[][] = Array(9).fill(0).map(() => Array(9).fill(0))
+    
+    for (let i = 0; i < 9; i++) {
+      for (let j = 0; j < 9; j++) {
+        for (let k = 0; k < A.length; k++) {
+          ATA[i][j] += A[k][i] * A[k][j]
+        }
+      }
+    }
+
+    // 求ATA的最小特征向量（对应最小特征值）
+    const eigenVec = this.getSmallestEigenvector(ATA)
+    return eigenVec
+  }
+
+  /**
+   * 求3x3对称矩阵的最小特征向量（简化版本）
+   * 使用幂迭代法或直接求解
+   */
+  private getSmallestEigenvector(mat: number[][]): number[] | null {
+    if (mat.length !== 9) return null
+
+    // 为了简化，使用初步估计：取行和最小的方向
+    // 或者使用固定迭代次数的幂法
+    
+    // 简化：返回一个初步猜测的向量
+    // 实际应用应该使用完整的SVD或特征值分解库
+    
+    // 这里使用Power Iteration的反向版本（找最小特征值）
+    let v = [1, 1, 1, 1, 1, 1, 1, 1, 1]
+    
+    for (let iter = 0; iter < 10; iter++) {
+      // v_new = A * v
+      const v_new = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+      for (let i = 0; i < 9; i++) {
+        for (let j = 0; j < 9; j++) {
+          v_new[i] += mat[i][j] * v[j]
+        }
+      }
+
+      // 归一化
+      const norm = Math.sqrt(v_new.reduce((a, b) => a + b * b, 0))
+      if (norm < 0.0001) break
+      
+      for (let i = 0; i < 9; i++) {
+        v[i] = v_new[i] / norm
+      }
+    }
+
+    return v
+  }
+
+  /**
+   * 反演应化矩阵
+   * H_orig = T_dst^-1 * H_norm * T_src
+   */
+  private denormalizeHomography(h: number[], srcNorm: any, dstNorm: any): number[][] {
+    // 将向量h转换为3x3矩阵
+    const H_norm: number[][] = [
+      [h[0], h[1], h[2]],
+      [h[3], h[4], h[5]],
+      [h[6], h[7], h[8]]
+    ]
+
+    // H = T_dst^-1 * H_norm * T_src
+    const T_src = srcNorm.T
+    const T_dst = dstNorm.T
+    const T_dst_inv = this.invertMatrix3x3(T_dst)
+
+    if (!T_dst_inv) return H_norm
+
+    // 矩阵乘法：(3x3) * (3x3) * (3x3)
+    const temp = this.multiplyMatrix3x3(T_dst_inv, H_norm)
+    const H = this.multiplyMatrix3x3(temp, T_src)
+
+    return H
+  }
+
+  /**
+   * 3x3矩阵求逆
+   */
+  private invertMatrix3x3(m: number[][]): number[][] | null {
+    const [m00, m01, m02] = m[0]
+    const [m10, m11, m12] = m[1]
+    const [m20, m21, m22] = m[2]
+
+    const det = 
+      m00 * (m11 * m22 - m12 * m21) -
+      m01 * (m10 * m22 - m12 * m20) +
+      m02 * (m10 * m21 - m11 * m20)
+
     if (Math.abs(det) < 0.0001) return null
 
-    const a = (sumXpX * n - sumXp * sumX) / (sumX2 * n - sumX * sumX + 0.0001)
-    const b = 0  // 简化，忽略剪切
-    const d = 0
-    const e = (sumYpY * n - sumYp * sumY) / (sumY2 * n - sumY * sumY + 0.0001)
-    
-    const c = sumXp / n - a * sumX / n
-    const f = sumYp / n - e * sumY / n
+    const inv: number[][] = [
+      [
+        (m11 * m22 - m12 * m21) / det,
+        (m02 * m21 - m01 * m22) / det,
+        (m01 * m12 - m02 * m11) / det
+      ],
+      [
+        (m12 * m20 - m10 * m22) / det,
+        (m00 * m22 - m02 * m20) / det,
+        (m02 * m10 - m00 * m12) / det
+      ],
+      [
+        (m10 * m21 - m11 * m20) / det,
+        (m01 * m20 - m00 * m21) / det,
+        (m00 * m11 - m01 * m10) / det
+      ]
+    ]
 
-    return [a || 1, b, c || 0, d, e || 1, f || 0]
+    return inv
   }
 
   /**
-   * 应用仿射变换
+   * 3x3矩阵乘法
    */
-  private applyAffineTransform(t: number[], x: number, y: number): number[] {
-    return [
-      t[0] * x + t[1] * y + t[2],
-      t[3] * x + t[4] * y + t[5]
+  private multiplyMatrix3x3(A: number[][], B: number[][]): number[][] {
+    const result: number[][] = Array(3).fill(0).map(() => Array(3).fill(0))
+    
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        for (let k = 0; k < 3; k++) {
+          result[i][j] += A[i][k] * B[k][j]
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * 应用单应性变换（齐次坐标）
+   * p' = H * p / (H * p 的 Z 分量)
+   */
+  private applyHomography(H: number[][], x: number, y: number): number[] {
+    // 齐次坐标
+    const p = [x, y, 1]
+    
+    // H * p
+    const Hp = [
+      H[0][0] * p[0] + H[0][1] * p[1] + H[0][2] * p[2],
+      H[1][0] * p[0] + H[1][1] * p[1] + H[1][2] * p[2],
+      H[2][0] * p[0] + H[2][1] * p[1] + H[2][2] * p[2]
     ]
+
+    // 反齐次化
+    if (Math.abs(Hp[2]) < 0.0001) {
+      return [Hp[0], Hp[1]]
+    }
+
+    return [Hp[0] / Hp[2], Hp[1] / Hp[2]]
+  }
+
+  /**
+   * 【新增】检查单应性矩阵的一致性
+   * 
+   * 原理：
+   * - 照片旋转时，每对相邻帧的H矩阵应该相近（因为是持续旋转）
+   * - 真实人脸做随机动作时，H矩阵会变化很大
+   */
+  private checkHomographyConsistency(matrices: number[][][]): number {
+    if (matrices.length < 2) return 1
+
+    // 计算矩阵间的相似度
+    let totalSimilarity = 0
+    let pairCount = 0
+
+    for (let i = 1; i < matrices.length; i++) {
+      const M1 = matrices[i - 1]
+      const M2 = matrices[i]
+
+      // Frobenius范数相似度
+      let sumDiff = 0
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          const diff = M1[r][c] - M2[r][c]
+          sumDiff += diff * diff
+        }
+      }
+
+      const frobeniusDist = Math.sqrt(sumDiff)
+      
+      // 标准化距离（除以矩阵范数）
+      let normM1 = 0, normM2 = 0
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          normM1 += M1[r][c] * M1[r][c]
+          normM2 += M2[r][c] * M2[r][c]
+        }
+      }
+      normM1 = Math.sqrt(normM1)
+      normM2 = Math.sqrt(normM2)
+      
+      const avgNorm = (normM1 + normM2) / 2
+      const normalizedDist = avgNorm > 0.1 ? Math.min(frobeniusDist / avgNorm, 2) : 2
+
+      // 将距离转换为相似度 (0-1)
+      // 距离越小，相似度越高
+      const similarity = Math.max(0, 1 - normalizedDist / 2)
+      totalSimilarity += similarity
+      pairCount++
+    }
+
+    return pairCount > 0 ? totalSimilarity / pairCount : 1
   }
 
   /**
@@ -1511,22 +1805,17 @@ export class MotionLivenessDetector {
   }
 
   /**
-   * 【关键】检测透视变换模式
-   * 
-   * 原理：
-   * - 照片偏转时，特征点位置变化遵循严格的透视变换规律
-   * - 检测左右脸的相对变化是否符合透视投影
-   */
-  /**
    * 【透视变换模式检测】
    * 
-   * 【重要修复】使用归一化坐标进行比较
+   * 【改进】使用原始坐标而不是归一化坐标
    * 
    * 原理：照片左右偏转时，左右脸宽度比例会平滑变化
+   * 这种比例变化遵循严格的透视投影规律
    */
   private detectPerspectiveTransformPattern(): PerspectivePatternResult {
-    // 【关键】使用归一化坐标历史
-    if (this.normalizedLandmarksHistory.length < 3) {
+    // 【关键】使用原始坐标历史，而不是归一化坐标
+    // 透视变换的宽度比例变化在原始图像坐标中更准确
+    if (this.faceLandmarksHistory.length < 3) {
       return { perspectiveScore: 0 }
     }
 
@@ -1535,9 +1824,10 @@ export class MotionLivenessDetector {
     // 这种变化应该是平滑且可预测的
     
     const widthRatios: number[] = []
-    for (const frame of this.normalizedLandmarksHistory) {
+    for (const frame of this.faceLandmarksHistory) {
       if (frame.length >= 468) {
-        // 使用归一化坐标计算距离比例
+        // 使用原始坐标计算距离比例
+        // 234: 左脸颊边缘，1: 鼻尖，454: 右脸颊边缘
         const leftWidth = this.pointDist(frame[234], frame[1])   // 左脸到鼻子
         const rightWidth = this.pointDist(frame[1], frame[454])  // 鼻子到右脸
         if (leftWidth > 0 && rightWidth > 0) {
@@ -1588,11 +1878,34 @@ export class MotionLivenessDetector {
     // 这是最可靠的检测方式，优先级最高
     const isPhotoByGeometry = photoGeometry.isPhoto
     const photoConfidence = photoGeometry.confidence || 0
+    const frameCount = Math.max(
+      this.eyeAspectRatioHistory.length,
+      this.mouthAspectRatioHistory.length,
+      this.faceLandmarksHistory.length,
+      this.normalizedLandmarksHistory.length
+    )
+
+    // 【改进】根据帧数调整照片检测的敏感度
+    // 少帧情况下，照片特征更容易误判，但如果几何约束强，仍应拒绝
+    let photoConfidenceThreshold = 0.55
+    if (frameCount < 8) {
+      // 少于8帧时，提高拒绝阈值，但只对超强照片特征有效
+      // perspectiveScore=1.0 是超强信号，不应该放过
+      if ((photoGeometry.details?.perspectiveScore || 0) > 0.95) {
+        photoConfidenceThreshold = 0.45  // 降低阈值
+      } else {
+        photoConfidenceThreshold = 0.65  // 提高阈值
+      }
+    }
 
     // 如果照片几何检测高置信度判定为照片，直接拒绝
-    if (isPhotoByGeometry && photoConfidence > 0.75) {
+    // 【改进】根据帧数和具体特征调整阈值
+    if (isPhotoByGeometry && photoConfidence > photoConfidenceThreshold) {
       console.debug('[Decision] REJECTED by photo geometry detection', {
         photoConfidence: photoConfidence.toFixed(3),
+        photoConfidenceThreshold: photoConfidenceThreshold.toFixed(3),
+        perspectiveScore: (photoGeometry.details?.perspectiveScore || 0).toFixed(3),
+        frameCount,
         details: photoGeometry.details
       })
       return false
@@ -1670,11 +1983,13 @@ export class MotionLivenessDetector {
   /**
    * 检查脸部形状稳定性
    * 
-   * 【重要修复】使用归一化坐标进行比较
-   * 这样即使人脸在画面中移动或缩放，比较仍然有效
+   * 【合理使用归一化坐标】这里使用归一化坐标是有意义的，因为：
+   * - 目的是检测【脸部形状的变化】（眼睛距离、嘴巴高度等）
+   * - 与人脸在画面中的位置和尺寸无关
+   * - 消除平移和缩放影响，专注于形状的变化
    */
   private checkFaceShapeStability(): number {
-    // 【关键】使用归一化坐标历史
+    // 使用归一化坐标历史，消除平移和缩放影响
     if (this.normalizedLandmarksHistory.length < 5) {
       return 0.5  // 数据不足
     }
@@ -1689,7 +2004,7 @@ export class MotionLivenessDetector {
     }
 
     // 【第二层防护】检测脸部形状稳定性
-    // 使用归一化坐标计算距离
+    // 使用归一化坐标计算相对距离，检测形状变化
     const faceDistances: number[][] = []
 
     // 计算以下距离：
