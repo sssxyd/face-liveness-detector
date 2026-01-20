@@ -93,7 +93,7 @@ export interface FaceMovingDetectorOptions {
 const DEFAULT_OPTIONS: Required<FaceMovingDetectorOptions> = {
   frameBufferSize: 30,                // 30帧
   movementThreshold: 0.015,           // 运动阈值：超过此值判定为运动
-  minContinuousFrames: 2,             // 至少连续2帧运动才认为是有效运动
+  minContinuousFrames: 1,             // 至少连续1帧运动才认为是有效运动
   nosePointIndex: 1,                  // MediaPipe Face Mesh 中鼻尖的索引
 }
 
