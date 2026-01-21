@@ -102,7 +102,6 @@ export function createDetectionState(engine: FaceDetectionEngine): DetectionStat
     detectionState.photoAttackDetector = new PhotoAttackDetector()
     detectionState.photoAttackDetector.setEmitDebug(engine.emitDebug.bind(engine))
     detectionState.screenAttachDetector = new ScreenAttackDetector()
-    detectionState.screenAttachDetector.setOpencv(cv)
     detectionState.screenAttachDetector.setEmitDebug(engine.emitDebug.bind(engine))
     return detectionState
 }
