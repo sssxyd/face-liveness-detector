@@ -1357,7 +1357,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * Detect all actions from gestures
    * @returns Array of detected actions, empty array if none detected
    */
-  private detectAction(gestures: GestureResult[]): LivenessAction[] {
+   private detectAction(gestures: GestureResult[]): LivenessAction[] {
     const detectedActions: LivenessAction[] = []
 
     if (!gestures || gestures.length === 0) {
@@ -1366,40 +1366,61 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     }
 
     try {
-      // Check for BLINK
+      // Check for BLINK - look for blink or eye-related gestures
       if (gestures.some(g => {
         if (!g.gesture) return false
-        return g.gesture.includes('blink')
+        const gestureStr = g.gesture.toLowerCase()
+        return gestureStr.includes('blink') || gestureStr.includes('eye') && gestureStr.includes('close')
       })) {
         detectedActions.push(LivenessAction.BLINK)
       }
 
-      // Check for MOUTH_OPEN
+      // Check for MOUTH_OPEN - look for mouth opening gestures
       if (gestures.some(g => {
         const gestureStr = g.gesture
-        if (!gestureStr || !gestureStr.includes('mouth')) return false
-        const percentMatch = gestureStr.match(/mouth\s+(\d+)%\s+open/)
-        if (!percentMatch || !percentMatch[1]) return false
-        const percent = parseInt(percentMatch[1]) / 100 // Convert to 0-1 range
-        return percent > (this.options.action_liveness_min_mouth_open_percent)
+        if (!gestureStr) return false
+        const lowerStr = gestureStr.toLowerCase()
+        // Check for mouth/lip/jaw related keywords
+        const hasMouthReference = lowerStr.includes('mouth') || lowerStr.includes('lip') || lowerStr.includes('jaw')
+        // Check for open/opening related keywords
+        const isOpening = lowerStr.includes('open') || lowerStr.includes('opening')
+        // Check for percentage if available
+        const percentMatch = lowerStr.match(/(\d+)%/) 
+        if (hasMouthReference && isOpening) {
+          if (percentMatch && percentMatch[1]) {
+            const percentValue = parseInt(percentMatch[1]) / 100
+            return percentValue >= (this.options.action_liveness_min_mouth_open_percent || 0.2)
+          }
+          // If no percentage but mentions mouth opening, accept it
+          return true
+        }
+        return false
       })) {
         detectedActions.push(LivenessAction.MOUTH_OPEN)
       }
 
-      // Check for NOD_DOWN (head down)
+      // Check for NOD_DOWN (head down) - look for head/neck rotation down
       if (gestures.some(g => {
         if (!g.gesture) return false
-        const headPattern = g.gesture.match(/head\s+down/i)
-        return !!headPattern
+        const gestureStr = g.gesture.toLowerCase()
+        // Check for head rotation patterns indicating nod down
+        return gestureStr.includes('pitch') && gestureStr.includes('-') || 
+               gestureStr.includes('head') && gestureStr.includes('down') ||
+               gestureStr.includes('neck') && gestureStr.includes('rotate') && gestureStr.includes('down') ||
+               gestureStr.includes('look') && gestureStr.includes('down')
       })) {
         detectedActions.push(LivenessAction.NOD_DOWN)
       }
 
-      // Check for NOD_UP (head up)
+      // Check for NOD_UP (head up) - look for head/neck rotation up
       if (gestures.some(g => {
         if (!g.gesture) return false
-        const headPattern = g.gesture.match(/head\s+up/i)
-        return !!headPattern
+        const gestureStr = g.gesture.toLowerCase()
+        // Check for head rotation patterns indicating nod up
+        return gestureStr.includes('pitch') && gestureStr.includes('+') ||
+               gestureStr.includes('head') && gestureStr.includes('up') ||
+               gestureStr.includes('neck') && gestureStr.includes('rotate') && gestureStr.includes('up') ||
+               gestureStr.includes('look') && gestureStr.includes('up')
       })) {
         detectedActions.push(LivenessAction.NOD_UP)
       }
