@@ -245,7 +245,7 @@ export class ScreenAttackDetector {
       mag.convertTo(matShift, cv.CV_32F)
       
       // 对数变换
-      cv.add(cv.ones(mag.rows, mag.cols, cv.CV_32F), matShift, matShift)
+      cv.add(cv.Mat.ones(mag.rows, mag.cols, cv.CV_32F), matShift, matShift)
       cv.log(matShift, matShift)
 
       // 重新排列四象限，使零频率分量位于中心
