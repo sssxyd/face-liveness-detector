@@ -88,7 +88,7 @@ const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
   motionVarianceThreshold: 0.005,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
-  perspectiveRatioThreshold: 0.95,      // 透视比率阈值：真实人脸 > 1，照片 < 1
+  perspectiveRatioThreshold: 1.05,      // 透视比率阈值：真实人脸 > 1，照片 < 1
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
 /**
@@ -243,9 +243,27 @@ export class PhotoAttackDetector {
       1 - (motionDisplacementVariance / this.config.motionVarianceThreshold)
     )
     
-    const ratio_indicator = Math.max(0, 
-      1 - Math.abs(perspectiveRatio - 1) / (1 - this.config.perspectiveRatioThreshold)
-    )
+    // 修改透视比率计算逻辑以支持阈值大于等于1的情况
+    let ratio_indicator = 0;
+    if (this.config.perspectiveRatioThreshold <= 1) {
+      // 原始逻辑：阈值小于等于1时
+      ratio_indicator = Math.max(0, 
+        1 - Math.abs(perspectiveRatio - 1) / (1 - this.config.perspectiveRatioThreshold)
+      );
+    } else {
+      // 新逻辑：阈值大于1时，真实人脸应有更高比率
+      // 如果透视比率大于阈值，则更可能是真实人脸，返回低分（非照片）
+      // 如果透视比率小于等于阈值，则可能是照片，返回高分
+      if (perspectiveRatio < this.config.perspectiveRatioThreshold) {
+        // 透视比率小于阈值，更像照片
+        ratio_indicator = Math.max(0, 
+          1 - (this.config.perspectiveRatioThreshold - perspectiveRatio) / this.config.perspectiveRatioThreshold
+        );
+      } else {
+        // 透视比率大于阈值，更像真实人脸
+        ratio_indicator = 0; // 真实人脸，返回低分
+      }
+    }
     
     const consistency_indicator = Math.min(1,
       motionDirectionConsistency / this.config.motionConsistencyThreshold
