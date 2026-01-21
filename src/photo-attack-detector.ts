@@ -117,8 +117,8 @@ export interface PhotoAttackDetectorOptions {
 const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
-  depthVarianceThreshold: 0.003,        // 深度方差阈值：真实人脸 > 0.005，照片 < 0.001
-  motionVarianceThreshold: 0.015,        // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
+  depthVarianceThreshold: 0.002,        // 深度方差阈值：真实人脸 > 0.005，照片 < 0.001
+  motionVarianceThreshold: 0.008,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
   perspectiveRatioThreshold: 0.85,      // 透视比率阈值：真实人脸 > 0.95，照片 < 0.85
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
@@ -219,14 +219,14 @@ export class PhotoAttackDetector {
     details.perspectiveScore = perspectiveAnalysis.score
 
     // ============ 综合判定 ============
-    const isPhotoByDepth = depthAnalysis.score > 0.6
-    const isPhotoByPerspective = perspectiveAnalysis.score > 0.6
+    const isPhotoByDepth = depthAnalysis.score > 0.5
+    const isPhotoByPerspective = perspectiveAnalysis.score > 0.5
 
     // 只要有一个方案高置信度检测到照片，就判定为照片
     details.isPhoto = isPhotoByDepth || isPhotoByPerspective
 
-    // 置信度：两个方案的最大值（最强的证据）
-    details.photoConfidence = Math.max(depthAnalysis.score, perspectiveAnalysis.score)
+    // 采用加权平均，深度检测会被屏幕照片+运动欺骗，而运动透视一致性检测会被真实人脸+静止欺骗
+    details.photoConfidence = 0.3 * depthAnalysis.score + 0.7 * perspectiveAnalysis.score
 
     // 确定最强特征
     if (Math.abs(depthAnalysis.score - perspectiveAnalysis.score) < 0.1) {
