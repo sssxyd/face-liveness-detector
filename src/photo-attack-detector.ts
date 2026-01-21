@@ -64,24 +64,19 @@ export interface PhotoAttackDetectionDetails {
 export class PhotoAttackDetectionResult {
   isPhoto: boolean
   details: PhotoAttackDetectionDetails
-  debug: Record<string, any>
+  available: boolean = false
+  trusted: boolean = false
 
   constructor(
     isPhoto: boolean,
     details: PhotoAttackDetectionDetails,
-    debug: Record<string, any> = {}
+    available: boolean = false,
+    trusted: boolean = false
   ) {
     this.isPhoto = isPhoto
     this.details = details
-    this.debug = debug
-  }
-
-  isAvailable(): boolean {
-    return this.details.frameCount >= 3
-  }
-
-  isTrusted(): boolean { 
-    return this.details.frameCount >= 15
+    this.available = available
+    this.trusted = trusted
   }
 
   getMessage(): string {
@@ -102,7 +97,7 @@ export class PhotoAttackDetectionResult {
     if (this.details.perspectiveScore > 0.5) {
       const motionVar = this.details.motionDisplacementVariance.toFixed(3)
       const consistency = (this.details.motionDirectionConsistency * 100).toFixed(0)
-      reasons.push(`运动一致性过高(${consistency}%)`)
+      reasons.push(`运动一致性过高(${consistency}%)，位移方差(${motionVar})`)
     }
     
     const reasonStr = reasons.length > 0 ? `（${reasons.join('、')}）` : ''
@@ -112,6 +107,7 @@ export class PhotoAttackDetectionResult {
 
 export interface PhotoAttackDetectorOptions {
   frameBufferSize?: number              // 缓冲帧数，用于计算时序特征
+  requiredFrameCount?: number           // 可信赖所需的最小帧数
   depthVarianceThreshold?: number       // 深度方差阈值，低于此值判定为照片
   motionVarianceThreshold?: number      // 运动方差阈值
   perspectiveRatioThreshold?: number    // 透视比率阈值
@@ -120,8 +116,9 @@ export interface PhotoAttackDetectorOptions {
 
 const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
-  depthVarianceThreshold: 0.001,        // 深度方差阈值：真实人脸 > 0.005，照片 < 0.001
-  motionVarianceThreshold: 0.01,        // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
+  requiredFrameCount: 15,               // 可信赖所需的最小帧数
+  depthVarianceThreshold: 0.003,        // 深度方差阈值：真实人脸 > 0.005，照片 < 0.001
+  motionVarianceThreshold: 0.015,        // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
   perspectiveRatioThreshold: 0.85,      // 透视比率阈值：真实人脸 > 0.95，照片 < 0.85
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
@@ -240,7 +237,7 @@ export class PhotoAttackDetector {
       details.dominantFeature = 'perspective'
     }
 
-    return new PhotoAttackDetectionResult(details.isPhoto, details)
+    return new PhotoAttackDetectionResult(details.isPhoto, details, true, this.frameBuffer.length >= this.config.requiredFrameCount)
   }
 
   /**
@@ -669,12 +666,5 @@ export class PhotoAttackDetector {
    */
   reset(): void {
     this.frameBuffer = []
-  }
-
-  /**
-   * 获取当前缓冲区中的帧数
-   */
-  getFrameCount(): number {
-    return this.frameBuffer.length
   }
 }

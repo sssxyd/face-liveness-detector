@@ -18,6 +18,10 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   debug_log_stages: undefined, // undefined 表示所有阶段
   debug_log_throttle: 100, // 默认 100ms 节流，防止过于频繁
 
+  enable_face_moving_detection: true,
+  enable_photo_attack_detection: true,
+  enable_screen_attack_detection: true,
+
   // Detection Settings
   detect_video_ideal_width: 1280,
   detect_video_ideal_height: 720,

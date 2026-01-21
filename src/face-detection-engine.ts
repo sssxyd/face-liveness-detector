@@ -163,6 +163,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     this.options = mergeOptions(options)
     this.detectionState = createDetectionState(this)
+    this.detectionState.setOpenCv(this.cv)
     
     this.emitDebug('config', 'Engine options updated', { wasDetecting }, 'info')
   }
@@ -432,6 +433,8 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         throw new Error('Failed to transition to READY state')
       }
 
+      this.detectionState.setOpenCv(this.cv)
+      
       const loadedData: DetectorLoadedEventData = {
         success: true,
         opencv_version: getOpenCVVersion(),
@@ -975,6 +978,17 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.stopDetection(false)
       return
     }
+
+    if(!this.detectionState.screenAttachDetector){
+      this.emit('detector-error' as any, {
+        code: ErrorCode.INTERNAL_ERROR,
+        message: 'Screen attack detector is not initialized'
+      })
+      // Clear the detecting flag before stopping to avoid deadlock
+      this.isDetectingFrameActive = false
+      this.stopDetection(false)
+      return
+    }
     
     try {
       // 动作活体检测阶段处理
@@ -999,58 +1013,52 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         this.emitDebug('detection', 'Face is too large', { ratio: faceRatio.toFixed(4), minRatio: this.options.collect_min_face_ratio!, maxRatio: this.options.collect_max_face_ratio! }, 'info')
         return
       }
-
-      this.detectionState.faceMovingDetector.addFrame(face, timestamp)
-      if(!this.detectionState.faceMovingDetector.isAvailable()){
-        // 面部移动数据尚不可用，等待更多帧
-        this.emitDebug('motion-detection', 'Face moving data not yet available - collecting more frames', {
-          collectedFrames: this.detectionState.faceMovingDetector.getFrameCount()
-        }, 'info')
-        return
-      }
-
-      // const faceMovingResult = this.detectionState.faceMovingDetector.detect()
-      // if(!faceMovingResult.isMoving){
-      //   // 面部移动检测失败，可能为照片攻击
-      //   this.emitDebug('motion-detection', 'Face moving detection failed - possible photo attack', {
-      //     details: faceMovingResult.details,
-      //     debug: faceMovingResult.debug
-      //   }, 'warn')
-      //   this.emitDetectorInfo({
-      //     code: DetectionCode.PLEASE_MOVING_FACE,
-      //     message: '请动一动您的脸部',
-      //   })
-      //   this.partialResetDetectionState()
-      //   return
-      // }
-
-      this.detectionState.photoAttackDetector.addFrame(face)
-      const photoAttackResult = this.detectionState.photoAttackDetector.detect()
-      if(photoAttackResult.isAvailable()){
-        // 照片攻击检测可用（仅当判定为照片攻击时)
-        if(photoAttackResult.isPhoto){
-          this.emitDetectorInfo({
-            code: DetectionCode.PHOTO_ATTACK_DETECTED,
-            message: photoAttackResult.getMessage(),
-          })
-          this.emitDebug('motion-detection', 'Photo attack detected', {
-            details: photoAttackResult.details,
-            debug: photoAttackResult.debug,
-          }, 'warn')
-          this.partialResetDetectionState()
-          return
-        } else {
-          if(photoAttackResult.isTrusted()){
-            // 仅当采集到足够帧，且判定为非照片攻击时，才采信
-            this.detectionState.liveness = true
-            this.emitDebug('motion-detection', 'Photo attack detection passed - face is live', {
-              debug: photoAttackResult.debug,
-              details: photoAttackResult.details,
-            }, 'warn')
+      
+      // 开启面部移动检测
+      if(this.options.enable_face_moving_detection){
+        this.detectionState.faceMovingDetector.addFrame(face, timestamp)
+        const faceMovingResult = this.detectionState.faceMovingDetector.detect()
+        if(faceMovingResult.available){
+          if(!faceMovingResult.isMoving){
+            // 面部移动检测失败，可能为照片攻击
+            this.emitDebug('motion-detection', 'Face moving detection failed - possible photo attack', faceMovingResult.details, 'warn')
+            this.emitDetectorInfo({
+              code: DetectionCode.FACE_NOT_MOVING,
+              message: faceMovingResult.getMessage(),
+            })
+            this.partialResetDetectionState()
+            return
           }
         }
       }
 
+      // 开启照片攻击检测
+      if(this.options.enable_photo_attack_detection){
+        this.detectionState.photoAttackDetector.addFrame(face)
+        const photoAttackResult = this.detectionState.photoAttackDetector.detect()
+        if(photoAttackResult.available){
+          // 照片攻击检测可用（仅当判定为照片攻击时)
+          if(photoAttackResult.isPhoto){
+            this.emitDetectorInfo({
+              code: DetectionCode.PHOTO_ATTACK_DETECTED,
+              message: photoAttackResult.getMessage(),
+            })
+            this.emitDebug('motion-detection', 'Photo attack detected', photoAttackResult.details, 'warn')
+            this.partialResetDetectionState()
+            return
+          } else {
+            if(photoAttackResult.trusted){
+              // 仅当采集到足够帧，且判定为非照片攻击时，才采信
+              this.detectionState.liveness = true
+              this.emitDebug('motion-detection', 'Photo attack detection passed - face is live', photoAttackResult.details, 'warn')
+            }
+          }
+        }
+      } else {
+        // 未启用照片攻击检测，默认活体为活体
+        this.detectionState.liveness = true
+      }
+      
       // 捕获并准备帧数据
       const frameData = this.captureAndPrepareFrames()
       if (!frameData) {
@@ -1061,6 +1069,30 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       const bgrFrame = frameData.bgrFrame
       const grayFrame = frameData.grayFrame      
+
+      if(this.options.enable_screen_attack_detection){
+        const screenAttackResult = this.detectionState.screenAttachDetector.detect(bgrFrame, grayFrame)
+        if(screenAttackResult.available){
+          if(screenAttackResult.isScreenAttack){
+            this.emitDetectorInfo({
+              code: DetectionCode.SCREEN_ATTACK_DETECTED,
+              message: screenAttackResult.getMessage(),
+            })
+            this.emitDebug('motion-detection', 'Screen attack detected', screenAttackResult.details, 'warn')
+            this.partialResetDetectionState()
+            return
+          } else {
+            if(screenAttackResult.trusted){
+              // 仅当采集到足够帧，且判定为非屏幕攻击时，才采信
+              this.detectionState.realness = true
+              this.emitDebug('motion-detection', 'Screen attack detection passed - face is real', screenAttackResult.details, 'warn')
+            }
+          }
+        }
+      } else {
+        // 未启用屏幕攻击检测，默认真实性为真实
+        this.detectionState.realness = true
+      }
 
       let frontal = 1
       // 计算面部正对度，不达标则跳过当前帧

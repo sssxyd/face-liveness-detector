@@ -38,6 +38,49 @@
         />
         <span>{{ (minImageQuality * 100).toFixed(0) }}%</span>
       </div>
+
+      <!-- New toggle switches in same row -->
+      <div class="config-item toggle-group">
+        <label>Security Features:</label>
+        <div class="toggle-switches">
+          <div class="toggle-item">
+            <span>Face Moving</span>
+            <label class="switch">
+              <input 
+                type="checkbox" 
+                v-model="enableFaceMovingDetection"
+                :disabled="isDetecting"
+              >
+              <span class="slider"></span>
+            </label>
+          </div>
+          
+          <div class="toggle-item">
+            <span>Photo Attack</span>
+            <label class="switch">
+              <input 
+                type="checkbox" 
+                v-model="enablePhotoAttackDetection"
+                :disabled="isDetecting"
+              >
+              <span class="slider"></span>
+            </label>
+          </div>
+          
+          <div class="toggle-item">
+            <span>Screen Attack</span>
+            <label class="switch">
+              <input 
+                type="checkbox" 
+                v-model="enableScreenAttackDetection"
+                :disabled="isDetecting"
+              >
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+      </div>      
+
       <div class="config-item">
         <label>Model Path:</label>
         <input 
@@ -242,6 +285,9 @@ const actionCount = ref<number>(0)
 const minImageQuality = ref<number>(0.5)
 const humanModelPath = ref<string>('/models')
 const tensorflowWasmPath = ref<string>('/wasm')
+const enableFaceMovingDetection = ref<boolean>(true)
+const enablePhotoAttackDetection = ref<boolean>(true)
+const enableScreenAttackDetection = ref<boolean>(true)
 
 // 引擎实例
 let engine: FaceDetectionEngine | null = null
@@ -291,6 +337,9 @@ const options = computed<FaceDetectionEngineOptions>(() => ({
   collect_min_face_frontal: 0.9,
   collect_min_collect_count: 3,
   action_liveness_action_count: actionCount.value,
+  enable_face_moving_detection: enableFaceMovingDetection.value,
+  enable_photo_attack_detection: enablePhotoAttackDetection.value,
+  enable_screen_attack_detection: enableScreenAttackDetection.value,
 }))
 
 // 初始化引擎
@@ -477,7 +526,8 @@ function getPromptMessage(code: string): string {
     [DetectionCode.FACE_LOW_QUALITY]: 'Image quality too low, please improve lighting or camera focus',
     [DetectionCode.FACE_CHECK_PASS]: 'Face detected successfully',
     [DetectionCode.PHOTO_ATTACK_DETECTED]: 'Photo attack detected',
-    [DetectionCode.PLEASE_MOVING_FACE]: 'Please move your face to verify liveness',
+    [DetectionCode.FACE_NOT_MOVING]: 'Please move your face to verify liveness',
+    [DetectionCode.SCREEN_ATTACK_DETECTED]: 'Screen attack detected'
   }
   return messages[code] || 'Detecting...'
 }
@@ -1023,6 +1073,81 @@ function getActionCountLabel(count: number): string {
 
 .show-debug-btn:hover {
   background: #2980b9;
+}
+
+.toggle-group {
+  flex-direction: column;
+}
+
+.toggle-switches {
+  display: flex;
+  gap: 20px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.toggle-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 24px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: #42b983;
+}
+
+input:checked + .slider:before {
+  transform: translateX(26px);
+}
+
+input:disabled + .slider {
+  background-color: #bdc3c7;
+  cursor: not-allowed;
+}
+
+/* Responsive for toggle switches */
+@media (max-width: 768px) {
+  .toggle-switches {
+    flex-direction: column;
+    gap: 10px;
+  }
 }
 
 /* 响应式设计 */

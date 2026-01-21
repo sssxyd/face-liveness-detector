@@ -12,6 +12,7 @@
  */
 
 import type { FaceResult } from '@vladmandic/human'
+import { debug } from 'util'
 
 /**
  * 人脸运动检测结果详情
@@ -54,16 +55,19 @@ export interface FaceMovingDetectionDetails {
 export class FaceMovingDetectionResult {
   isMoving: boolean
   details: FaceMovingDetectionDetails
-  debug: Record<string, any>
+  available: boolean = false
+  trusted: boolean = false
 
   constructor(
     isMoving: boolean,
     details: FaceMovingDetectionDetails,
-    debug: Record<string, any> = {}
+    available: boolean = true,
+    trusted: boolean = false
   ) {
     this.isMoving = isMoving
     this.details = details
-    this.debug = debug
+    this.available = available
+    this.trusted = trusted
   }
 
   getMessage(): string {
@@ -229,7 +233,7 @@ export class FaceMovingDetector {
     // 计算中心化坐标的变化速率（基于实际时间）
     details.centroidShiftRate = this.calculateCentroidShiftRate()
 
-    return new FaceMovingDetectionResult(details.isMoving, details)
+    return new FaceMovingDetectionResult(details.isMoving, details, true, true)
   }
 
   /**
@@ -414,17 +418,6 @@ export class FaceMovingDetector {
     const variance = squaredDiffs.reduce((a, b) => a + b) / values.length
 
     return Math.sqrt(variance)
-  }
-  /**
-   * 检查当前实例是否可用
-   * 
-   * @description 通过检查帧缓冲区长度来判断实例是否处于可用状态
-   *              当帧缓冲区长度大于等于2时，认为实例可用
-   * 
-   * @returns {boolean} 如果实例可用返回true，否则返回false
-   */
-  isAvailable(): boolean {
-    return this.frameBuffer.length >= 2
   }
 
   /**

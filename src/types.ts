@@ -47,9 +47,16 @@ export interface FaceDetectionEngineOptions {
   /** 调试日志节流间隔（毫秒，默认 0 表示不节流） */
   debug_log_throttle?: number
 
-  /** 视频流建议分辨率宽度（默认 1920） */
+  /** 是否启用人脸运动检测（默认 true） */
+  enable_face_moving_detection?: boolean
+  /** 是否启用照片攻击检测（默认 true） */
+  enable_photo_attack_detection?: boolean
+  /** 是否启用屏幕攻击检测（默认 true） */
+  enable_screen_attack_detection?: boolean
+
+  /** 视频流建议分辨率宽度（默认 1280） */
   detect_video_ideal_width?: number
-  /** 视频流建议分辨率高度（默认 1080） */
+  /** 视频流建议分辨率高度（默认 720） */
   detect_video_ideal_height?: number
   /** 水平镜像视频（默认 true） */
   detect_video_mirror?: boolean

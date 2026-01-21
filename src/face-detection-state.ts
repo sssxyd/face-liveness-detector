@@ -2,6 +2,7 @@ import { DetectionPeriod, LivenessAction } from "./enums"
 import { FaceDetectionEngine } from "./face-detection-engine"
 import { FaceMovingDetector } from "./face-moving-detector"
 import { PhotoAttackDetector } from "./photo-attack-detector"
+import { ScreenAttackDetector } from "./screen-attach-detector"
 
 /**
  * Internal detection state interface
@@ -19,7 +20,9 @@ export class DetectionState {
     lastFrontalScore: number = 1
     faceMovingDetector: FaceMovingDetector | null = null
     photoAttackDetector: PhotoAttackDetector | null = null
+    screenAttachDetector: ScreenAttackDetector | null = null
     liveness: boolean = false
+    realness: boolean = false
 
     constructor(options: Partial<DetectionState>) {
         Object.assign(this, options)
@@ -30,14 +33,21 @@ export class DetectionState {
 
         const savedFaceMovingDetector = this.faceMovingDetector
         const savedPhotoAttackDetector = this.photoAttackDetector
+        const savedScreenAttackDetector = this.screenAttachDetector
 
         savedFaceMovingDetector?.reset()
         savedPhotoAttackDetector?.reset()
+        savedScreenAttackDetector?.reset()
 
         Object.assign(this, new DetectionState({}))
 
         this.faceMovingDetector = savedFaceMovingDetector
         this.photoAttackDetector = savedPhotoAttackDetector
+        this.screenAttachDetector = savedScreenAttackDetector
+    }
+
+    setOpenCv(opencv: any): void {
+        this.screenAttachDetector?.setOpencv(opencv)
     }
 
     // 默认方法
@@ -48,7 +58,7 @@ export class DetectionState {
     // 是否准备好进行动作验证
     isReadyToVerify(minCollectCount: number): boolean {
         if (this.period === DetectionPeriod.COLLECT 
-            && this.liveness
+            && this.liveness && this.realness
             && this.collectCount >= minCollectCount)
             {
             return true
@@ -91,5 +101,8 @@ export function createDetectionState(engine: FaceDetectionEngine): DetectionStat
     detectionState.faceMovingDetector.setEmitDebug(engine.emitDebug.bind(engine))
     detectionState.photoAttackDetector = new PhotoAttackDetector()
     detectionState.photoAttackDetector.setEmitDebug(engine.emitDebug.bind(engine))
+    detectionState.screenAttachDetector = new ScreenAttackDetector()
+    detectionState.screenAttachDetector.setOpencv(cv)
+    detectionState.screenAttachDetector.setEmitDebug(engine.emitDebug.bind(engine))
     return detectionState
 }
