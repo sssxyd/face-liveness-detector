@@ -163,7 +163,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     
     this.options = mergeOptions(options)
     this.detectionState = createDetectionState(this)
-    this.detectionState.setOpenCv(this.cv)
     
     this.emitDebug('config', 'Engine options updated', { wasDetecting }, 'info')
   }
@@ -432,8 +431,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       if (!this.transitionEngineState(EngineState.READY, 'initialize() success')) {
         throw new Error('Failed to transition to READY state')
       }
-
-      this.detectionState.setOpenCv(this.cv)
       
       const loadedData: DetectorLoadedEventData = {
         success: true,
@@ -612,6 +609,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         throw new Error('Failed to transition to DETECTING state')
       }
 
+      this.detectionState.setOpenCv(this.cv)
       this.cancelPendingDetection()
 
       this.animationFrameId = requestAnimationFrame(() => {
