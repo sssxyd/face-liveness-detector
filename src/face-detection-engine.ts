@@ -1363,8 +1363,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     if (!gestures || gestures.length === 0) {
       this.emitDebug('liveness', 'No gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
       return detectedActions
-    } else {
-      this.emitDebug('liveness', 'Gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
     }
 
     try {

@@ -383,8 +383,7 @@ function _createHumanConfig(backend: string, modelPath?: string, wasmPath?: stri
         return: true 
       },
       mesh: { 
-        enabled: true,        // facemesh 脸部关键点（包含表情特征）
-        keepInvalid: false    // 只保留有效的网格数据
+        enabled: true,        // facemesh 脸部关键点
       },
       iris: { enabled: false },
       antispoof: { enabled: false },
@@ -393,7 +392,7 @@ function _createHumanConfig(backend: string, modelPath?: string, wasmPath?: stri
     body: { enabled: false },
     hand: { enabled: false },
     object: { enabled: false },
-    gesture: { enabled: false }  // 关闭手势识别（节省资源）
+    gesture: { enabled: true }  // 启用手势识别以检测面部表情和头部动作
   }
 
   if (modelPath) {
