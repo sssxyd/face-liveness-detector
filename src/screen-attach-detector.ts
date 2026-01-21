@@ -78,10 +78,10 @@ export interface ScreenAttackDetectorOptions {
 }
 
 const DEFAULT_SCREEN_OPTIONS: Required<ScreenAttackDetectorOptions> = {
-  moireThreshold: 0.65,
+  moireThreshold: 0.75,
   pixelGridSensitivity: 0.75,
   requiredFrameCount: 12,
-  earlyDetectionThreshold: 0.8
+  earlyDetectionThreshold: 0.9
 }
 
 /**
@@ -132,11 +132,10 @@ export class ScreenAttackDetector {
   /**
    * 检测屏幕攻击
    * @param faceBox - 人脸区域框
-   * @param colorMat - 彩色图像矩阵
    * @param grayMat - 灰度图像矩阵
    * @returns 检测结果
    */
-  detect(colorMat: any, grayMat: any): ScreenAttackDetectionResult {
+  detect(grayMat: any): ScreenAttackDetectionResult {
     this.frameCount += 1
 
     const details: ScreenAttackDetectionDetails = {
@@ -289,9 +288,12 @@ export class ScreenAttackDetector {
       const peaks = this.findMoirePeaks(matShift)
       const peakCount = peaks.length
       
-      if (peakCount > 15) { // 高峰值数量表明存在明显的摩尔纹
-        finalScore += Math.min(0.3, peakCount / 100)
-      }
+      // 调整峰值计数的影响，避免过度敏感
+      if (peakCount > 15) {
+        // 使用对数缩放来减少大量峰值的影响
+        const logPeakScore = Math.log(peakCount + 1) / 10.0
+        finalScore += Math.min(0.2, logPeakScore) // 限制峰值贡献为0.2而不是0.3
+      }      
       
       patternStrength = Math.max(moireScore, pixelGridStrength)
 
@@ -331,13 +333,12 @@ export class ScreenAttackDetector {
       this.emitDebug('screen-attack-moire', `摩尔纹分析出错: ${error}`, {}, 'error')
       return { score: 0, pixelGridStrength: 0, confidence: 0, debug: {} }
     }
-  }  
+  }
 
   /**
    * 分析频域中的摩尔纹特征
    */
   private analyzeMoireCharacteristics(spectrum: any): number {
-    const cv = this.opencv
     const centerX = Math.floor(spectrum.cols / 2)
     const centerY = Math.floor(spectrum.rows / 2)
     
@@ -351,9 +352,9 @@ export class ScreenAttackDetector {
     // 计算径向剖面的自相关性来检测规律性
     const autoCorrelation = this.calculateAutoCorrelation(radialProfile)
     
-    // 寻找主要的周期性模式
+    // 使用stepSize来采样自相关函数以计算规律性得分
     let maxPeak = 0
-    for (let i = 1; i < autoCorrelation.length / 4; i++) {
+    for (let i = 1; i < autoCorrelation.length / 4; i += stepSize) { // 使用stepSize作为步长
       if (autoCorrelation[i] > maxPeak) {
         maxPeak = autoCorrelation[i]
       }
@@ -417,8 +418,8 @@ export class ScreenAttackDetector {
     const cv = this.opencv
     const peaks: Array<{x: number, y: number, value: number}> = []
     
-    // 使用局部最大值检测
-    const kernel = cv.Mat.ones(3, 3, cv.CV_8UC1)
+    // 使用更严格的峰值检测方法
+    const kernel = cv.Mat.ones(5, 5, cv.CV_8UC1) // 使用更大的核来减少噪声
     
     // 膨胀操作以找到局部最大值
     const dilated = new cv.Mat()
@@ -429,34 +430,38 @@ export class ScreenAttackDetector {
     cv.compare(spectrum, dilated, localMaxMask, cv.CMP_EQ)
     
     // 查找非零点（即峰值位置）
-    for (let y = 1; y < spectrum.rows - 1; y++) {
-      for (let x = 1; x < spectrum.cols - 1; x++) {
+    for (let y = 2; y < spectrum.rows - 2; y++) { // 增加边界范围
+      for (let x = 2; x < spectrum.cols - 2; x++) {
         const maskIndex = y * localMaxMask.cols + x
         // 使用正确的数组访问方式
         if (localMaxMask.data[maskIndex] !== 0) {
           const spectrumIndex = y * spectrum.cols + x
           const val = spectrum.data32F ? spectrum.data32F[spectrumIndex] : 0
-          // 只保留显著的峰值
-          if (val > 3.0) { // 阈值可根据实际调试调整
+          // 提高峰值阈值以减少噪声影响
+          if (val > 5.0) { // 从3.0提高到5.0，只保留更显著的峰值
             peaks.push({ x, y, value: val })
           }
         }
       }
     }
     
+    // 限制峰值数量以防止过度计数
+    // 只返回最强的前100个峰值
+    peaks.sort((a, b) => b.value - a.value)
+    const limitedPeaks = peaks.slice(0, 100)
+    
     // 释放内存
     kernel.delete()
     dilated.delete()
     localMaxMask.delete()
     
-    return peaks
+    return limitedPeaks
   }
 
   /**
    * 计算径向剖面图
    */
   private computeRadialProfile(spectrum: any, centerX: number, centerY: number): number[] {
-    const cv = this.opencv
     const profile: number[] = []
     
     const maxRadius = Math.min(centerX, centerY)

@@ -1069,7 +1069,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       const grayFrame = frameData.grayFrame      
 
       if(this.options.enable_screen_attack_detection){
-        const screenAttackResult = this.detectionState.screenAttachDetector.detect(bgrFrame, grayFrame)
+        const screenAttackResult = this.detectionState.screenAttachDetector.detect(grayFrame)
         if(screenAttackResult.available){
           if(screenAttackResult.isScreenAttack){
             this.emitDetectorInfo({
