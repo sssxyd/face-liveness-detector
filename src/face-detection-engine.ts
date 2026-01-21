@@ -1009,20 +1009,20 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         return
       }
 
-      const faceMovingResult = this.detectionState.faceMovingDetector.detect()
-      if(!faceMovingResult.isMoving){
-        // 面部移动检测失败，可能为照片攻击
-        this.emitDebug('motion-detection', 'Face moving detection failed - possible photo attack', {
-          details: faceMovingResult.details,
-          debug: faceMovingResult.debug
-        }, 'warn')
-        this.emitDetectorInfo({
-          code: DetectionCode.PLEASE_MOVING_FACE,
-          message: '请动一动您的脸部',
-        })
-        this.partialResetDetectionState()
-        return
-      }
+      // const faceMovingResult = this.detectionState.faceMovingDetector.detect()
+      // if(!faceMovingResult.isMoving){
+      //   // 面部移动检测失败，可能为照片攻击
+      //   this.emitDebug('motion-detection', 'Face moving detection failed - possible photo attack', {
+      //     details: faceMovingResult.details,
+      //     debug: faceMovingResult.debug
+      //   }, 'warn')
+      //   this.emitDetectorInfo({
+      //     code: DetectionCode.PLEASE_MOVING_FACE,
+      //     message: '请动一动您的脸部',
+      //   })
+      //   this.partialResetDetectionState()
+      //   return
+      // }
 
       this.detectionState.photoAttackDetector.addFrame(face)
       const photoAttackResult = this.detectionState.photoAttackDetector.detect()
