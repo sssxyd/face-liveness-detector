@@ -371,10 +371,38 @@ export class ScreenAttackDetector {
   private calculatePixelGridStrength(spectrum: any): number {
     const cv = this.opencv
     
-    // 计算频谱的标准差 - 高标准差可能表示周期性结构
-    const meanStddev = { mean: new cv.Scalar(), stddev: new cv.Scalar() }
-    cv.meanStdDev(spectrum, meanStddev.mean, meanStddev.stddev)
-    const spectrumStdDev = meanStddev.stddev.data64F[0]
+    // 创建用于存储均值和标准差的标量
+    const mean = new cv.Mat()
+    const stddev = new cv.Mat()
+    
+    // 计算频谱的均值和标准差
+    cv.meanStdDev(spectrum, mean, stddev)
+    
+    // 获取标准差的值
+    let spectrumStdDev = 0
+    if (stddev.data64F && stddev.data64F.length > 0) {
+      spectrumStdDev = stddev.data64F[0]
+    } else if (stddev.data32F && stddev.data32F.length > 0) {
+      spectrumStdDev = stddev.data32F[0]
+    } else {
+      // 如果无法获取数据，则手动计算
+      let sum = 0
+      let sumSq = 0
+      const data = spectrum.data32F || spectrum.data64F
+      if (data) {
+        for (let i = 0; i < data.length; i++) {
+          sum += data[i]
+          sumSq += data[i] * data[i]
+        }
+        const meanVal = sum / data.length
+        const variance = (sumSq / data.length) - (meanVal * meanVal)
+        spectrumStdDev = Math.sqrt(variance)
+      }
+    }
+
+    // 释放内存
+    mean.delete()
+    stddev.delete()
     
     // 归一化标准差到0-1范围
     const normalizedStdDev = Math.min(1, spectrumStdDev / 5.0)
@@ -403,27 +431,14 @@ export class ScreenAttackDetector {
     // 查找非零点（即峰值位置）
     for (let y = 1; y < spectrum.rows - 1; y++) {
       for (let x = 1; x < spectrum.cols - 1; x++) {
-        if (localMaxMask.ucharPtr(y, x)[0] !== 0) {
-          try {
-            // 使用floatPtr访问浮点值
-            const ptrValue = spectrum.floatPtr(y, x)
-            if (ptrValue && ptrValue.length > 0) {
-              const val = ptrValue[0]
-              // 只保留显著的峰值
-              if (val > 3.0) { // 阈值可根据实际调试调整
-                peaks.push({ x, y, value: val })
-              }
-            }
-          } catch(e) {
-            // fallback to other method
-            try {
-              const val = spectrum.data32F[y * spectrum.cols + x]
-              if (val > 3.0) {
-                peaks.push({ x, y, value: val })
-              }
-            } catch(e2) {
-              console.warn("Could not access pixel value at", x, y)
-            }
+        const maskIndex = y * localMaxMask.cols + x
+        // 使用正确的数组访问方式
+        if (localMaxMask.data[maskIndex] !== 0) {
+          const spectrumIndex = y * spectrum.cols + x
+          const val = spectrum.data32F ? spectrum.data32F[spectrumIndex] : 0
+          // 只保留显著的峰值
+          if (val > 3.0) { // 阈值可根据实际调试调整
+            peaks.push({ x, y, value: val })
           }
         }
       }
@@ -456,18 +471,11 @@ export class ScreenAttackDetector {
         const y = Math.round(centerY + r * Math.sin(rad))
         
         if (x >= 0 && x < spectrum.cols && y >= 0 && y < spectrum.rows) {
-          try {
-            const value = spectrum.floatPtr(y, x)[0]
+          const index = y * spectrum.cols + x
+          if (spectrum.data32F && index < spectrum.data32F.length) {
+            const value = spectrum.data32F[index]
             sum += value
             count++
-          } catch(e) {
-            try {
-              const value = spectrum.data32F[y * spectrum.cols + x]
-              sum += value
-              count++
-            } catch(e2) {
-              // 忽略错误
-            }
           }
         }
       }
