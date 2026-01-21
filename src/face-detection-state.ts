@@ -99,6 +99,7 @@ export function createDetectionState(engine: FaceDetectionEngine): DetectionStat
     const detectionState = new DetectionState({})
     detectionState.faceMovingDetector = new FaceMovingDetector()
     detectionState.faceMovingDetector.setEmitDebug(engine.emitDebug.bind(engine))
+    // 禁用深度分析，实测深度分析不准确
     detectionState.photoAttackDetector = new PhotoAttackDetector()
     detectionState.photoAttackDetector.setEmitDebug(engine.emitDebug.bind(engine))
     detectionState.screenAttachDetector = new ScreenAttackDetector()

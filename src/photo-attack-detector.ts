@@ -1,23 +1,13 @@
 /**
- * 照片攻击检测器 - 双重方案实现
+ * 照片攻击检测器
  * 
- * 方案一：MediaPipe 3D 关键点深度方差分析
- * - 完全不依赖背景
- * - 对白墙、黑墙、任意纯色背景均有效
- * - 只需人脸本身具有 3D 结构（真实人脸有，照片没有）
- * 
- * 方案二：关键点运动透视一致性检验
+ * 关键点运动透视一致性检验
  * - 比较鼻尖、脸颊、耳朵等在多帧中的 2D 位移比例
  * - 真实人脸因透视效应，近处点移动幅度 > 远处点
  * - 照片上所有点按同一仿射变换移动 → 运动向量高度一致
- * 
- * ⚠️ 关键理解 ⚠️
- * MediaPipe 返回的 Z 坐标（深度）是从 2D 图像【推断】出来的，不是真实的物理深度！
- * - 对真实人脸：推断出正确的 3D 结构 → Z 坐标有方差
- * - 对照片人脸：推断深度值可能平坦 → Z 坐标方差极小
  */
 
-import type { FaceResult, Point } from '@vladmandic/human'
+import type { FaceResult } from '@vladmandic/human'
 
 /**
  * 照片攻击检测结果详情
@@ -25,19 +15,7 @@ import type { FaceResult, Point } from '@vladmandic/human'
 export interface PhotoAttackDetectionDetails {
   frameCount: number
   
-  // ============ 方案一：3D 深度方差分析 ============
-  /** 所有关键点的深度（Z坐标）方差 */
-  depthVariance: number
-  /** 鼻子、脸颊、耳朵的深度方差（关键特征点） */
-  keyPointDepthVariance: number
-  /** 深度值的范围（max - min） */
-  depthRange: number
-  /** 是否检测到平坦深度（照片特征） */
-  isFlatDepth: boolean
-  /** 3D 深度方差置信度 (0-1) */
-  depthVarianceScore: number
-  
-  // ============ 方案二：运动透视一致性检验 ============
+  // ============ 运动透视一致性检验 ============
   /** 各关键点运动位移的标准差（高=真实人脸，低=照片） */
   motionDisplacementVariance: number
   /** 近处点与远处点运动幅度的比值 */
@@ -54,8 +32,6 @@ export interface PhotoAttackDetectionDetails {
   isPhoto: boolean
   /** 照片检测总置信度 (0-1) */
   photoConfidence: number
-  /** 最强特征（"depth"=深度分析，"perspective"=透视分析，"combined"=综合） */
-  dominantFeature: 'depth' | 'perspective' | 'combined'
 }
 
 /**
@@ -89,11 +65,6 @@ export class PhotoAttackDetectionResult {
     const confidence = (this.details.photoConfidence * 100).toFixed(0)
     const reasons: string[] = []
     
-    if (this.details.depthVarianceScore > 0.5) {
-      const depthVar = (this.details.depthVariance * 1000).toFixed(1)
-      reasons.push(`深度方差极小(${depthVar})`)
-    }
-    
     if (this.details.perspectiveScore > 0.5) {
       const motionVar = this.details.motionDisplacementVariance.toFixed(3)
       const consistency = (this.details.motionDirectionConsistency * 100).toFixed(0)
@@ -108,7 +79,6 @@ export class PhotoAttackDetectionResult {
 export interface PhotoAttackDetectorOptions {
   frameBufferSize?: number              // 缓冲帧数，用于计算时序特征
   requiredFrameCount?: number           // 可信赖所需的最小帧数
-  depthVarianceThreshold?: number       // 深度方差阈值，低于此值判定为照片
   motionVarianceThreshold?: number      // 运动方差阈值
   perspectiveRatioThreshold?: number    // 透视比率阈值
   motionConsistencyThreshold?: number   // 运动一致性阈值
@@ -117,18 +87,14 @@ export interface PhotoAttackDetectorOptions {
 const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
-  depthVarianceThreshold: 0.002,        // 深度方差阈值：真实人脸 > 0.005，照片 < 0.001
-  motionVarianceThreshold: 0.008,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
-  perspectiveRatioThreshold: 0.85,      // 透视比率阈值：真实人脸 > 0.95，照片 < 0.85
+  motionVarianceThreshold: 0.005,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
+  perspectiveRatioThreshold: 0.95,      // 透视比率阈值：真实人脸 > 1，照片 < 1
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
-
 /**
  * 照片攻击检测器
  * 
- * 两种检测方案：
- * 1. 3D 深度方差分析（依赖 MediaPipe Z 坐标）
- * 2. 运动透视一致性检验（纯 2D 几何分析）
+ * 运动透视一致性检验（纯 2D 几何分析）
  */
 export class PhotoAttackDetector {
   private config: Required<PhotoAttackDetectorOptions>
@@ -182,11 +148,6 @@ export class PhotoAttackDetector {
   detect(): PhotoAttackDetectionResult {
     const details: PhotoAttackDetectionDetails = {
       frameCount: this.frameBuffer.length,
-      depthVariance: 0,
-      keyPointDepthVariance: 0,
-      depthRange: 0,
-      isFlatDepth: false,
-      depthVarianceScore: 0,
       motionDisplacementVariance: 0,
       perspectiveRatio: 0,
       motionDirectionConsistency: 0,
@@ -194,7 +155,6 @@ export class PhotoAttackDetector {
       perspectiveScore: 0,
       isPhoto: false,
       photoConfidence: 0,
-      dominantFeature: 'combined'
     }
 
     // 帧数不足，无法检测
@@ -202,15 +162,7 @@ export class PhotoAttackDetector {
       return new PhotoAttackDetectionResult(false, details)
     }
 
-    // ============ 方案一：3D 深度方差分析 ============
-    const depthAnalysis = this.analyzeDepthVariance()
-    details.depthVariance = depthAnalysis.depthVariance
-    details.keyPointDepthVariance = depthAnalysis.keyPointDepthVariance
-    details.depthRange = depthAnalysis.depthRange
-    details.isFlatDepth = depthAnalysis.isFlatDepth
-    details.depthVarianceScore = depthAnalysis.score
-
-    // ============ 方案二：运动透视一致性检验 ============
+    // ============ 运动透视一致性检验 ============
     const perspectiveAnalysis = this.analyzePerspectiveConsistency()
     details.motionDisplacementVariance = perspectiveAnalysis.motionDisplacementVariance
     details.perspectiveRatio = perspectiveAnalysis.perspectiveRatio
@@ -218,133 +170,14 @@ export class PhotoAttackDetector {
     details.affineTransformPatternMatch = perspectiveAnalysis.affineTransformPatternMatch
     details.perspectiveScore = perspectiveAnalysis.score
 
-    // ============ 综合判定 ============
-    const isPhotoByDepth = depthAnalysis.score > 0.5
-    const isPhotoByPerspective = perspectiveAnalysis.score > 0.5
-
-    // 只要有一个方案高置信度检测到照片，就判定为照片
-    details.isPhoto = isPhotoByDepth || isPhotoByPerspective
-
-    // 采用加权平均，深度检测会被屏幕照片+运动欺骗，而运动透视一致性检测会被真实人脸+静止欺骗
-    details.photoConfidence = 0.3 * depthAnalysis.score + 0.7 * perspectiveAnalysis.score
-
-    // 确定最强特征
-    if (Math.abs(depthAnalysis.score - perspectiveAnalysis.score) < 0.1) {
-      details.dominantFeature = 'combined'
-    } else if (depthAnalysis.score > perspectiveAnalysis.score) {
-      details.dominantFeature = 'depth'
-    } else {
-      details.dominantFeature = 'perspective'
-    }
+    details.isPhoto = perspectiveAnalysis.score > 0.5
+    details.photoConfidence = perspectiveAnalysis.score
 
     return new PhotoAttackDetectionResult(details.isPhoto, details, true, this.frameBuffer.length >= this.config.requiredFrameCount)
   }
 
   /**
-   * 方案一：3D 深度方差分析
-   * 
-   * 原理：
-   * - 真实人脸具有真实的 3D 结构，Z 坐标（深度）跨越较大范围
-   * - 照片是 2D 的，所有点深度基本相同，Z 坐标方差极小
-   * - MediaPipe 可以从 2D 图像推断出深度，但：
-   *   - 真实人脸：推断正确，Z 坐标有明显差异（鼻尖 > 脸颊 > 耳朵）
-   *   - 照片：推断平坦，Z 坐标基本相同
-   */
-  private analyzeDepthVariance(): {
-    depthVariance: number
-    keyPointDepthVariance: number
-    depthRange: number
-    isFlatDepth: boolean
-    score: number
-  } {
-    let allDepths: number[] = []
-    let keyPointDepths: number[] = []
-
-    // 提取所有帧的深度值
-    for (const result of this.frameBuffer) {
-      // 方案一：使用 rotation 字段中的深度信息
-      if (!result.meshRaw) continue
-
-      // 提取所有关键点的 Z 坐标
-      for (const point of result.meshRaw) {
-        if (point.length >= 3 && typeof point[2] === 'number') {
-          allDepths.push(point[2])
-        }
-      }
-
-      // 提取关键特征点的深度（鼻子、脸颊、耳朵）
-      const annotations = result.annotations
-      if (annotations) {
-        const nose = annotations.nose || []
-        const leftCheek = annotations.leftCheek || []
-        const rightCheek = annotations.rightCheek || []
-        const leftEar = annotations.leftEar || []
-        const rightEar = annotations.rightEar || []
-
-        const allKeypoints = [
-          ...nose,
-          ...leftCheek,
-          ...rightCheek,
-          ...leftEar,
-          ...rightEar
-        ]
-
-        for (const point of allKeypoints) {
-          if (point.length >= 3 && typeof point[2] === 'number') {
-            keyPointDepths.push(point[2])
-          }
-        }
-      }
-    }
-
-    if (allDepths.length === 0) {
-      return {
-        depthVariance: 0,
-        keyPointDepthVariance: 0,
-        depthRange: 0,
-        isFlatDepth: true,
-        score: 0
-      }
-    }
-
-    // 计算深度方差
-    const depthVariance = this.calculateVariance(allDepths)
-    const depthRange = Math.max(...allDepths) - Math.min(...allDepths)
-    
-    // 关键点深度方差
-    const keyPointDepthVariance = keyPointDepths.length > 0 
-      ? this.calculateVariance(keyPointDepths)
-      : 0
-
-    // 判定是否为平坦深度
-    const isFlatDepth = depthVariance < this.config.depthVarianceThreshold
-
-    // 计算置信度分数
-    // 深度方差越小，越可能是照片；深度方差越大，越可能是真实人脸
-    // 使用反向逻辑：照片得分高，真实人脸得分低
-    const variance_score = Math.max(0, 
-      (this.config.depthVarianceThreshold - depthVariance) / this.config.depthVarianceThreshold
-    )
-    
-    // 关键点深度方差也应该很小
-    const keypoint_score = Math.max(0,
-      (this.config.depthVarianceThreshold - keyPointDepthVariance) / this.config.depthVarianceThreshold
-    )
-    
-    // 综合分数
-    const score = Math.min(1, (variance_score + keypoint_score) / 2)
-
-    return {
-      depthVariance,
-      keyPointDepthVariance,
-      depthRange,
-      isFlatDepth,
-      score
-    }
-  }
-
-  /**
-   * 方案二：运动透视一致性检验
+   * 运动透视一致性检验
    * 
    * 原理：
    * - 真实人脸运动：由于透视效应，近处点移动幅度大，远处点移动幅度小
