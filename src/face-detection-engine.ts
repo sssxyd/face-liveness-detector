@@ -1178,7 +1178,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
    * @param gestures - Detected gestures from Human.js
    */
   private handleVerifyPhase(gestures: GestureResult[]): void {
-    if (!this.detectionState.currentAction) {
+    if (this.detectionState.currentAction === null) {
       // 当前无动作，选择下一个动作
       if(!this.selectNextAction()) {
         // 下一个动作不可用，内部错误
@@ -1335,7 +1335,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       status: LivenessActionStatus.STARTED
     }
     this.emit('detector-action', actionStart)
-    this.emitDebug('liveness', 'Action selected', { action: nextAction })
+    this.emitDebug('liveness', 'Action selected', { action: nextAction }, 'warn')
 
     this.detectionState.onActionStarted(nextAction, this.options.action_liveness_verify_timeout, () => {
         this.emitDebug('liveness', 'Action verify timeout', {
@@ -1361,8 +1361,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const detectedActions: LivenessAction[] = []
 
     if (!gestures || gestures.length === 0) {
-      this.emitDebug('liveness', 'No gestures detected for action verification', { gestureCount: gestures?.length ?? 0 }, 'info')
+      this.emitDebug('liveness', 'No gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
       return detectedActions
+    } else {
+      this.emitDebug('liveness', 'Gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
     }
 
     try {
@@ -1426,7 +1428,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       if (detectedActions.length > 0) {
-        this.emitDebug('liveness', 'Actions detected', { detectedActions }, 'info')
+        this.emitDebug('liveness', 'Actions detected', { detectedActions }, 'warn')
       }
     } catch (error) {
       this.emitDebug('liveness', 'Error during action detection', { error: (error as Error).message }, 'error')
