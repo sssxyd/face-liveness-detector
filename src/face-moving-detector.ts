@@ -61,13 +61,12 @@ export class FaceMovingDetectionResult {
   constructor(
     isMoving: boolean,
     details: FaceMovingDetectionDetails,
-    available: boolean = true,
-    trusted: boolean = false
+    available: boolean = false,
   ) {
     this.isMoving = isMoving
     this.details = details
     this.available = available
-    this.trusted = trusted
+    this.trusted = available
   }
 
   getMessage(): string {
@@ -233,7 +232,7 @@ export class FaceMovingDetector {
     // 计算中心化坐标的变化速率（基于实际时间）
     details.centroidShiftRate = this.calculateCentroidShiftRate()
 
-    return new FaceMovingDetectionResult(details.isMoving, details, true, true)
+    return new FaceMovingDetectionResult(details.isMoving, details, true)
   }
 
   /**
