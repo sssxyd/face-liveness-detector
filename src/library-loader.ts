@@ -247,15 +247,15 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
     
     if (canSetCallback) {
       try {
-        const originalOnRuntimeInitialized = (cvModule as any).onRuntimeInitialized
+        const originalCallback  = (cvModule as any).onRuntimeInitialized
         
-        (cvModule as any).onRuntimeInitialized = () => {
+        const newCallback = () => {
           console.log('[FaceDetectionEngine] onRuntimeInitialized callback triggered')
           
           // 调用原始回调（如果存在）
-          if (originalOnRuntimeInitialized && typeof originalOnRuntimeInitialized === 'function') {
+          if (originalCallback && typeof originalCallback === 'function') {
             try {
-              originalOnRuntimeInitialized()
+              originalCallback()
             } catch (e) {
               console.warn('[FaceDetectionEngine] Original onRuntimeInitialized callback failed:', e)
             }
@@ -263,6 +263,8 @@ async function _initializeOpenCV(timeout: number): Promise<boolean> {
           
           resolveOnce('callback')
         }
+        
+        (cvModule as any).onRuntimeInitialized = newCallback
         
         console.log('[FaceDetectionEngine] onRuntimeInitialized callback set successfully')
       } catch (e) {
