@@ -389,9 +389,9 @@ function handleDetectorInfo(data: DetectorInfoEventData) {
   }
 
   switch(data.code){
-    case DetectionCode.FACE_CHECK_PASS:
+    case DetectionCode.FACE_IMAGE_CAPTURED:
       borderColor.value = 'yes'
-      statusMessage.value = 'Face Collected'
+      statusMessage.value = 'Face Captured'
       break
     case DetectionCode.VIDEO_NO_FACE:
     case DetectionCode.MULTIPLE_FACE:
@@ -524,10 +524,9 @@ function getPromptMessage(code: string): string {
     [DetectionCode.FACE_TOO_LARGE]: 'Face too large, please move away from the camera',
     [DetectionCode.FACE_NOT_FRONTAL]: 'Please face the camera directly',
     [DetectionCode.FACE_LOW_QUALITY]: 'Image quality too low, please improve lighting or camera focus',
-    [DetectionCode.FACE_CHECK_PASS]: 'Face detected successfully',
+    [DetectionCode.FACE_IMAGE_CAPTURED]: 'Face image captured successfully',
     [DetectionCode.PHOTO_ATTACK_DETECTED]: 'Photo attack detected',
-    [DetectionCode.FACE_NOT_MOVING]: 'Please move your face to verify liveness',
-    [DetectionCode.SCREEN_ATTACK_DETECTED]: 'Screen attack detected'
+    [DetectionCode.FACE_NOT_MOVING]: 'Please move your face to verify liveness'
   }
   return messages[code] || 'Detecting...'
 }

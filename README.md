@@ -54,7 +54,9 @@
 | 检测模块 | 技术方案 | 说明文档 |
 |---------|--------|--------|
 | **人脸识别** | Human.js BlazeFace + FaceMesh | 468个面部特征点 + 表情识别 |
-| **照片攻击检测** | 几何特征分析 | [照片攻击检测算法](./docs/PHOTO_ATTACK_DETECTION_ALGORITHM.md) - 透视一致性、位移方差、运动一致性分析 |
+| **人脸运动检测** | 关键点运动分析 | [人脸运动检测算法](./docs/FaceMovingDetectorAlgorithm.md) - 基于中心化处理和帧间位移计算，检测用户头部运动 |
+| **照片攻击检测** | 几何特征分析 | [照片攻击检测算法](./docs/PhotoAttackDetectorAlgorithm.md) - 透视一致性、位移方差、运动一致性分析 |
+| **动作活体检测** | Human.js Gesture 模块 | [动作检测算法](./docs/FaceLivenessDetectionAlgorithm.md) - 眨眼、张嘴、点头、抬头等随机动作验证 |
 
 ---
 
@@ -435,15 +437,14 @@ interface DetectorInfoEventData {
 **检测状态码：**
 ```
 enum DetectionCode {
-  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // 未检测到人脸
-  MULTIPLE_FACE = 'MULTIPLE_FACE',           // 检测到多张人脸
-  FACE_TOO_SMALL = 'FACE_TOO_SMALL',         // 人脸太小
-  FACE_TOO_LARGE = 'FACE_TOO_LARGE',         // 人脸太大
-  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',     // 人脸不够正面
-  FACE_NOT_REAL = 'FACE_NOT_REAL',           // 疑似欺骗
-  FACE_NOT_LIVE = 'FACE_NOT_LIVE',           // 活体分数过低
-  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',     // 图像质量过低
-  FACE_CHECK_PASS = 'FACE_CHECK_PASS'        // 所有检查通过 ✅
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',                // 未检测到人脸
+  MULTIPLE_FACE = 'MULTIPLE_FACE',                // 检测到多张人脸
+  FACE_TOO_SMALL = 'FACE_TOO_SMALL',              // 人脸太小
+  FACE_TOO_LARGE = 'FACE_TOO_LARGE',              // 人脸太大
+  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',          // 人脸不够正面
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',          // 图像质量过低
+  FACE_IMAGE_CAPTURED = 'FACE_IMAGE_CAPTURED'     // 图片被采集
+  PHOTO_ATTACK_DETECTED = "PHOTO_ATTACK_DETECTED" // 照片攻击检测
 }
 ```
 
@@ -455,8 +456,6 @@ engine.on('detector-info', (data) => {
     静默通过: data.passed ? '✅' : '❌',
     图像质量: `${(data.imageQuality * 100).toFixed(1)}%`,
     人脸正对度: `${(data.faceFrontal * 100).toFixed(1)}%`,
-    运动分数: `${(data.motionScore * 100).toFixed(1)}%`,
-    屏幕采集: `${(data.screenConfidence * 100).toFixed(1)}%`
   })
 })
 ```
@@ -476,7 +475,8 @@ interface DetectorActionEventData {
 enum LivenessAction {
   BLINK = 'blink',           // 眨眼
   MOUTH_OPEN = 'mouth_open', // 张嘴
-  NOD = 'nod'                // 点头
+  NOD_DOWN = 'nod_down',     // 点头
+  NOD_UP = 'nod_up'          // 抬头
 }
 
 enum LivenessActionStatus {
@@ -492,7 +492,8 @@ engine.on('detector-action', (data) => {
   const actionLabels = {
     'blink': '眨眼',
     'mouth_open': '张嘴',
-    'nod': '点头'
+    'nod_down': '点头',
+    'nod_up': '抬头'
   }
   
   switch (data.status) {
@@ -629,7 +630,8 @@ engine.on('detector-debug', (debug) => {
 enum LivenessAction {
   BLINK = 'blink',           // 眨眼
   MOUTH_OPEN = 'mouth_open', // 张嘴
-  NOD = 'nod'                // 点头
+  NOD_DOWN = 'nod_down',     // 点头
+  NOD_UP = 'nod_up'          // 抬头
 }
 ```
 
@@ -645,25 +647,30 @@ enum LivenessActionStatus {
 ### DetectionCode
 ```
 enum DetectionCode {
-  VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // 视频中未检测到人脸
-  MULTIPLE_FACE = 'MULTIPLE_FACE',           // 检测到多张人脸
-  FACE_TOO_SMALL = 'FACE_TOO_SMALL',         // 人脸尺寸小于最小阈值
-  FACE_TOO_LARGE = 'FACE_TOO_LARGE',         // 人脸尺寸大于最大阈值
-  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',     // 人脸角度不够正面
-  FACE_NOT_REAL = 'FACE_NOT_REAL',           // 检测到疑似欺骗
-  FACE_NOT_LIVE = 'FACE_NOT_LIVE',           // 活体分数低于阈值
-  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',     // 图像质量低于最小值
-  FACE_CHECK_PASS = 'FACE_CHECK_PASS'        // 所有检测检查通过 ✅
+  VIDEO_NO_FACE = 'VIDEO_NO_FACE',                  // 视频中未检测到人脸
+  MULTIPLE_FACE = 'MULTIPLE_FACE',                  // 检测到多张人脸
+  FACE_TOO_SMALL = 'FACE_TOO_SMALL',                // 人脸尺寸小于最小阈值
+  FACE_TOO_LARGE = 'FACE_TOO_LARGE',                // 人脸尺寸大于最大阈值
+  FACE_NOT_FRONTAL = 'FACE_NOT_FRONTAL',            // 人脸角度不够正面
+  FACE_LOW_QUALITY = 'FACE_LOW_QUALITY',            // 图像质量低于最小值
+  FACE_IMAGE_CAPTURED = 'FACE_IMAGE_CAPTURED'       // 人脸图像已采集
+  FACE_NOT_MOVING = 'FACE_NOT_MOVING',              // 人脸未移动 
+  PHOTO_ATTACK_DETECTED = 'PHOTO_ATTACK_DETECTED',  // 图片攻击检测
 }
 ```
+
 
 ### ErrorCode
 ```
 enum ErrorCode {
-  DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',  // 引擎未初始化
-  CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',          // 摄像头权限被拒
-  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED', // 获取视频流失败
-  SUSPECTED_FRAUDS_DETECTED = 'SUSPECTED_FRAUDS_DETECTED'  // 检测到欺骗/欺诈
+  // 检测器初始化失败
+  DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',
+  // 摄像头访问被拒绝
+  CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',
+  // 视频流获取失败
+  STREAM_ACQUISITION_FAILED = 'STREAM_ACQUISITION_FAILED',
+  // 内部错误
+  INTERNAL_ERROR = 'INTERNAL_ERROR',
 }
 ```
 

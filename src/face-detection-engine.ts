@@ -1084,7 +1084,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       // 当前帧通过常规检查
-      this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_CHECK_PASS, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
+      this.emitDetectorInfo({passed: true, code: DetectionCode.FACE_IMAGE_CAPTURED, faceRatio: faceRatio, faceFrontal: frontal, imageQuality: qualityResult.score })
 
       // 检测阶段，图像各方面合规，进入采集阶段
       if (this.detectionState.period === DetectionPeriod.DETECT) {
