@@ -88,7 +88,7 @@ const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
   motionVarianceThreshold: 0.005,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
-  perspectiveRatioThreshold: 1.05,      // 透视比率阈值：真实人脸 > 1, 照片 0.9 ~ 1.0
+  perspectiveRatioThreshold: 1.08,      // 透视比率阈值：真实人脸 > 1, 照片 0.9 ~ 1.0
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
 /**
