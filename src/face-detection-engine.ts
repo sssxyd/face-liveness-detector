@@ -1106,10 +1106,13 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
           this.transitionDetectionPeriod(DetectionPeriod.VERIFY)
           this.emitDebug('detection', 'Entering action verification phase')
         } else {
+          // 如果没有动作检测需求，则直接完成检测
+          this.emitDebug('detection', 'No action verification required, finishing detection as successful')
           this.stopDetection(true)
-          return
         }
+        return
       }
+      
     } catch (error) {
       const errorInfo = this.extractErrorInfo(error)
       const errorMsg = errorInfo.message
