@@ -1170,16 +1170,16 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     // 验证检测到的动作：只有检测到期望的动作才算成功
     // 如果同时检测到多个动作（如NOD_DOWN和NOD_UP），只要包含期望的动作即可
     if (!detectedActions.includes(this.detectionState.currentAction)) {
-      this.emitDebug('liveness', 'Action mismatch', {
+      this.emitDebug('action-verify', 'Action mismatch', {
         expected: this.detectionState.currentAction,
         detected: detectedActions
       }, 'warn')
-      this.emit('detector-action' as any, {
-        action: this.detectionState.currentAction,
-        detected: detectedActions,
-        status: LivenessActionStatus.MISMATCH
-      })
-      this.stopDetection(false)
+      // this.emit('detector-action' as any, {
+      //   action: this.detectionState.currentAction,
+      //   detected: detectedActions,
+      //   status: LivenessActionStatus.MISMATCH
+      // })
+      // this.stopDetection(false)
       return
     }
 
@@ -1189,7 +1189,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       detected: detectedActions,
       status: LivenessActionStatus.COMPLETED
     })
-    this.emitDebug('liveness', 'Action detected', { action: this.detectionState.currentAction })
+    this.emitDebug('action-verify', 'Action detected', { action: this.detectionState.currentAction })
     this.detectionState.onActionCompleted()
 
     // 检查是否完成所有动作
@@ -1285,7 +1285,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     )
 
     if (availableActions.length === 0) {
-      this.emitDebug('liveness', 'No available actions to perform', { completedActions: Array.from(this.detectionState.completedActions), totalActions: this.options.action_liveness_action_list?.length ?? 0 }, 'warn')
+      this.emitDebug('action-verify', 'No available actions to perform', { completedActions: Array.from(this.detectionState.completedActions), totalActions: this.options.action_liveness_action_list?.length ?? 0 }, 'warn')
       return false
     }
 
@@ -1302,10 +1302,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       status: LivenessActionStatus.STARTED
     }
     this.emit('detector-action', actionStart)
-    this.emitDebug('liveness', 'Action selected', { action: nextAction }, 'warn')
+    this.emitDebug('action-verify', 'Action selected', { action: nextAction }, 'warn')
 
     this.detectionState.onActionStarted(nextAction, this.options.action_liveness_verify_timeout, () => {
-        this.emitDebug('liveness', 'Action verify timeout', {
+        this.emitDebug('action-verify', 'Action verify timeout', {
           action: nextAction,
           timeout: this.options.action_liveness_verify_timeout
         }, 'warn')
@@ -1328,7 +1328,7 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
     const detectedActions: LivenessAction[] = []
 
     if (!gestures || gestures.length === 0) {
-      this.emitDebug('liveness', 'No gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
+      this.emitDebug('action-verify', 'No gestures detected for action verification', { gestureCount: gestures.length ?? 0 }, 'warn')
       return detectedActions
     }
 
@@ -1393,10 +1393,10 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
 
       if (detectedActions.length > 0) {
-        this.emitDebug('liveness', 'Actions detected', { detectedActions }, 'warn')
+        this.emitDebug('action-verify', 'Actions detected', { detectedActions }, 'warn')
       }
     } catch (error) {
-      this.emitDebug('liveness', 'Error during action detection', { error: (error as Error).message }, 'error')
+      this.emitDebug('action-verify', 'Error during action detection', { error: (error as Error).message }, 'error')
     }
 
     return detectedActions
