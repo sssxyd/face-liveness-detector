@@ -65,19 +65,7 @@
               >
               <span class="slider"></span>
             </label>
-          </div>
-          
-          <div class="toggle-item">
-            <span>Screen Attack</span>
-            <label class="switch">
-              <input 
-                type="checkbox" 
-                v-model="enableScreenAttackDetection"
-                :disabled="isDetecting"
-              >
-              <span class="slider"></span>
-            </label>
-          </div>
+          </div>          
         </div>
       </div>      
 
@@ -287,7 +275,6 @@ const humanModelPath = ref<string>('/models')
 const tensorflowWasmPath = ref<string>('/wasm')
 const enableFaceMovingDetection = ref<boolean>(true)
 const enablePhotoAttackDetection = ref<boolean>(true)
-const enableScreenAttackDetection = ref<boolean>(true)
 
 // 引擎实例
 let engine: FaceDetectionEngine | null = null
@@ -339,7 +326,6 @@ const options = computed<FaceDetectionEngineOptions>(() => ({
   action_liveness_action_count: actionCount.value,
   enable_face_moving_detection: enableFaceMovingDetection.value,
   enable_photo_attack_detection: enablePhotoAttackDetection.value,
-  enable_screen_attack_detection: enableScreenAttackDetection.value,
 }))
 
 // 初始化引擎
