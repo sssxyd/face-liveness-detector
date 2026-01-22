@@ -88,7 +88,7 @@ const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
   motionVarianceThreshold: 0.005,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
-  perspectiveRatioThreshold: 1.08,      // 透视比率阈值：真实人脸 > 1, 照片 0.9 ~ 1.0
+  perspectiveRatioThreshold: 1.05,      // 透视比率阈值：真实人脸 > 1, 照片 0.9 ~ 1.0
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
 /**
@@ -247,18 +247,17 @@ export class PhotoAttackDetector {
     
     // 修改透视比率计算逻辑以支持阈值大于等于1的情况
     let ratio_indicator = 0;
-    if (this.config.perspectiveRatioThreshold === 1) {
-      // 特殊情况：阈值等于1时
-      // perspectiveRatio < 1: 近处点移动 < 远处点，明显照片特征 → 高分
-      // perspectiveRatio >= 1: 近处点移动 >= 远处点，符合透视效应 → 低分
-      if (perspectiveRatio < 1) {
-        // 使用非线性放大，让 0.90 ~ 1 的 范围得到更高分数
-        const deviation = 1 - perspectiveRatio
-        ratio_indicator = Math.min(1, deviation * 10)
-      } else {
-        // 大于等于1，符合透视效应，降低照片分数
-        ratio_indicator = 0
-      }
+    // 增强perspectiveRatio的灵敏度，当小于1时给予更高权重
+    if (perspectiveRatio < 1) {
+      // perspectiveRatio < 1: 近处点移动 < 远处点，明显照片特征 → 非常高分
+      // 使用更强的非线性放大，让小于1的值得到显著更高的分数
+      ratio_indicator = 0.95; // 表示非常像照片
+      // const deviation = 1 - perspectiveRatio
+      // ratio_indicator = Math.min(1, deviation * 100) // 从10提高到100，增强灵敏度
+    } else if (this.config.perspectiveRatioThreshold === 1) {
+      // 阈值等于1且perspectiveRatio >= 1的情况
+      // 近处点移动 >= 远处点，符合透视效应 → 低分
+      ratio_indicator = 0
     } else if (this.config.perspectiveRatioThreshold < 1) {
       // 阈值小于1时的逻辑
       const denominator = 1 - this.config.perspectiveRatioThreshold
@@ -286,9 +285,68 @@ export class PhotoAttackDetector {
     
     const affine_indicator = affineTransformPatternMatch
 
-    // 综合分数：四个指标的平均值
+    // 改进的计分算法：
+    // 1. 为每个指标设置独立的阈值，考虑到各指标的特性和敏感度不同
+    // 2. 如果有指标超过其阈值，则直接使用该指标的分数作为最终的score
+    // 3. 如果没有指标超过阈值，则使用加权平均计算最终的score
+    
+    // 为每个指标设置独立的阈值（根据各指标特性调整）
+    const THRESHOLDS = {
+      variance: 0.85,    // 运动位移方差：值越高表示运动越一致，照片可能性越大
+      ratio: 0.90,       // 透视比率：值越高表示透视效果越不明显，照片可能性越大
+      consistency: 0.90, // 运动方向一致性：值越高表示方向越一致，照片可能性越大
+      affine: 0.90       // 仿射变换匹配：值越高表示仿射变换越匹配，照片可能性越大
+    };
+    
+    // 检查各个指标是否明显表明是照片
+    if (variance_indicator > THRESHOLDS.variance) {
+      // 运动位移方差非常小，明显是照片
+      return {
+        motionDisplacementVariance,
+        perspectiveRatio,
+        motionDirectionConsistency,
+        affineTransformPatternMatch,
+        score: variance_indicator
+      };
+    }
+    
+    if (ratio_indicator > THRESHOLDS.ratio) {
+      // 透视比率非常接近1（或小于1），明显是照片
+      return {
+        motionDisplacementVariance,
+        perspectiveRatio,
+        motionDirectionConsistency,
+        affineTransformPatternMatch,
+        score: ratio_indicator
+      };
+    }
+    
+    if (consistency_indicator > THRESHOLDS.consistency) {
+      // 运动方向一致性非常高，明显是照片
+      return {
+        motionDisplacementVariance,
+        perspectiveRatio,
+        motionDirectionConsistency,
+        affineTransformPatternMatch,
+        score: consistency_indicator
+      };
+    }
+    
+    if (affine_indicator > THRESHOLDS.affine) {
+      // 仿射变换模式匹配度非常高，明显是照片
+      return {
+        motionDisplacementVariance,
+        perspectiveRatio,
+        motionDirectionConsistency,
+        affineTransformPatternMatch,
+        score: affine_indicator
+      };
+    }
+    
+    // 没有指标明显表明是照片，使用加权平均
+    // 给予ratio_indicator更高的权重（2倍），其他指标保持原有权重
     const score = Math.min(1, 
-      (variance_indicator + ratio_indicator + consistency_indicator + affine_indicator) / 4
+      (variance_indicator + ratio_indicator * 2 + consistency_indicator + affine_indicator) / 5
     )
 
     return {
