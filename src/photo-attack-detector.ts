@@ -286,60 +286,14 @@ export class PhotoAttackDetector {
     const affine_indicator = affineTransformPatternMatch
 
     // 改进的计分算法：
-    // 1. 为每个指标设置独立的阈值，考虑到各指标的特性和敏感度不同
-    // 2. 如果有指标超过其阈值，则直接使用该指标的分数作为最终的score
-    // 3. 如果没有指标超过阈值，则使用加权平均计算最终的score
-    
-    // 为每个指标设置独立的阈值（根据各指标特性调整）
-    const THRESHOLDS = {
-      variance: 0.85,    // 运动位移方差：值越高表示运动越一致，照片可能性越大
-      ratio: 0.90,       // 透视比率：值越高表示透视效果越不明显，照片可能性越大
-      consistency: 0.90, // 运动方向一致性：值越高表示方向越一致，照片可能性越大
-      affine: 0.90       // 仿射变换匹配：值越高表示仿射变换越匹配，照片可能性越大
-    };
-    
-    // 检查各个指标是否明显表明是照片
-    if (variance_indicator > THRESHOLDS.variance) {
-      // 运动位移方差非常小，明显是照片
-      return {
-        motionDisplacementVariance,
-        perspectiveRatio,
-        motionDirectionConsistency,
-        affineTransformPatternMatch,
-        score: variance_indicator
-      };
-    }
-    
-    if (ratio_indicator > THRESHOLDS.ratio) {
-      // 透视比率非常接近1（或小于1），明显是照片
+    // - 透视比率非常接近1（或小于1），表明是照片
+    if (ratio_indicator > 0.9) {
       return {
         motionDisplacementVariance,
         perspectiveRatio,
         motionDirectionConsistency,
         affineTransformPatternMatch,
         score: ratio_indicator
-      };
-    }
-    
-    if (consistency_indicator > THRESHOLDS.consistency) {
-      // 运动方向一致性非常高，明显是照片
-      return {
-        motionDisplacementVariance,
-        perspectiveRatio,
-        motionDirectionConsistency,
-        affineTransformPatternMatch,
-        score: consistency_indicator
-      };
-    }
-    
-    if (affine_indicator > THRESHOLDS.affine) {
-      // 仿射变换模式匹配度非常高，明显是照片
-      return {
-        motionDisplacementVariance,
-        perspectiveRatio,
-        motionDirectionConsistency,
-        affineTransformPatternMatch,
-        score: affine_indicator
       };
     }
     
