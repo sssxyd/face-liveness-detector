@@ -88,7 +88,7 @@ const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
   frameBufferSize: 15,                  // 15帧 (0.5秒@30fps)
   requiredFrameCount: 15,               // 可信赖所需的最小帧数
   motionVarianceThreshold: 0.005,       // 运动方差阈值：真实人脸 > 0.02，照片 < 0.01
-  perspectiveRatioThreshold: 1,         // 透视比率阈值：真实人脸 > 1，照片 < 1
+  perspectiveRatioThreshold: 1.05,      // 透视比率阈值：真实人脸 > 1, 照片 0.9 ~ 1.0
   motionConsistencyThreshold: 0.8,      // 运动一致性阈值：真实人脸 < 0.5，照片 > 0.8
 }
 /**
@@ -475,7 +475,7 @@ export class PhotoAttackDetector {
 
   /**
    * 计算仿射变换模式匹配度
-   * 使用最小二乘法拟合所有点的位移到单一仿射变换
+   * 使用更精确的仿射变换模型拟合所有点的位移
    * 拟合度高 = 照片特征
    */
   private calculateAffineTransformMatch(displacements: {
@@ -490,30 +490,37 @@ export class PhotoAttackDetector {
 
     if (allDisplacements.length < 3) return 0
 
-    // 计算平均位移（简化模型：假设仿射变换为简单的平移）
+    // 计算各点位移与整体平均位移的相似度
+    // 照片攻击中，各点位移应高度相似（同一仿射变换）
     const avgX = allDisplacements.reduce((sum, d) => sum + d.x, 0) / allDisplacements.length
     const avgY = allDisplacements.reduce((sum, d) => sum + d.y, 0) / allDisplacements.length
+    const avgMagnitude = Math.sqrt(avgX ** 2 + avgY ** 2)
 
-    // 计算每个位移与平均值的偏差
-    let totalDeviation = 0
+    if (avgMagnitude === 0) return 0
+
+    // 计算每个位移向量与平均位移向量的相似度
+    let totalSimilarity = 0
     for (const d of allDisplacements) {
-      const devX = d.x - avgX
-      const devY = d.y - avgY
-      totalDeviation += Math.sqrt(devX ** 2 + devY ** 2)
+      const displacementMagnitude = Math.sqrt(d.x ** 2 + d.y ** 2)
+      if (displacementMagnitude === 0) {
+        // 没有位移的点视为与平均位移一致
+        totalSimilarity += 1
+        continue
+      }
+
+      // 计算方向相似度（点积）
+      const directionSimilarity = (d.x * avgX + d.y * avgY) / (displacementMagnitude * avgMagnitude)
+      
+      // 计算幅度相似度
+      const magnitudeSimilarity = Math.min(displacementMagnitude, avgMagnitude) / Math.max(displacementMagnitude, avgMagnitude)
+      
+      // 综合方向和幅度相似度
+      const similarity = (directionSimilarity + 1) / 2 * magnitudeSimilarity
+      totalSimilarity += similarity
     }
 
-    const avgDeviation = totalDeviation / allDisplacements.length
-    const avgDisplacement = Math.sqrt(avgX ** 2 + avgY ** 2)
-
-    if (avgDisplacement === 0) return 0
-
-    // 偏差与平均位移的比值越小，说明越符合单一仿射变换
-    // 比值 = 0 表示完全一致（照片特征）
-    // 比值 = 1 表示完全不一致
-    const deviation_ratio = avgDeviation / avgDisplacement
-
-    // 转换为 0-1 的匹配度分数
-    return Math.max(0, 1 - deviation_ratio)
+    // 返回平均相似度
+    return totalSimilarity / allDisplacements.length
   }
 
   /**
