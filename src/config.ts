@@ -20,7 +20,6 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
 
   enable_face_moving_detection: true,
   enable_photo_attack_detection: true,
-  enable_screen_attack_detection: true,
 
   // Detection Settings
   detect_video_ideal_width: 1280,
@@ -53,7 +52,7 @@ const DEFAULT_OPTIONS: FaceDetectionEngineOptions = {
   action_liveness_verify_timeout: 15000,
   action_liveness_min_mouth_open_percent: 0.2,
 
-  photo_attack_detected_max_count: 5,
+  photo_attack_passed_frame_count: 15,
  
 }
 

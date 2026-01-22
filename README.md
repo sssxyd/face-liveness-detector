@@ -26,12 +26,12 @@
     <td>🔬 <strong>混合 AI 方案</strong><br/>TensorFlow + OpenCV 深度融合</td>
   </tr>
   <tr>
-    <td>🧠 <strong>双重活体验证</strong><br/>静默检测 + 动作识别（眨眼、张嘴、点头）</td>
+    <td>🧠 <strong>双重活体验证</strong><br/>静默检测 + 动作识别（眨眼、张嘴、抬头、点头）</td>
     <td>⚡ <strong>事件驱动架构</strong><br/>100% TypeScript，与任何框架无缝集成</td>
   </tr>
   <tr>
-    <td>🎯 <strong>全维度分析</strong><br/>质量、正对度、运动分数、屏幕检测</td>
-    <td>🛡️ <strong>多维反欺骗</strong><br/>照片运动检测、屏幕时序分析、轮廓边界检测</td>
+    <td>🎯 <strong>全维度分析</strong><br/>质量、正对度、运动分数</td>
+    <td>🛡️ <strong>多维反欺骗</strong><br/>照片运动检测、几何特征分析</td>
   </tr>
 </table>
 
@@ -54,9 +54,7 @@
 | 检测模块 | 技术方案 | 说明文档 |
 |---------|--------|--------|
 | **人脸识别** | Human.js BlazeFace + FaceMesh | 468个面部特征点 + 表情识别 |
-| **运动活体检测** | 6指标投票系统 | [运动检测算法](./docs/MOTION_DETECTION_ALGORITHM.md) - 光流、关键点方差、眼嘴运动、面部区域变化 |
-| **屏幕采集检测** | 4维度时序分析 | [屏幕采集检测算法](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md) - 屏幕闪烁、响应时间、DLP色轮、光学畸变 |
-| **屏幕轮廓检测** | Canny边缘+轮廓分析 | [屏幕轮廓检测算法](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md) - 单帧矩形边界检测 |
+| **照片攻击检测** | 几何特征分析 | [照片攻击检测算法](./docs/PHOTO_ATTACK_DETECTION_ALGORITHM.md) - 透视一致性、位移方差、运动一致性分析 |
 
 ---
 
@@ -64,7 +62,7 @@
 
 ### 快速安装（3 个包）
 
-```bash
+```
 npm install @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 ```
 
@@ -98,7 +96,7 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 **设置方法（推荐）：** 添加到 `package.json` 的 `postinstall` 钩子
 
-```json
+```
 {
   "scripts": {
     "postinstall": "node patch-opencv.cjs"
@@ -116,7 +114,7 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 **设置方法（推荐）：** 配置为 `postinstall` 钩子
 
-```json
+```
 {
   "scripts": {
     "postinstall": "node scripts/copy-models.js && node scripts/download-wasm.js"
@@ -130,7 +128,7 @@ pnpm add @sssxyd/face-liveness-detector @vladmandic/human @techstark/opencv-js
 
 ### 基础示例
 
-```typescript
+```
 import FaceDetectionEngine, { LivenessAction } from '@sssxyd/face-liveness-detector'
 
 // 初始化引擎
@@ -138,26 +136,17 @@ const engine = new FaceDetectionEngine({
   // 资源路径配置
   human_model_path: '/models',
   tensorflow_wasm_path: '/wasm',
-  tensorflow_backend: 'auto',
-  
-  // 检测设置
+
+  // 摄像头分辨率设置, 默认1280x720，降低为640x480可提升速度，稍微降低精度
   detect_video_ideal_width: 1280,
   detect_video_ideal_height: 720,
-  detect_video_mirror: true,
-  detect_video_load_timeout: 5000,
 
-  // 采集质量要求
-  collect_min_collect_count: 3,        // 最少采集 3 张人脸
-  collect_min_face_ratio: 0.5,         // 人脸占比 50%+
-  collect_max_face_ratio: 0.9,         // 人脸占比 90% 以下
-  collect_min_face_frontal: 0.9,       // 人脸正对度 90%
-  collect_min_image_quality: 0.5,      // 图像质量 50%+
+  // 动作活体检测设置
+  action_liveness_action_count: 1,     // 需要被检测者执行的动作数量，取值范围[0-4], 0表示不进行动作活体检测，需要高可靠性时建议设置为2
+  action_liveness_verify_timeout：15000, // 每个动作检测的超时时间，默认15000ms，建议不要低于1000ms
 
-  // 活体检测设置
-  action_liveness_action_count: 1,     // 需要 1 个动作
-  action_liveness_action_list: [LivenessAction.BLINK, LivenessAction.MOUTH_OPEN, LivenessAction.NOD],
-  action_liveness_action_randomize: true,
-  action_liveness_verify_timeout: 60000,
+  // 照片攻击检测设置
+  photo_attack_passed_frame_count: 10, // 连续X帧通过照片攻击检测，才最终采信，默认15，最低不应该低于5，数值越小检测速度越快，精准度也随之降低
 })
 
 // 监听核心事件
@@ -246,6 +235,13 @@ startLivenessDetection()
 | `debug_log_stages` | `string[]` | 调试日志阶段过滤（undefined=全部） | `undefined` |
 | `debug_log_throttle` | `number` | 调试日志节流间隔（ms） | `100` |
 
+### 检测功能配置
+
+| 选项 | 类型 | 说明 | 默认值 |
+|-----|------|------|--------|
+| `enable_face_moving_detection` | `boolean` | 启用人脸运动检测 | `true` |
+| `enable_photo_attack_detection` | `boolean` | 启用照片攻击检测 | `true` |
+
 ### 视频检测设置
 
 | 选项 | 类型 | 说明 | 默认值 |
@@ -278,29 +274,27 @@ startLivenessDetection()
 | 选项 | 类型 | 说明 | 默认值 |
 |-----|------|------|--------|
 | `require_full_face_in_bounds` | `boolean` | 人脸完全在边界内 | `false` |
-| `min_laplacian_variance` | `number` | 最小模糊检测值 | `40` |
-| `min_gradient_sharpness` | `number` | 最小清晰度 | `0.15` |
+| `min_laplacian_variance` | `number` | 最小拉普拉斯方差检测值 | `40` |
+| `min_gradient_sharpness` | `number` | 最小梯度锐度 | `0.15` |
 | `min_blur_score` | `number` | 最小模糊分数 | `0.6` |
 
 ### 活体检测设置
 
 | 选项 | 类型 | 说明 | 默认值 |
 |-----|------|------|--------|
-| `action_liveness_action_list` | `LivenessAction[]` | 动作列表 | `[BLINK, MOUTH_OPEN, NOD]` |
+| `action_liveness_action_list` | `LivenessAction[]` | 动作列表 | `[BLINK, MOUTH_OPEN, NOD_DOWN, NOD_UP]` |
 | `action_liveness_action_count` | `number` | 需要完成的动作数 | `1` |
 | `action_liveness_action_randomize` | `boolean` | 随机化动作顺序 | `true` |
-| `action_liveness_verify_timeout` | `number` | 超时时间（ms） | `60000` |
+| `action_liveness_verify_timeout` | `number` | 单一动作验证超时时间（ms） | `15000` |
 | `action_liveness_min_mouth_open_percent` | `number` | 最小张嘴比例 (0-1) | `0.2` |
 
-### 运动活体检测（防照片攻击）
+### 照片攻击检测设置
 
 | 选项 | 类型 | 说明 | 默认值 |
 |-----|------|------|--------|
-| `motion_liveness_strict_photo_detection` | `boolean` | 严格照片检测模式 | `false` |
+| `photo_attack_passed_frame_count` | `number` | 照片攻击检测通过所需连续成功帧数 | `15` |
 
-> **注意**：运动活体检测使用内置的6指标投票算法，其他参数已内置优化，无需手动配置。详见[运动检测算法文档](./docs/MOTION_DETECTION_ALGORITHM.md)。
-
-> **注意**：屏幕采集检测使用内置的4维度级联算法（屏幕闪烁、响应时间、DLP色轮、光学畸变）和屏幕轮廓检测，所有参数已内置优化，无需手动配置。详见[屏幕采集检测算法文档](./docs/SCREEN_CAPTURE_DETECTION_ALGORITHM.md)和[屏幕轮廓检测算法文档](./docs/SCREEN_CORNERS_CONTOUR_DETECTION_ALGORITHM.md)。
+> **注意**：照片攻击检测使用内置的几何特征分析算法（透视比率、位移方差、方向一致性、仿射变换匹配），所有参数已内置优化，无需手动配置。详见[照片攻击检测算法文档](./docs/PHOTO_ATTACK_DETECTION_ALGORITHM.md)。
 
 ---
 
@@ -311,14 +305,14 @@ startLivenessDetection()
 #### `initialize(): Promise<void>`
 加载并初始化检测库。**必须在使用其他功能前调用。**
 
-```typescript
+```
 await engine.initialize()
 ```
 
 #### `startDetection(videoElement): Promise<void>`
 在视频元素上开始人脸检测。
 
-```typescript
+```
 const videoEl = document.getElementById('video') as HTMLVideoElement
 await engine.startDetection(videoEl)
 ```
@@ -326,14 +320,14 @@ await engine.startDetection(videoEl)
 #### `stopDetection(success?: boolean): void`
 停止检测过程。
 
-```typescript
+```
 engine.stopDetection(true)  // true: 显示最佳检测图像
 ```
 
 #### `updateConfig(config): void`
 运行时动态更新配置。
 
-```typescript
+```
 engine.updateConfig({
   collect_min_face_ratio: 0.6,
   action_liveness_action_count: 0
@@ -343,14 +337,14 @@ engine.updateConfig({
 #### `getOptions(): FaceDetectionEngineOptions`
 获取当前配置对象。
 
-```typescript
+```
 const config = engine.getOptions()
 ```
 
 #### `getEngineState(): EngineState`
 获取引擎当前状态。
 
-```typescript
+```
 const state = engine.getEngineState()
 ```
 
@@ -395,7 +389,7 @@ const state = engine.getEngineState()
 
 **引擎初始化完成时触发**
 
-```typescript
+```
 interface DetectorLoadedEventData {
   success: boolean        // 初始化是否成功
   error?: string          // 错误信息（失败时）
@@ -405,7 +399,7 @@ interface DetectorLoadedEventData {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-loaded', (data) => {
   if (data.success) {
     console.log('✅ 引擎就绪')
@@ -422,7 +416,7 @@ engine.on('detector-loaded', (data) => {
 
 **每帧返回实时检测数据（高频事件）**
 
-```typescript
+```
 interface DetectorInfoEventData {
   passed: boolean         // 是否通过静默检测
   code: DetectionCode     // 检测状态码
@@ -439,7 +433,7 @@ interface DetectorInfoEventData {
 ```
 
 **检测状态码：**
-```typescript
+```
 enum DetectionCode {
   VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // 未检测到人脸
   MULTIPLE_FACE = 'MULTIPLE_FACE',           // 检测到多张人脸
@@ -454,7 +448,7 @@ enum DetectionCode {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-info', (data) => {
   console.log({
     检测状态: data.code,
@@ -473,7 +467,7 @@ engine.on('detector-info', (data) => {
 
 **动作活体提示与识别状态**
 
-```typescript
+```
 interface DetectorActionEventData {
   action: LivenessAction          // 要执行的动作
   status: LivenessActionStatus    // 动作状态
@@ -493,7 +487,7 @@ enum LivenessActionStatus {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-action', (data) => {
   const actionLabels = {
     'blink': '眨眼',
@@ -524,7 +518,7 @@ engine.on('detector-action', (data) => {
 
 **检测流程完成（成功或失败）**
 
-```typescript
+```
 interface DetectorFinishEventData {
   success: boolean         // 是否通过验证
   silentPassedCount: number    // 静默检测通过数
@@ -537,7 +531,7 @@ interface DetectorFinishEventData {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-finish', (data) => {
   if (data.success) {
     console.log('🎉 活体验证成功！', {
@@ -567,7 +561,7 @@ engine.on('detector-finish', (data) => {
 
 **检测过程中发生错误**
 
-```typescript
+```
 interface DetectorErrorEventData {
   code: ErrorCode  // 错误代码
   message: string  // 错误信息
@@ -582,7 +576,7 @@ enum ErrorCode {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-error', (error) => {
   const errorMessages: Record<string, string> = {
     'DETECTOR_NOT_INITIALIZED': '引擎未初始化',
@@ -602,7 +596,7 @@ engine.on('detector-error', (error) => {
 
 **开发和故障排除的调试信息**
 
-```typescript
+```
 interface DetectorDebugEventData {
   level: 'info' | 'warn' | 'error'  // 日志级别
   stage: string                      // 处理阶段
@@ -613,7 +607,7 @@ interface DetectorDebugEventData {
 ```
 
 **示例：**
-```typescript
+```
 engine.on('detector-debug', (debug) => {
   const time = new Date(debug.timestamp).toLocaleTimeString()
   const prefix = `[${time}] [${debug.stage}]`
@@ -631,7 +625,7 @@ engine.on('detector-debug', (debug) => {
 ## 📖 类型定义
 
 ### LivenessAction
-```typescript
+```
 enum LivenessAction {
   BLINK = 'blink',           // 眨眼
   MOUTH_OPEN = 'mouth_open', // 张嘴
@@ -640,7 +634,7 @@ enum LivenessAction {
 ```
 
 ### LivenessActionStatus
-```typescript
+```
 enum LivenessActionStatus {
   STARTED = 'started',      // 动作提示已开始
   COMPLETED = 'completed',  // 动作成功识别
@@ -649,7 +643,7 @@ enum LivenessActionStatus {
 ```
 
 ### DetectionCode
-```typescript
+```
 enum DetectionCode {
   VIDEO_NO_FACE = 'VIDEO_NO_FACE',           // 视频中未检测到人脸
   MULTIPLE_FACE = 'MULTIPLE_FACE',           // 检测到多张人脸
@@ -664,7 +658,7 @@ enum DetectionCode {
 ```
 
 ### ErrorCode
-```typescript
+```
 enum ErrorCode {
   DETECTOR_NOT_INITIALIZED = 'DETECTOR_NOT_INITIALIZED',  // 引擎未初始化
   CAMERA_ACCESS_DENIED = 'CAMERA_ACCESS_DENIED',          // 摄像头权限被拒
@@ -694,7 +688,7 @@ enum ErrorCode {
 
 **快速启动演示：**
 
-```bash
+```
 cd demos/vue-demo
 npm install
 npm run dev
@@ -718,7 +712,7 @@ npm run dev
 
 #### 1️⃣ 复制 Human.js 模型
 
-```bash
+```
 node copy-models.js
 ```
 
@@ -730,7 +724,7 @@ node copy-models.js
 
 #### 2️⃣ 下载 TensorFlow WASM 文件
 
-```bash
+```
 node download-wasm.js
 ```
 
@@ -752,7 +746,7 @@ node download-wasm.js
 
 下载完成后，在引擎初始化时指定本地路径：
 
-```typescript
+```
 const engine = new FaceDetectionEngine({
   // 使用本地文件而不是 CDN
   human_model_path: '/models',
@@ -766,7 +760,7 @@ const engine = new FaceDetectionEngine({
 
 在 `package.json` 中配置 `postinstall` 钩子实现自动下载：
 
-```json
+```
 {
   "scripts": {
     "postinstall": "node scripts/copy-models.js && node scripts/download-wasm.js"

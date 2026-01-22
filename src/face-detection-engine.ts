@@ -45,7 +45,7 @@ interface DetectorInfoParams {
  * Provides core detection logic without UI dependencies
  */
 export class FaceDetectionEngine extends SimpleEventEmitter {
-  private options: ResolvedEngineOptions
+  options: ResolvedEngineOptions
   // OpenCV instance
   private cv: any = null  
   private human: Human | null = null
@@ -609,7 +609,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
         throw new Error('Failed to transition to DETECTING state')
       }
 
-      this.detectionState.setOpenCv(this.cv)
       this.cancelPendingDetection()
 
       this.animationFrameId = requestAnimationFrame(() => {
@@ -976,17 +975,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       this.stopDetection(false)
       return
     }
-
-    if(!this.detectionState.screenAttachDetector){
-      this.emit('detector-error' as any, {
-        code: ErrorCode.INTERNAL_ERROR,
-        message: 'Screen attack detector is not initialized'
-      })
-      // Clear the detecting flag before stopping to avoid deadlock
-      this.isDetectingFrameActive = false
-      this.stopDetection(false)
-      return
-    }
     
     try {
       // 动作活体检测阶段处理
@@ -1067,30 +1055,6 @@ export class FaceDetectionEngine extends SimpleEventEmitter {
       }
       const bgrFrame = frameData.bgrFrame
       const grayFrame = frameData.grayFrame      
-
-      if(this.options.enable_screen_attack_detection){
-        const screenAttackResult = this.detectionState.screenAttachDetector.detect(grayFrame)
-        if(screenAttackResult.available){
-          if(screenAttackResult.isScreenAttack){
-            this.emitDetectorInfo({
-              code: DetectionCode.SCREEN_ATTACK_DETECTED,
-              message: screenAttackResult.getMessage(),
-            })
-            this.emitDebug('motion-detection', 'Screen attack detected', screenAttackResult.details, 'warn')
-            this.partialResetDetectionState()
-            return
-          } else {
-            if(screenAttackResult.trusted){
-              // 仅当采集到足够帧，且判定为非屏幕攻击时，才采信
-              this.detectionState.realness = true
-              this.emitDebug('motion-detection', 'Screen attack detection passed - face is real', screenAttackResult.details, 'warn')
-            }
-          }
-        }
-      } else {
-        // 未启用屏幕攻击检测，默认真实性为真实
-        this.detectionState.realness = true
-      }
 
       let frontal = 1
       // 计算面部正对度，不达标则跳过当前帧

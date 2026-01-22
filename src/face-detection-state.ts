@@ -2,7 +2,6 @@ import { DetectionPeriod, LivenessAction } from "./enums"
 import { FaceDetectionEngine } from "./face-detection-engine"
 import { FaceMovingDetector } from "./face-moving-detector"
 import { PhotoAttackDetector } from "./photo-attack-detector"
-import { ScreenAttackDetector } from "./screen-attach-detector"
 
 /**
  * Internal detection state interface
@@ -20,9 +19,7 @@ export class DetectionState {
     lastFrontalScore: number = 1
     faceMovingDetector: FaceMovingDetector | null = null
     photoAttackDetector: PhotoAttackDetector | null = null
-    screenAttachDetector: ScreenAttackDetector | null = null
     liveness: boolean = false
-    realness: boolean = false
 
     constructor(options: Partial<DetectionState>) {
         Object.assign(this, options)
@@ -33,21 +30,14 @@ export class DetectionState {
 
         const savedFaceMovingDetector = this.faceMovingDetector
         const savedPhotoAttackDetector = this.photoAttackDetector
-        const savedScreenAttackDetector = this.screenAttachDetector
 
         savedFaceMovingDetector?.reset()
         savedPhotoAttackDetector?.reset()
-        savedScreenAttackDetector?.reset()
 
         Object.assign(this, new DetectionState({}))
 
         this.faceMovingDetector = savedFaceMovingDetector
         this.photoAttackDetector = savedPhotoAttackDetector
-        this.screenAttachDetector = savedScreenAttackDetector
-    }
-
-    setOpenCv(opencv: any): void {
-        this.screenAttachDetector?.setOpencv(opencv)
     }
 
     // 默认方法
@@ -58,7 +48,7 @@ export class DetectionState {
     // 是否准备好进行动作验证
     isReadyToVerify(minCollectCount: number): boolean {
         if (this.period === DetectionPeriod.COLLECT 
-            && this.liveness && this.realness
+            && this.liveness
             && this.collectCount >= minCollectCount)
             {
             return true
@@ -99,10 +89,9 @@ export function createDetectionState(engine: FaceDetectionEngine): DetectionStat
     const detectionState = new DetectionState({})
     detectionState.faceMovingDetector = new FaceMovingDetector()
     detectionState.faceMovingDetector.setEmitDebug(engine.emitDebug.bind(engine))
-    // 禁用深度分析，实测深度分析不准确
-    detectionState.photoAttackDetector = new PhotoAttackDetector()
+    detectionState.photoAttackDetector = new PhotoAttackDetector({
+        requiredFrameCount: engine.options.photo_attack_passed_frame_count || 15
+    })
     detectionState.photoAttackDetector.setEmitDebug(engine.emitDebug.bind(engine))
-    detectionState.screenAttachDetector = new ScreenAttackDetector()
-    detectionState.screenAttachDetector.setEmitDebug(engine.emitDebug.bind(engine))
     return detectionState
 }

@@ -99,6 +99,7 @@ const DEFAULT_OPTIONS: Required<PhotoAttackDetectorOptions> = {
 export class PhotoAttackDetector {
   private config: Required<PhotoAttackDetectorOptions>
   private frameBuffer: FaceResult[] = []
+  private frameCount: number = 0
 
   private emitDebug: (
     stage: string,
@@ -133,6 +134,7 @@ export class PhotoAttackDetector {
   addFrame(faceResult: FaceResult): void {
     if (!faceResult.meshRaw || faceResult.meshRaw.length === 0) return
 
+    this.frameCount++
     this.frameBuffer.push(faceResult)
 
     // 保持缓冲区大小
@@ -147,7 +149,7 @@ export class PhotoAttackDetector {
    */
   detect(): PhotoAttackDetectionResult {
     const details: PhotoAttackDetectionDetails = {
-      frameCount: this.frameBuffer.length,
+      frameCount: this.frameCount,
       motionDisplacementVariance: 0,
       perspectiveRatio: 0,
       motionDirectionConsistency: 0,
@@ -173,7 +175,7 @@ export class PhotoAttackDetector {
     details.isPhoto = perspectiveAnalysis.score > 0.5
     details.photoConfidence = perspectiveAnalysis.score
 
-    return new PhotoAttackDetectionResult(details.isPhoto, details, true, this.frameBuffer.length >= this.config.requiredFrameCount)
+    return new PhotoAttackDetectionResult(details.isPhoto, details, true, this.frameCount >= this.config.requiredFrameCount)
   }
 
   /**

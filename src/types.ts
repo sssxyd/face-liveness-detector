@@ -51,8 +51,6 @@ export interface FaceDetectionEngineOptions {
   enable_face_moving_detection?: boolean
   /** 是否启用照片攻击检测（默认 true） */
   enable_photo_attack_detection?: boolean
-  /** 是否启用屏幕攻击检测（默认 true） */
-  enable_screen_attack_detection?: boolean
 
   /** 视频流建议分辨率宽度（默认 1280） */
   detect_video_ideal_width?: number
@@ -89,8 +87,8 @@ export interface FaceDetectionEngineOptions {
   /** 最小嘴部张开百分比（默认 0.2） */
   action_liveness_min_mouth_open_percent?: number
 
-  /** 最大允许的照片攻击检测次数（默认 5） */
-  photo_attack_detected_max_count?: number
+  /** 照片攻击检测判定通过需要的连续检测成功帧数（默认 15） */
+  photo_attack_passed_frame_count?: number
 
 }
 
